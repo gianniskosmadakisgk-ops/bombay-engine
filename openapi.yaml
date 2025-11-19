@@ -1,0 +1,25 @@
+openapi: 3.0.1
+info:
+  title: Bombay Engine API
+  description: API για ειδοποιήσεις και ενημερώσεις του Bombay Engine προς το ChatGPT.
+  version: "1.0.0"
+servers:
+  - url: https://bombay-engine.onrender.com
+paths:
+  /chat:
+    post:
+      operationId: sendChatNotification
+      summary: Στέλνει ειδοποίηση στο ChatGPT
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                text:
+                  type: string
+                  example: "Thursday analysis complete. New shortlist ready."
+      responses:
+        "200":
+          description: Ειδοποίηση στάλθηκε επιτυχώς
