@@ -1,29 +1,37 @@
-import json
-import os
-from datetime import datetime
 import requests
+import json
+from datetime import datetime
+import os
 
-def save_friday_log():
-    """
-    Fetch Friday data from the Render app and save it to /logs with timestamp.
-    """
-    # Endpoint του Render app σου
-    FRIDAY_URL = "https://bombay-engine.onrender.com/friday"
-    LOGS_DIR = "logs"
+def fetch_friday_data():
+    url = "https://bombay-engine.onrender.com/friday"
+    response = requests.get(url)
+    if response.status_code == 200:
+        return response.json()
+    else:
+        print(f"Error fetching data: {response.status_code}")
+        return None
 
-    try:
-        response = requests.get(FRIDAY_URL)
-        if response.status_code == 200:
-            data = response.json()
-            # Δημιουργεί filename με ημερομηνία
-            date_str = datetime.now().strftime("%Y-%m-%d_%H-%M")
-            file_path = os.path.join(LOGS_DIR, f"friday_{date_str}.json")
+def save_log(data):
+    # Δημιουργούμε τον φάκελο logs αν δεν υπάρχει
+    os.makedirs("logs", exist_ok=True)
 
-            # Αποθήκευση JSON
-            with open(file_path, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-            print(f"✅ Friday log saved: {file_path}")
-        else:
-            print(f"⚠️ Error fetching Friday data. Status: {response.status_code}")
-    except Exception as e:
-        print(f"❌ Exception in save_friday_log: {e}")
+    # Δημιουργούμε όνομα αρχείου με ημερομηνία
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    filename = f"logs/friday_{timestamp}.json"
+
+    # Αποθήκευση σε αρχείο JSON
+    with open(filename, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+    print(f"✅ Log saved as {filename}")
+
+def main():
+    data = fetch_friday_data()
+    if data:
+        save_log(data)
+    else:
+        print("⚠️ No data fetched.")
+
+if __name__ == "__main__":
+    main()
