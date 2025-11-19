@@ -1,93 +1,74 @@
-from flask import Flask, request, jsonify
+from flask import Flask, jsonify, send_from_directory
 import os
 import json
+import random
 import datetime
-import requests
 
 app = Flask(__name__)
 
-# ---------------------------------------
-# MAIN ROUTES
-# ---------------------------------------
+# --- Thursday Analysis Simulation ---
+@app.route('/thursday-analysis', methods=['GET'])
+def thursday_analysis():
+    analysis_data = {
+        "league": "Ligue 2 France",
+        "matches_analyzed": 84,
+        "draw_probability": 0.29,
+        "avg_goals": 2.34,
+        "comment": "Stable balance between Over/Under; watch late odds drift."
+    }
+    return jsonify(analysis_data)
 
-@app.route('/')
+
+# --- Friday Shortlist Simulation ---
+@app.route('/friday-shortlist', methods=['GET'])
+def friday_shortlist():
+    sample_matches = [
+        {"match": "Bordeaux vs Ajaccio", "fair_odds": {"1": 2.10, "X": 3.10, "2": 3.70}, "edge": "+14%"},
+        {"match": "Parma vs Pisa", "fair_odds": {"1": 1.95, "X": 3.25, "2": 4.10}, "edge": "+12%"},
+        {"match": "Granada vs Levante", "fair_odds": {"1": 2.40, "X": 3.00, "2": 3.00}, "edge": "+15%"},
+        {"match": "Caen vs Amiens", "fair_odds": {"1": 2.05, "X": 3.20, "2": 3.60}, "edge": "+16%"},
+    ]
+    shortlist = {
+        "date": str(datetime.date.today()),
+        "matches": sample_matches,
+        "note": "Top 4 value differences for this Friday shortlist."
+    }
+    return jsonify(shortlist)
+
+
+# --- Tuesday Recap Simulation ---
+@app.route('/tuesday-recap', methods=['GET'])
+def tuesday_recap():
+    recap = {
+        "week": "Week 47",
+        "bets_placed": 10,
+        "wins": 6,
+        "roi": "+8.7%",
+        "bankroll_growth": "+26.1%",
+        "comment": "Kelly fraction (0.5) remains optimal; maintain selection discipline."
+    }
+    return jsonify(recap)
+
+
+# --- Serve OpenAPI YAML for ChatGPT Integration ---
+@app.route('/openapi.yaml', methods=['GET'])
+def serve_openapi():
+    return send_from_directory(os.path.dirname(os.path.abspath(__file__)), 'openapi.yaml')
+
+
+# --- Health check route ---
+@app.route('/', methods=['GET'])
 def home():
-    return "🚀 Bombay Engine is live and connected to ChatGPT!"
-
-# --- Friday endpoint ---
-@app.route('/friday', methods=['GET'])
-def friday():
     return jsonify({
-        "status": "Friday shortlist endpoint working",
-        "timestamp": datetime.datetime.utcnow().isoformat()
+        "status": "Bombay Engine is running",
+        "routes": [
+            "/thursday-analysis",
+            "/friday-shortlist",
+            "/tuesday-recap",
+            "/openapi.yaml"
+        ]
     })
 
-# --- Notification endpoint (from GitHub) ---
-@app.route('/notify', methods=['POST'])
-def notify():
-    try:
-        data = request.get_json(force=True)
-        print("🔔 Notification received:", data)
 
-        # Save notification for reference
-        os.makedirs("logs", exist_ok=True)
-        with open("logs/last_notification.json", "w") as f:
-            json.dump(data, f, indent=4)
-
-        # Send update to Chat
-        send_to_chat("📬 Bombay Engine received a new workflow update:\n" + json.dumps(data, indent=2))
-
-        return jsonify({"message": "Notification received OK"}), 200
-    except Exception as e:
-        print("❌ Notify error:", e)
-        return jsonify({"error": str(e)}), 500
-
-# --- Chat webhook endpoint ---
-@app.route('/chat', methods=['POST'])
-def chat_notify():
-    try:
-        data = request.get_json(force=True)
-        print("💬 Chat webhook received:", data)
-
-        send_to_chat("✅ Thursday Analysis completed and forwarded from Bombay Engine.")
-
-        return jsonify({"status": "Message delivered to Chat"}), 200
-    except Exception as e:
-        print("❌ Chat error:", e)
-        return jsonify({"error": str(e)}), 500
-
-
-# ---------------------------------------
-# FUNCTION TO FORWARD MESSAGES TO CHATGPT
-# ---------------------------------------
-
-def send_to_chat(message):
-    chat_url = os.getenv("CHATGPT_WEBHOOK_URL")
-    if not chat_url:
-        print("⚠️ CHATGPT_WEBHOOK_URL not found in environment.")
-        return False
-
-    payload = {
-        "text": message,
-        "timestamp": datetime.datetime.utcnow().isoformat()
-    }
-
-    try:
-        r = requests.post(chat_url, json=payload, timeout=10)
-        if r.status_code == 200:
-            print("✅ Message sent successfully to ChatGPT.")
-            return True
-        else:
-            print(f"⚠️ ChatGPT responded with {r.status_code}: {r.text}")
-            return False
-    except Exception as e:
-        print("❌ Error sending to ChatGPT:", e)
-        return False
-
-
-# ---------------------------------------
-# APP RUNNER
-# ---------------------------------------
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=10000)
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000)
