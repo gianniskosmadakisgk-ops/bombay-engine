@@ -1,25 +1,20 @@
 from flask import Flask, jsonify
-import datetime
-import simulate
+from simulate import run_simulation
+from friday import run_friday_simulation
 
 app = Flask(__name__)
 
-@app.route('/')
-def index():
-    return jsonify({
-        "status": "Bombay Engine v6 active",
-        "version": 6,
-        "last_update": str(datetime.date.today()),
-        "modes": ["Thursday Full Analysis", "Friday Shortlist", "Tuesday Recap"]
-    })
+@app.route("/")
+def home():
+    return jsonify({"status": "Bombay Engine active"})
 
-@app.route('/simulate')
-def run_thursday():
-    return simulate.simulate()
+@app.route("/simulate")
+def simulate():
+    return jsonify(run_simulation())
 
-@app.route('/friday')
-def run_friday():
-    return simulate.simulate_friday()
+@app.route("/friday")
+def friday():
+    return jsonify(run_friday_simulation())
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=8080)
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=10000)
