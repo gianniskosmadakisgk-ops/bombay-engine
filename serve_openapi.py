@@ -1,4 +1,4 @@
-from flask import Flask, jsonify, send_from_directory
+from flask import Flask, jsonify, send_file
 import os
 import datetime
 
@@ -28,15 +28,15 @@ def tuesday_recap():
         "timestamp": datetime.datetime.utcnow().isoformat()
     })
 
-# Serve the OpenAPI YAML correctly
+# Serve the OpenAPI YAML
 @app.route("/openapi.yaml", methods=["GET"])
 def serve_openapi():
-    directory = os.path.abspath(os.path.dirname(__file__))
-    filepath = os.path.join(directory, "openapi.yaml")
-    if os.path.exists(filepath):
-        return send_from_directory(directory, "openapi.yaml", mimetype="application/x-yaml")
+    # Explicit path to where openapi.yaml lives
+    file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "openapi.yaml")
+    if os.path.exists(file_path):
+        return send_file(file_path, mimetype="application/x-yaml")
     else:
-        return jsonify({"error": "openapi.yaml not found"}), 404
+        return jsonify({"error": f"File not found at {file_path}"}), 404
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
