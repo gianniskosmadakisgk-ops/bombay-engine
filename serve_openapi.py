@@ -1,22 +1,38 @@
-from flask import Flask, send_file, jsonify
+from flask import Flask, jsonify, send_from_directory
 import os
+import datetime
 
 app = Flask(__name__)
 
-@app.route("/openapi.yaml", methods=["GET"])
-def serve_openapi():
-    file_path = os.path.join(os.path.dirname(__file__), "openapi.yaml")
-    if os.path.exists(file_path):
-        return send_file(file_path, mimetype="text/yaml")
-    else:
-        return jsonify({"error": "openapi.yaml not found"}), 404
-
-@app.route("/", methods=["GET"])
-def home():
+# Thursday Analysis Endpoint
+@app.route("/thursday-analysis", methods=["GET"])
+def thursday_analysis():
     return jsonify({
-        "status": "OpenAPI route active ✅",
-        "available": ["/openapi.yaml"]
+        "status": "Thursday Analysis complete",
+        "timestamp": datetime.datetime.utcnow().isoformat()
     })
 
+# Friday Shortlist Endpoint
+@app.route("/friday-shortlist", methods=["GET"])
+def friday_shortlist():
+    return jsonify({
+        "status": "Friday Shortlist ready",
+        "timestamp": datetime.datetime.utcnow().isoformat()
+    })
+
+# Tuesday Recap Endpoint
+@app.route("/tuesday-recap", methods=["GET"])
+def tuesday_recap():
+    return jsonify({
+        "status": "Tuesday Recap completed",
+        "timestamp": datetime.datetime.utcnow().isoformat()
+    })
+
+# Serve the OpenAPI YAML
+@app.route("/openapi.yaml", methods=["GET"])
+def serve_openapi():
+    directory = os.path.dirname(os.path.abspath(__file__))
+    return send_from_directory(directory, "openapi.yaml", mimetype="text/yaml")
+
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    app.run(host="0.0.0.0", port=10000)
