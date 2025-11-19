@@ -28,11 +28,15 @@ def tuesday_recap():
         "timestamp": datetime.datetime.utcnow().isoformat()
     })
 
-# Serve the OpenAPI YAML
+# Serve the OpenAPI YAML correctly
 @app.route("/openapi.yaml", methods=["GET"])
 def serve_openapi():
-    directory = os.path.dirname(os.path.abspath(__file__))
-    return send_from_directory(directory, "openapi.yaml", mimetype="text/yaml")
+    directory = os.path.abspath(os.path.dirname(__file__))
+    filepath = os.path.join(directory, "openapi.yaml")
+    if os.path.exists(filepath):
+        return send_from_directory(directory, "openapi.yaml", mimetype="application/x-yaml")
+    else:
+        return jsonify({"error": "openapi.yaml not found"}), 404
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
