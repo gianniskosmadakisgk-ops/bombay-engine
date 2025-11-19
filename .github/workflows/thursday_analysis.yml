@@ -2,8 +2,11 @@ name: Thursday Auto Analysis
 
 on:
   schedule:
-    - cron: "0 16 * * 4"  # Πέμπτη 18:00 ώρα Ελλάδας (UTC+2)
+    - cron: "0 16 * * 4" # Πέμπτη 6μμ Ελλάδας (UTC+2)
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   run-logger:
@@ -11,33 +14,27 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
       - name: Install dependencies
-        run: |
-          pip install -r requirements.txt
+        run: pip install -r requirements.txt
 
       - name: Run Thursday Analysis
-        run: |
-          python simulate.py
+        run: python logger.py
 
       - name: Commit and push log file
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add logs/
-          git commit -m "Auto Log from Thursday analysis [$(date -u)]"
-          git push
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          git commit -m "Auto log from Thursday run [$(date -u)]" || echo "No changes to commit"
+          git push origin main || echo "No push needed"
 
       - name: Notify Bombay Chat
         run: |
-          curl -X POST -H "Content-Type: application/json" \
-          -d '{"message":"📊 Bombay: Thursday analysis report has been generated and logged."}' \
-          ${{ secrets.CHATGPT_WEBHOOK_URL }}
+          echo "Thursday Auto Analysis completed successfully!"
