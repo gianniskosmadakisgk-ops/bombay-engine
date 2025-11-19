@@ -2,33 +2,18 @@ name: Friday Auto Logger
 
 on:
   schedule:
-    - cron: "0 12 * * FRI"  # Κάθε Παρασκευή 12:00 GMT (14:00 Ελλάδας)
-  workflow_dispatch:        # Επιτρέπει manual run
+    - cron: "0 10 * * 5" # Κάθε Παρασκευή στις 10:00 π.μ. ώρα server
+  workflow_dispatch: # Επιτρέπει manual run
 
 jobs:
   run_logger:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.11'
-
-      - name: Install dependencies
-        run: pip install requests
-
-      - name: Run Friday simulation logger
-        env:
-          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
-        run: python logger.py
-
-      - name: Commit and push logs
+      - name: Wake Render instance
         run: |
-          git config user.name "AutoBot"
-          git config user.email "bot@users.noreply.github.com"
-          git add logs/
-          git commit -m "Add Friday log $(date)"
-          git push
+          curl -s -o /dev/null -w "%{http_code}" https://bombay-engine.onrender.com/ || echo "Render app not awake yet"
+
+      - name: Trigger Bombay Engine Friday Simulation
+        run: |
+          curl -v -X GET https://bombay-engine.onrender.com/friday
