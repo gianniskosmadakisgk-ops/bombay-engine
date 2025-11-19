@@ -1,24 +1,36 @@
-name: Tuesday Recap
+name: Tuesday Recap Auto-Run
 
 on:
   schedule:
-    - cron: "0 10 * * 2"   # Τρίτη 12:00 ώρα Ελλάδας (10:00 UTC)
+    - cron: "0 10 * * 2" # Τρίτη 12:00 ώρα Ελλάδας (UTC+2)
   workflow_dispatch:
 
 jobs:
-  run-recap:
+  run-logger:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v3
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v4
         with:
-          python-version: "3.10"
-
-      - name: Install dependencies
-        run: pip install -r requirements.txt
+          python-version: "3.11"
 
       - name: Run Tuesday Recap
-        run: python recap.py
+        run: |
+          python simulate.py --day tuesday
+
+  notify:
+    runs-on: ubuntu-latest
+    needs: run-logger
+    steps:
+      - name: Send notification to Bombay
+        run: |
+          curl -X POST https://bombay-engine.onrender.com/api/notify \
+          -H "Content-Type: application/json" \
+          -d '{
+                "key": "${{ secrets.BOMBAY_CHAT_KEY }}",
+                "message": "📈 Tuesday recap successfully published."
+              }'
