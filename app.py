@@ -1,74 +1,80 @@
-from flask import Flask, jsonify, send_from_directory
-import os
-import json
+import pandas as pd
+from flask import Flask, jsonify, request
 import random
-import datetime
 
 app = Flask(__name__)
 
-# --- Thursday Analysis Simulation ---
-@app.route('/thursday-analysis', methods=['GET'])
-def thursday_analysis():
-    analysis_data = {
-        "league": "Ligue 2 France",
-        "matches_analyzed": 84,
-        "draw_probability": 0.29,
-        "avg_goals": 2.34,
-        "comment": "Stable balance between Over/Under; watch late odds drift."
-    }
-    return jsonify(analysis_data)
-
-
-# --- Friday Shortlist Simulation ---
-@app.route('/friday-shortlist', methods=['GET'])
-def friday_shortlist():
-    sample_matches = [
-        {"match": "Bordeaux vs Ajaccio", "fair_odds": {"1": 2.10, "X": 3.10, "2": 3.70}, "edge": "+14%"},
-        {"match": "Parma vs Pisa", "fair_odds": {"1": 1.95, "X": 3.25, "2": 4.10}, "edge": "+12%"},
-        {"match": "Granada vs Levante", "fair_odds": {"1": 2.40, "X": 3.00, "2": 3.00}, "edge": "+15%"},
-        {"match": "Caen vs Amiens", "fair_odds": {"1": 2.05, "X": 3.20, "2": 3.60}, "edge": "+16%"},
+# -----------------------------
+# 🧠 FAKE MATCH ENGINE – για δοκιμές χωρίς API
+# (Όταν κουμπώσει το API, αντικαθιστούμε το generate_matches)
+# -----------------------------
+def generate_matches():
+    leagues = ["Premier League", "Serie A", "La Liga", "Super League (GR)", "Bundesliga", "Ligue 1"]
+    teams = [
+        ["Arsenal", "Brighton"], ["Milan", "Lazio"], ["Betis", "Girona"],
+        ["AEK", "PAOK"], ["Bayern", "Leipzig"], ["PSG", "Lyon"]
     ]
-    shortlist = {
-        "date": str(datetime.date.today()),
-        "matches": sample_matches,
-        "note": "Top 4 value differences for this Friday shortlist."
-    }
-    return jsonify(shortlist)
+    data = []
+    for i in range(len(teams)):
+        home, away = teams[i]
+        league = leagues[i]
+        fair_1 = round(random.uniform(1.6, 2.5), 2)
+        fair_x = round(random.uniform(3.1, 4.2), 2)
+        fair_2 = round(random.uniform(3.2, 5.0), 2)
+        fair_over = round(random.uniform(1.85, 2.10), 2)
+        fair_under = round(random.uniform(1.80, 2.10), 2)
+        draw_score = round(random.uniform(5.0, 9.0), 1)
+        over_score = round(random.uniform(4.0, 9.0), 1)
+        under_score = round(random.uniform(4.0, 9.0), 1)
+        ou_balance = round(over_score - under_score, 1)
+        data.append({
+            "League": league,
+            "Match": f"{home} - {away}",
+            "Fair 1": fair_1,
+            "Fair X": fair_x,
+            "Fair 2": fair_2,
+            "Fair Over": fair_over,
+            "Fair Under": fair_under,
+            "Draw Score": draw_score,
+            "Over Score": over_score,
+            "Under Score": under_score,
+            "OU Balance": ou_balance
+        })
+    return pd.DataFrame(data)
 
-
-# --- Tuesday Recap Simulation ---
-@app.route('/tuesday-recap', methods=['GET'])
-def tuesday_recap():
-    recap = {
-        "week": "Week 47",
-        "bets_placed": 10,
-        "wins": 6,
-        "roi": "+8.7%",
-        "bankroll_growth": "+26.1%",
-        "comment": "Kelly fraction (0.5) remains optimal; maintain selection discipline."
-    }
-    return jsonify(recap)
-
-
-# --- Serve OpenAPI YAML for ChatGPT Integration ---
-@app.route('/openapi.yaml', methods=['GET'])
-def serve_openapi():
-    return send_from_directory(os.path.dirname(os.path.abspath(__file__)), 'openapi.yaml')
-
-
-# --- Health check route ---
-@app.route('/', methods=['GET'])
-def home():
+# -----------------------------
+# 🧩 MAIN ROUTE – Thursday Analysis
+# -----------------------------
+@app.route("/thursday_analysis", methods=["GET"])
+def thursday_analysis():
+    df = generate_matches()
+    # Μετατροπή πίνακα σε καθαρή markdown μορφή
+    table_md = df.to_markdown(index=False)
     return jsonify({
-        "status": "Bombay Engine is running",
-        "routes": [
-            "/thursday-analysis",
-            "/friday-shortlist",
-            "/tuesday-recap",
-            "/openapi.yaml"
-        ]
+        "message": "Thursday Analysis (Fair Odds + Scoring Model)",
+        "table": table_md
     })
 
+# -----------------------------
+# 🔹 ChatGPT Trigger Route
+# -----------------------------
+@app.route("/trigger", methods=["POST"])
+def trigger():
+    data = request.json
+    command = data.get("command", "").lower()
 
+    if "thursday" in command:
+        df = generate_matches()
+        table_md = df.to_markdown(index=False)
+        return jsonify({
+            "message": "📊 Thursday Analysis Completed",
+            "table": table_md
+        })
+    else:
+        return jsonify({"message": "Command not recognized"})
+
+# -----------------------------
+# 🟢 MAIN
+# -----------------------------
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
