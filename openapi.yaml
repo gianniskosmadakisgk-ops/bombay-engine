@@ -40,7 +40,7 @@ def tuesday_recap():
 # ------------------------------
 @app.route('/openapi.yaml', methods=['GET'])
 def serve_openapi():
-    yaml_content = """openapi: 3.0.1
+    yaml_content = """openapi: 3.1.0
 info:
   title: Bombay Engine API
   version: "1.0.0"
