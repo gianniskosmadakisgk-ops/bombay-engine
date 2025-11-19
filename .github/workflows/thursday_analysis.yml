@@ -2,12 +2,13 @@ name: Thursday Auto Analysis
 
 on:
   schedule:
-    - cron: "0 16 * * 4" # Πέμπτη 18:00 ώρα Ελλάδας (UTC+2)
+    - cron: "0 16 * * 4"  # Πέμπτη 18:00 ώρα Ελλάδας (UTC+2)
   workflow_dispatch:
 
 jobs:
   run-logger:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
@@ -23,8 +24,20 @@ jobs:
 
       - name: Run Thursday Analysis
         run: |
-          curl -X GET https://bombay-engine.onrender.com/analysis
+          python simulate.py
 
-      - name: Send confirmation message
+      - name: Commit and push log file
         run: |
-          echo "✅ Thursday analysis completed and notification sent to Bombay chat."
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add logs/
+          git commit -m "Auto Log from Thursday analysis [$(date -u)]"
+          git push
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Notify Bombay Chat
+        run: |
+          curl -X POST -H "Content-Type: application/json" \
+          -d '{"message":"📊 Bombay: Thursday analysis report has been generated and logged."}' \
+          ${{ secrets.CHATGPT_WEBHOOK_URL }}
