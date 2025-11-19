@@ -1,9 +1,8 @@
 import random
 import datetime
-from flask import jsonify
 
-# Προσομοίωση fair και bookmaker odds
-def get_fake_match_data():
+# Δημιουργία ψεύτικων αποδόσεων fair και bookmaker
+def get_match_data():
     matches = []
     for i in range(1, 40):
         fair_odds_1 = round(random.uniform(1.8, 3.5), 2)
@@ -23,6 +22,7 @@ def get_fake_match_data():
     return matches
 
 
+# Υπολογισμός value bets με Kelly criterion
 def calculate_value_matches(matches):
     bankroll = 300
     kelly_fraction = 0.5
@@ -32,60 +32,44 @@ def calculate_value_matches(matches):
 
     for m in matches:
         for outcome in ["1", "X", "2"]:
-            fair = m["fair_odds"][outcome]
-            book = m["book_odds"][outcome]
+            fair = 1 / m["fair_odds"][outcome]
+            book = 1 / m["book_odds"][outcome]
             edge = (fair / book) - 1
 
             if edge >= min_edge:
-                kelly = ((fair * edge) - (1 - edge)) / fair
-                stake = round(bankroll * kelly * kelly_fraction, 2)
+                stake = round(bankroll * kelly_fraction * edge, 2)
                 value_bets.append({
                     "match": m["match"],
                     "outcome": outcome,
-                    "fair_odds": fair,
-                    "book_odds": book,
+                    "fair_odds": m["fair_odds"][outcome],
+                    "book_odds": m["book_odds"][outcome],
                     "edge": round(edge * 100, 1),
                     "stake": stake
                 })
-
-    # Πάρε τα 10 κορυφαία value bets
-    value_bets.sort(key=lambda x: x["edge"], reverse=True)
-    return value_bets[:10]
+    return value_bets
 
 
 def simulate():
-    matches = get_fake_match_data()
-    top_values = calculate_value_matches(matches)
-    return jsonify({
+    matches = get_match_data()
+    bets = calculate_value_matches(matches)
+    return {
         "date": str(datetime.date.today()),
         "fund": 300,
         "method": "Half-Kelly",
         "min_edge": "10%",
-        "top_value_bets": top_values,
-        "status": "Thursday Simulation full run complete"
-    })
-from flask import Flask, jsonify
-import datetime
-from simulate import simulate, simulate_friday
+        "status": "Thursday Simulation full run complete",
+        "top_value_bets": bets[:5]
+    }
 
-app = Flask(__name__)
 
-@app.route('/')
-def index():
-    return jsonify({
-        "status": "Bombay Engine v6 active",
-        "version": 6,
-        "last_update": str(datetime.date.today()),
-        "modes": ["Thursday Full Analysis", "Friday Shortlist", "Tuesday Recap"]
-    })
-
-@app.route('/simulate')
-def run_thursday():
-    return simulate()
-
-@app.route('/friday')
-def run_friday():
-    return simulate_friday()
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=8080)
+def simulate_friday():
+    matches = get_match_data()
+    bets = calculate_value_matches(matches)
+    return {
+        "date": str(datetime.date.today()),
+        "fund": 300,
+        "method": "Half-Kelly",
+        "min_edge": "10%",
+        "status": "Friday shortlist ready",
+        "top_value_bets": bets[:10]
+    }
