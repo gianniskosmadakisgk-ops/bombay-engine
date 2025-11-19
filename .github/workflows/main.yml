@@ -3,7 +3,7 @@ name: Friday Auto Logger
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 10 * * 5'  # Κάθε Παρασκευή 10:00 π.μ.
+    - cron: '0 10 * * 5'  # Κάθε Παρασκευή στις 10:00 π.μ.
 
 jobs:
   run-friday:
@@ -32,9 +32,11 @@ jobs:
         run: python logger.py
 
       - name: Commit and push log file
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add logs/
           git commit -m "Auto log from Friday run [$(date)]" || echo "No changes to commit"
-          git push
+          git push https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git HEAD:main
