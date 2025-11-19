@@ -1,37 +1,41 @@
-import requests
 import json
-from datetime import datetime
 import os
+import datetime
+import requests
+
+LOGS_DIR = "logs"
+if not os.path.exists(LOGS_DIR):
+    os.makedirs(LOGS_DIR)
 
 def fetch_friday_data():
-    url = "https://bombay-engine.onrender.com/friday"
-    response = requests.get(url)
-    if response.status_code == 200:
+    try:
+        response = requests.get("https://bombay-engine.onrender.com/friday")
+        response.raise_for_status()
         return response.json()
-    else:
-        print(f"Error fetching data: {response.status_code}")
-        return None
+    except Exception as e:
+        return {"error": str(e)}
 
 def save_log(data):
-    # Δημιουργούμε τον φάκελο logs αν δεν υπάρχει
-    os.makedirs("logs", exist_ok=True)
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    filename = f"{LOGS_DIR}/friday_{timestamp}.json"
 
-    # Δημιουργούμε όνομα αρχείου με ημερομηνία
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    filename = f"logs/friday_{timestamp}.json"
-
-    # Αποθήκευση σε αρχείο JSON
+    # Καταγραφή του log σε readable μορφή
     with open(filename, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+        json.dump(data, f, indent=4, ensure_ascii=False)
 
-    print(f"✅ Log saved as {filename}")
+    print(f"✅ Log saved as: {filename}")
+    cleanup_old_logs()
 
-def main():
-    data = fetch_friday_data()
-    if data:
-        save_log(data)
-    else:
-        print("⚠️ No data fetched.")
+def cleanup_old_logs():
+    files = sorted(
+        [f for f in os.listdir(LOGS_DIR) if f.endswith(".json")],
+        key=lambda x: os.path.getmtime(os.path.join(LOGS_DIR, x))
+    )
+    if len(files) > 10:
+        for old_file in files[:-10]:
+            os.remove(os.path.join(LOGS_DIR, old_file))
+            print(f"🗑️ Removed old log: {old_file}")
 
 if __name__ == "__main__":
-    main()
+    data = fetch_friday_data()
+    save_log(data)
