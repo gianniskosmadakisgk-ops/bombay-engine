@@ -2,7 +2,6 @@ services:
   - type: web
     name: bombay-engine
     env: python
-    region: frankfurt
-    buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:app
+    buildCommand: ""
+    startCommand: "gunicorn app:app"
     plan: free
