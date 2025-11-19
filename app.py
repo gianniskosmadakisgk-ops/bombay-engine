@@ -1,6 +1,6 @@
 from flask import Flask, jsonify
 import datetime
-from simulate import simulate
+from simulate import simulate, simulate_friday
 
 app = Flask(__name__)
 
@@ -14,8 +14,12 @@ def index():
     })
 
 @app.route('/simulate')
-def run_simulation():
+def run_thursday():
     return simulate()
+
+@app.route('/friday')
+def run_friday():
+    return simulate_friday()
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8080)
