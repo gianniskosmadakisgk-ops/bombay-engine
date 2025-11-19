@@ -1,0 +1,321 @@
+{
+    "date": "2025-11-19",
+    "fund": 300,
+    "method": "Half-Kelly",
+    "min_edge": "10%",
+    "status": "Friday shortlist ready (EPL, LaLiga, Serie A)",
+    "top_value_bets": {
+        "La Liga": [
+            {
+                "match": "Valencia vs Levante",
+                "odds": {
+                    "1": 2.0,
+                    "2": 3.35,
+                    "X": 3.32
+                },
+                "over_under": {}
+            },
+            {
+                "match": "Alavés vs Celta Vigo",
+                "odds": {
+                    "1": 2.31,
+                    "2": 2.98,
+                    "X": 3.02
+                },
+                "over_under": {}
+            },
+            {
+                "match": "Barcelona vs Athletic Bilbao",
+                "odds": {
+                    "1": 1.35,
+                    "2": 6.4,
+                    "X": 4.9
+                },
+                "over_under": {}
+            },
+            {
+                "match": "CA Osasuna vs Real Sociedad",
+                "odds": {
+                    "1": 2.53,
+                    "2": 2.7,
+                    "X": 2.98
+                },
+                "over_under": {}
+            },
+            {
+                "match": "Villarreal vs Mallorca",
+                "odds": {
+                    "1": 1.37,
+                    "2": 6.6,
+                    "X": 4.6
+                },
+                "over_under": {}
+            },
+            {
+                "match": "Oviedo vs Rayo Vallecano",
+                "odds": {
+                    "1": 3.25,
+                    "2": 2.05,
+                    "X": 3.15
+                },
+                "over_under": {}
+            },
+            {
+                "match": "Real Betis vs Girona",
+                "odds": {
+                    "1": 1.46,
+                    "2": 5.3,
+                    "X": 4.25
+                },
+                "over_under": {}
+            },
+            {
+                "match": "Getafe vs Atlético Madrid",
+                "odds": {
+                    "1": 4.8,
+                    "2": 1.68,
+                    "X": 3.25
+                },
+                "over_under": {}
+            },
+            {
+                "match": "Elche CF vs Real Madrid",
+                "odds": {
+                    "1": 7.1,
+                    "2": 1.3,
+                    "X": 5.0
+                },
+                "over_under": {}
+            },
+            {
+                "match": "Espanyol vs Sevilla",
+                "odds": {
+                    "1": 1.96,
+                    "2": 3.45,
+                    "X": 3.2
+                },
+                "over_under": {}
+            }
+        ],
+        "Premier League": [
+            {
+                "match": "Burnley vs Chelsea",
+                "odds": {
+                    "1": 6.0,
+                    "2": 1.5,
+                    "X": 4.3
+                },
+                "over_under": {
+                    "over_2.5": 1.76,
+                    "under_2.5": 1.99
+                }
+            },
+            {
+                "match": "Bournemouth vs West Ham United",
+                "odds": {
+                    "1": 1.53,
+                    "2": 4.85,
+                    "X": 4.0
+                },
+                "over_under": {}
+            },
+            {
+                "match": "Brighton and Hove Albion vs Brentford",
+                "odds": {
+                    "1": 1.88,
+                    "2": 3.7,
+                    "X": 3.55
+                },
+                "over_under": {
+                    "over_2.5": 1.65,
+                    "under_2.5": 2.1
+                }
+            },
+            {
+                "match": "Wolverhampton Wanderers vs Crystal Palace",
+                "odds": {
+                    "1": 3.65,
+                    "2": 1.85,
+                    "X": 3.4
+                },
+                "over_under": {}
+            },
+            {
+                "match": "Fulham vs Sunderland",
+                "odds": {
+                    "1": 1.96,
+                    "2": 3.55,
+                    "X": 3.15
+                },
+                "over_under": {}
+            },
+            {
+                "match": "Liverpool vs Nottingham Forest",
+                "odds": {
+                    "1": 1.39,
+                    "2": 7.0,
+                    "X": 5.0
+                },
+                "over_under": {}
+            },
+            {
+                "match": "Newcastle United vs Manchester City",
+                "odds": {
+                    "1": 3.5,
+                    "2": 1.96,
+                    "X": 3.8
+                },
+                "over_under": {}
+            },
+            {
+                "match": "Leeds United vs Aston Villa",
+                "odds": {
+                    "1": 2.9,
+                    "2": 2.2,
+                    "X": 3.15
+                },
+                "over_under": {}
+            },
+            {
+                "match": "Arsenal vs Tottenham Hotspur",
+                "odds": {
+                    "1": 1.37,
+                    "2": 7.75,
+                    "X": 4.9
+                },
+                "over_under": {}
+            },
+            {
+                "match": "Manchester United vs Everton",
+                "odds": {
+                    "1": 1.72,
+                    "2": 4.5,
+                    "X": 3.85
+                },
+                "over_under": {}
+            }
+        ],
+        "Serie A": [
+            {
+                "match": "Udinese vs Bologna",
+                "odds": {
+                    "1": 3.5,
+                    "2": 2.1,
+                    "X": 3.2
+                },
+                "over_under": {
+                    "over_2.5": 2.2,
+                    "under_2.5": 1.62
+                }
+            },
+            {
+                "match": "Cagliari vs Genoa",
+                "odds": {
+                    "1": 2.7,
+                    "2": 2.8,
+                    "X": 2.9
+                },
+                "over_under": {
+                    "over_2.5": 2.5,
+                    "under_2.5": 1.5
+                }
+            },
+            {
+                "match": "Fiorentina vs Juventus",
+                "odds": {
+                    "1": 3.6,
+                    "2": 2.0,
+                    "X": 3.25
+                },
+                "over_under": {
+                    "over_2.5": 2.0,
+                    "under_2.5": 1.75
+                }
+            },
+            {
+                "match": "Napoli vs Atalanta BC",
+                "odds": {
+                    "1": 2.15,
+                    "2": 3.3,
+                    "X": 3.1
+                },
+                "over_under": {
+                    "over_2.5": 2.05,
+                    "under_2.5": 1.7
+                }
+            },
+            {
+                "match": "Hellas Verona vs Parma",
+                "odds": {
+                    "1": 2.3,
+                    "2": 3.3,
+                    "X": 2.9
+                },
+                "over_under": {
+                    "over_2.5": 2.45,
+                    "under_2.5": 1.5
+                }
+            },
+            {
+                "match": "Cremonese vs AS Roma",
+                "odds": {
+                    "1": 5.0,
+                    "2": 1.62,
+                    "X": 3.75
+                },
+                "over_under": {
+                    "over_2.5": 1.95,
+                    "under_2.5": 1.8
+                }
+            },
+            {
+                "match": "Lazio vs Lecce",
+                "odds": {
+                    "1": 1.62,
+                    "2": 5.5,
+                    "X": 3.5
+                },
+                "over_under": {
+                    "over_2.5": 2.1,
+                    "under_2.5": 1.67
+                }
+            },
+            {
+                "match": "Inter Milan vs AC Milan",
+                "odds": {
+                    "1": 1.85,
+                    "2": 4.0,
+                    "X": 3.4
+                },
+                "over_under": {
+                    "over_2.5": 1.83,
+                    "under_2.5": 1.91
+                }
+            },
+            {
+                "match": "Torino vs Como",
+                "odds": {
+                    "1": 3.25,
+                    "2": 2.2,
+                    "X": 3.1
+                },
+                "over_under": {
+                    "over_2.5": 2.2,
+                    "under_2.5": 1.62
+                }
+            },
+            {
+                "match": "Sassuolo vs Pisa",
+                "odds": {
+                    "1": 2.05,
+                    "2": 3.6,
+                    "X": 3.2
+                },
+                "over_under": {
+                    "over_2.5": 2.15,
+                    "under_2.5": 1.65
+                }
+            }
+        ]
+    }
+}
