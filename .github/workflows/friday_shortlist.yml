@@ -2,12 +2,13 @@ name: Friday Auto Shortlist
 
 on:
   schedule:
-    - cron: "0 10 * * 5" # Παρασκευή 12:00 ώρα Ελλάδας (UTC+2)
+    - cron: "0 10 * * 5"  # Παρασκευή 12:00 ώρα Ελλάδας (UTC+2)
   workflow_dispatch:
 
 jobs:
   run-logger:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
@@ -23,8 +24,20 @@ jobs:
 
       - name: Run Friday Simulation
         run: |
-          curl -X GET https://bombay-engine.onrender.com/friday
+          python friday.py
 
-      - name: Send confirmation message
+      - name: Commit and push log file
         run: |
-          echo "✅ Friday shortlist created and notification sent to Bombay chat."
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add logs/
+          git commit -m "Auto Log from Friday run [$(date -u)]"
+          git push
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Notify Bombay Chat
+        run: |
+          curl -X POST -H "Content-Type: application/json" \
+          -d '{"message":"📩 Bombay: New Friday shortlist has been generated and logged."}' \
+          ${{ secrets.CHATGPT_WEBHOOK_URL }}
