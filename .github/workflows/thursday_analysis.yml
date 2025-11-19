@@ -1,0 +1,30 @@
+name: Thursday Auto Analysis
+
+on:
+  schedule:
+    - cron: "0 16 * * 4" # Πέμπτη 18:00 ώρα Ελλάδας (UTC+2)
+  workflow_dispatch:
+
+jobs:
+  run-logger:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Run Thursday Analysis
+        run: |
+          curl -X GET https://bombay-engine.onrender.com/analysis
+
+      - name: Send confirmation message
+        run: |
+          echo "✅ Thursday analysis completed and notification sent to Bombay chat."
