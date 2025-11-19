@@ -1,0 +1,15 @@
+name: Friday Simulation Auto Run
+
+on:
+  schedule:
+    - cron: "0 10 * * 5"  # Κάθε Παρασκευή στις 10:00 π.μ. ώρα server
+  workflow_dispatch:      # Επιτρέπει manual run από το GitHub UI
+
+jobs:
+  run-friday:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Trigger Bombay Engine Friday Simulation
+        run: |
+          curl -X GET https://bombay-engine.onrender.com/friday
