@@ -1,15 +1,17 @@
-from flask import Flask, request, jsonify
+from flask import Flask, jsonify, request, send_from_directory
 import os
 import json
 import datetime
 
 app = Flask(__name__)
 
-# --- ROUTES ---
+# --------------------------
+# ROUTES
+# --------------------------
 
 @app.route('/')
 def home():
-    return "Bombay Engine is live 🧠🔥"
+    return "Bombay Engine is live 🔥"
 
 @app.route('/friday', methods=['GET'])
 def friday():
@@ -22,34 +24,37 @@ def friday():
 def notify():
     try:
         data = request.get_json(force=True)
-        print("📩 Notification received:", data)
-
-        # Log the notification for debugging
+        print("Notification received:", data)
+        # Save notification log
         with open("logs/last_notification.json", "w") as f:
             json.dump(data, f, indent=4)
-
         return jsonify({"message": "Notification received OK"}), 200
     except Exception as e:
-        print("❌ Notify error:", e)
+        print("Notify error:", e)
         return jsonify({"error": str(e)}), 500
 
 @app.route('/chat', methods=['POST'])
 def chat_notify():
     try:
         data = request.get_json(force=True)
-        print("💬 Chat notification received:", data)
-
-        # Save to file so you can see it worked
-        with open("logs/chat_notification.json", "w") as f:
-            json.dump(data, f, indent=4)
-
-        return jsonify({"message": "Chat notification delivered"}), 200
+        print("Chat notification received:", data)
+        return jsonify({"message": "Chat message received"}), 200
     except Exception as e:
-        print("❌ Chat error:", e)
         return jsonify({"error": str(e)}), 500
 
-# --- MAIN ---
+# --------------------------
+# Serve plugin manifest
+# --------------------------
+@app.route('/.well-known/ai-plugin.json', methods=['GET'])
+def serve_ai_plugin():
+    return send_from_directory('.well-known', 'ai-plugin.json')
 
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+@app.route('/openapi.yaml', methods=['GET'])
+def serve_openapi():
+    return send_from_directory('.', 'openapi.yaml')
+
+# --------------------------
+# MAIN
+# --------------------------
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=10000)
