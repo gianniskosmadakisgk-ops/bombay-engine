@@ -2,18 +2,33 @@ name: Friday Auto Logger
 
 on:
   schedule:
-    - cron: "0 10 * * 5" # Κάθε Παρασκευή στις 10:00 π.μ. ώρα server
-  workflow_dispatch: # Επιτρέπει manual run
+    - cron: '0 8 * * 5'  # Κάθε Παρασκευή στις 10:00 π.μ. ώρα Ελλάδας
+  workflow_dispatch:      # Επιτρέπει manual run από το GitHub UI
 
 jobs:
-  run_logger:
+  run-friday:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Wake Render instance
-        run: |
-          curl -s -o /dev/null -w "%{http_code}" https://bombay-engine.onrender.com/ || echo "Render app not awake yet"
-
       - name: Trigger Bombay Engine Friday Simulation
         run: |
-          curl -v -X GET https://bombay-engine.onrender.com/friday
+          curl -X GET https://bombay-engine.onrender.com/friday
+
+  run-logger:
+    needs: run-friday
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests
+
+      - name: Run logger
+        run: python logger.py
