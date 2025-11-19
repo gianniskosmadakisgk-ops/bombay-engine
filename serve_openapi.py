@@ -1,32 +1,43 @@
-from flask import Flask, jsonify, Response
+from flask import Flask, jsonify, send_file
+import os
 import datetime
 
 app = Flask(__name__)
 
-# Endpoints
-@app.route("/thursday-analysis", methods=["GET"])
+# ------------------------------
+# Thursday Analysis Endpoint
+# ------------------------------
+@app.route('/thursday-analysis', methods=['GET'])
 def thursday_analysis():
     return jsonify({
         "status": "Thursday Analysis complete",
         "timestamp": datetime.datetime.utcnow().isoformat()
     })
 
-@app.route("/friday-shortlist", methods=["GET"])
+# ------------------------------
+# Friday Shortlist Endpoint
+# ------------------------------
+@app.route('/friday-shortlist', methods=['GET'])
 def friday_shortlist():
     return jsonify({
         "status": "Friday Shortlist ready",
         "timestamp": datetime.datetime.utcnow().isoformat()
     })
 
-@app.route("/tuesday-recap", methods=["GET"])
+# ------------------------------
+# Tuesday Recap Endpoint
+# ------------------------------
+@app.route('/tuesday-recap', methods=['GET'])
 def tuesday_recap():
     return jsonify({
         "status": "Tuesday Recap completed",
         "timestamp": datetime.datetime.utcnow().isoformat()
     })
 
-# Serve the OpenAPI YAML dynamically
-@app.route("/openapi.yaml", methods=["GET"])
+# ------------------------------
+# Serve OpenAPI YAML
+# ------------------------------
+@app.route('/openapi.yaml', methods=['GET'])
 def serve_openapi():
     yaml_content = """openapi: 3.0.1
 info:
@@ -38,24 +49,38 @@ servers:
 paths:
   /thursday-analysis:
     get:
+      operationId: runThursdayAnalysis
       summary: Thursday Analysis
       responses:
         '200':
           description: Thursday report ready.
   /friday-shortlist:
     get:
+      operationId: runFridayShortlist
       summary: Friday Shortlist
       responses:
         '200':
           description: Friday shortlist done.
   /tuesday-recap:
     get:
+      operationId: runTuesdayRecap
       summary: Tuesday Recap
       responses:
         '200':
           description: Recap complete.
 """
-    return Response(yaml_content, mimetype="text/yaml")
+    return app.response_class(yaml_content, mimetype='text/yaml')
 
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+# ------------------------------
+# Health Check Root
+# ------------------------------
+@app.route('/', methods=['GET'])
+def health():
+    return jsonify({"status": "Bombay Engine live", "ok": True})
+
+# ------------------------------
+# Run App
+# ------------------------------
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 10000))
+    app.run(host='0.0.0.0', port=port)
