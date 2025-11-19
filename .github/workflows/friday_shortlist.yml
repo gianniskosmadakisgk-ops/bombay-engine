@@ -1,0 +1,30 @@
+name: Friday Auto Shortlist
+
+on:
+  schedule:
+    - cron: "0 10 * * 5" # Παρασκευή 12:00 ώρα Ελλάδας (UTC+2)
+  workflow_dispatch:
+
+jobs:
+  run-logger:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Run Friday Simulation
+        run: |
+          curl -X GET https://bombay-engine.onrender.com/friday
+
+      - name: Send confirmation message
+        run: |
+          echo "✅ Friday shortlist created and notification sent to Bombay chat."
