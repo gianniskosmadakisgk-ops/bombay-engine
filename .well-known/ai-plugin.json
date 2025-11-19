@@ -1,0 +1,17 @@
+{
+  "schema_version": "v1",
+  "name_for_human": "Bombay Engine",
+  "name_for_model": "bombay_engine",
+  "description_for_human": "Ειδοποιήσεις και αυτοματοποιημένες ενημερώσεις από τον Bombay Engine στο ChatGPT.",
+  "description_for_model": "Στέλνει ενημερώσεις στο ChatGPT όταν ολοκληρώνονται workflows όπως Friday Shortlist, Thursday Analysis και Tuesday Recap.",
+  "auth": {
+    "type": "none"
+  },
+  "api": {
+    "type": "openapi",
+    "url": "https://bombay-engine.onrender.com/openapi.yaml"
+  },
+  "logo_url": "https://bombay-engine.onrender.com/logo.png",
+  "contact_email": "support@bombayengine.ai",
+  "legal_info_url": "https://bombay-engine.onrender.com/legal"
+}
