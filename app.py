@@ -1,57 +1,45 @@
-import pandas as pd
 from flask import Flask, jsonify
-import random
 from datetime import datetime
+import random
 
 app = Flask(__name__)
 
 # -----------------------------------------------------------
-#  MATCH ENGINE – προσωρινό για δοκιμή χωρίς API
-#  (μετά θα αντικατασταθεί από τα πραγματικά fixtures)
+# Dummy Match Generator (για δοκιμές χωρίς API)
 # -----------------------------------------------------------
-
 def generate_matches():
     leagues = [
         "Premier League", "Serie A", "La Liga",
         "Super League (GR)", "Bundesliga", "Ligue 1"
     ]
-
     teams = [
         ["Arsenal", "Brighton"], ["Milan", "Lazio"],
         ["Betis", "Girona"], ["AEK", "PAOK"],
         ["Bayern", "Leipzig"], ["PSG", "Lyon"]
     ]
 
-    data = []
+    matches = []
     for i in range(len(teams)):
         home, away = teams[i]
         league = leagues[i]
-        fair_1 = round(random.uniform(1.6, 2.6), 2)
-        fair_x = round(random.uniform(3.0, 3.8), 2)
-        fair_2 = round(random.uniform(2.8, 4.0), 2)
-        fair_over = round(random.uniform(1.7, 2.1), 2)
-        fair_under = round(random.uniform(1.9, 2.2), 2)
-        draw_score = random.randint(6, 10)
-        over_score = random.randint(5, 10)
 
-        data.append({
+        matches.append({
             "league": league,
             "match": f"{home} - {away}",
-            "fair_1": fair_1,
-            "fair_x": fair_x,
-            "fair_2": fair_2,
-            "fair_over": fair_over,
-            "fair_under": fair_under,
-            "draw_conf": draw_score,
-            "over_conf": over_score
+            "fair_1": round(random.uniform(1.6, 2.6), 2),
+            "fair_x": round(random.uniform(3.0, 3.8), 2),
+            "fair_2": round(random.uniform(2.8, 4.0), 2),
+            "fair_over": round(random.uniform(1.7, 2.1), 2),
+            "fair_under": round(random.uniform(1.9, 2.2), 2),
+            "draw_conf": random.randint(6, 10),
+            "over_conf": random.randint(5, 10)
         })
-    return data
+    return matches
 
 
 # -----------------------------------------------------------
-#  ENDPOINTS — συνδέονται απευθείας με το Chat
+# ROUTES
 # -----------------------------------------------------------
-
 @app.route('/')
 def home():
     return jsonify({"status": "Bombay Engine live"})
@@ -61,7 +49,6 @@ def thursday_analysis():
     matches = generate_matches()
     timestamp = datetime.utcnow().isoformat()
 
-    # Δημιουργία πινάκων για Draw Engine & Over Engine
     draw_engine = []
     over_engine = []
 
@@ -86,9 +73,7 @@ def thursday_analysis():
         "draw_engine": draw_engine,
         "over_engine": over_engine
     }
-
     return jsonify(report)
-
 
 @app.route('/friday-shortlist')
 def friday_shortlist():
@@ -98,7 +83,6 @@ def friday_shortlist():
         "timestamp": timestamp
     })
 
-
 @app.route('/tuesday-recap')
 def tuesday_recap():
     timestamp = datetime.utcnow().isoformat()
@@ -107,10 +91,6 @@ def tuesday_recap():
         "timestamp": timestamp
     })
 
-
-# -----------------------------------------------------------
-#  RUN SERVER
-# -----------------------------------------------------------
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=10000)
