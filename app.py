@@ -6,8 +6,8 @@ from datetime import datetime
 app = Flask(__name__)
 
 # -----------------------------------------------------------
-#  FAKE MATCH ENGINE – προσωρινή λειτουργία χωρίς API
-#  (θα αντικατασταθεί με πραγματικά fixtures από API)
+#  MATCH ENGINE – προσωρινό για δοκιμή χωρίς API
+#  (μετά θα αντικατασταθεί από τα πραγματικά fixtures)
 # -----------------------------------------------------------
 
 def generate_matches():
@@ -49,7 +49,7 @@ def generate_matches():
 
 
 # -----------------------------------------------------------
-#  ENDPOINTS — αυτά συνδέονται με το Chat
+#  ENDPOINTS — συνδέονται απευθείας με το Chat
 # -----------------------------------------------------------
 
 @app.route('/')
@@ -61,13 +61,34 @@ def thursday_analysis():
     matches = generate_matches()
     timestamp = datetime.utcnow().isoformat()
 
+    # Δημιουργία πινάκων για Draw Engine & Over Engine
+    draw_engine = []
+    over_engine = []
+
+    for m in matches:
+        draw_engine.append({
+            "league": m["league"],
+            "match": m["match"],
+            "fair_x": m["fair_x"],
+            "draw_conf": m["draw_conf"]
+        })
+        over_engine.append({
+            "league": m["league"],
+            "match": m["match"],
+            "fair_over": m["fair_over"],
+            "over_conf": m["over_conf"]
+        })
+
     report = {
         "status": "Thursday Analysis complete",
         "timestamp": timestamp,
         "fixtures_count": len(matches),
-        "report": matches
+        "draw_engine": draw_engine,
+        "over_engine": over_engine
     }
+
     return jsonify(report)
+
 
 @app.route('/friday-shortlist')
 def friday_shortlist():
@@ -77,6 +98,7 @@ def friday_shortlist():
         "timestamp": timestamp
     })
 
+
 @app.route('/tuesday-recap')
 def tuesday_recap():
     timestamp = datetime.utcnow().isoformat()
@@ -84,6 +106,7 @@ def tuesday_recap():
         "status": "Tuesday Recap complete",
         "timestamp": timestamp
     })
+
 
 # -----------------------------------------------------------
 #  RUN SERVER
