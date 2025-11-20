@@ -1,96 +1,143 @@
+import os
+import requests
 from flask import Flask, jsonify
-from datetime import datetime
-import random
 
 app = Flask(__name__)
 
-# -----------------------------------------------------------
-# Dummy Match Generator (για δοκιμές χωρίς API)
-# -----------------------------------------------------------
-def generate_matches():
-    leagues = [
-        "Premier League", "Serie A", "La Liga",
-        "Super League (GR)", "Bundesliga", "Ligue 1"
-    ]
-    teams = [
-        ["Arsenal", "Brighton"], ["Milan", "Lazio"],
-        ["Betis", "Girona"], ["AEK", "PAOK"],
-        ["Bayern", "Leipzig"], ["PSG", "Lyon"]
-    ]
+# ====== CONFIGURATION ======
+API_KEY_FOOTBALL = os.getenv("FOOTBALL_API_KEY")
+API_KEY_ODDS = os.getenv("ODDS_API_KEY")
+WEBHOOK_URL = os.getenv("CHATGPT_WEBHOOK_URL")
 
-    matches = []
-    for i in range(len(teams)):
-        home, away = teams[i]
-        league = leagues[i]
+BASE_URL_FOOTBALL = "https://v3.football.api-sports.io"
+HEADERS_FOOTBALL = {"x-apisports-key": API_KEY_FOOTBALL}
 
-        matches.append({
-            "league": league,
-            "match": f"{home} - {away}",
-            "fair_1": round(random.uniform(1.6, 2.6), 2),
-            "fair_x": round(random.uniform(3.0, 3.8), 2),
-            "fair_2": round(random.uniform(2.8, 4.0), 2),
-            "fair_over": round(random.uniform(1.7, 2.1), 2),
-            "fair_under": round(random.uniform(1.9, 2.2), 2),
-            "draw_conf": random.randint(6, 10),
-            "over_conf": random.randint(5, 10)
-        })
-    return matches
+# ====== BASIC ROUTES ======
 
-
-# -----------------------------------------------------------
-# ROUTES
-# -----------------------------------------------------------
-@app.route('/')
+@app.route("/")
 def home():
-    return jsonify({"status": "Bombay Engine live"})
+    return jsonify({"status": "Bombay Engine Active", "version": "6.0"})
 
-@app.route('/thursday-analysis')
+# ---------------------------------------------------------------------------
+# 🧠 THURSDAY ANALYSIS
+# ---------------------------------------------------------------------------
+
+@app.route("/thursday-analysis", methods=["GET"])
 def thursday_analysis():
-    matches = generate_matches()
-    timestamp = datetime.utcnow().isoformat()
+    try:
+        url = f"{BASE_URL_FOOTBALL}/fixtures"
+        params = {"date": "2025-11-20"}  # ✅ Σημερινή ημερομηνία για δοκιμή
+        response = requests.get(url, headers=HEADERS_FOOTBALL, params=params)
+        data = response.json()
 
-    draw_engine = []
-    over_engine = []
+        matches = []
+        for f in data.get("response", []):
+            home = f["teams"]["home"]["name"]
+            away = f["teams"]["away"]["name"]
+            league = f["league"]["name"]
+            odds = f.get("odds", None)
+            matches.append({
+                "league": league,
+                "home": home,
+                "away": away,
+                "fixture_id": f["fixture"]["id"],
+                "status": f["fixture"]["status"]["short"]
+            })
 
-    for m in matches:
-        draw_engine.append({
-            "league": m["league"],
-            "match": m["match"],
-            "fair_x": m["fair_x"],
-            "draw_conf": m["draw_conf"]
-        })
-        over_engine.append({
-            "league": m["league"],
-            "match": m["match"],
-            "fair_over": m["fair_over"],
-            "over_conf": m["over_conf"]
-        })
+        result = {
+            "status": "Thursday Analysis complete",
+            "count": len(matches),
+            "matches": matches[:10]  # δείχνουμε τα πρώτα 10 για αρχή
+        }
 
-    report = {
-        "status": "Thursday Analysis complete",
-        "timestamp": timestamp,
-        "fixtures_count": len(matches),
-        "draw_engine": draw_engine,
-        "over_engine": over_engine
-    }
-    return jsonify(report)
+        # Προαιρετικά: Στέλνει στο ChatGPT Webhook
+        if WEBHOOK_URL:
+            try:
+                requests.post(WEBHOOK_URL, json=result)
+            except Exception as e:
+                print("Webhook send failed:", e)
 
-@app.route('/friday-shortlist')
+        return jsonify(result)
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# ---------------------------------------------------------------------------
+# 🎯 FRIDAY SHORTLIST
+# ---------------------------------------------------------------------------
+
+@app.route("/friday-shortlist", methods=["GET"])
 def friday_shortlist():
-    timestamp = datetime.utcnow().isoformat()
-    return jsonify({
-        "status": "Friday Shortlist complete",
-        "timestamp": timestamp
-    })
+    try:
+        # Παίρνουμε fixtures του ΣΚ (Παρασκευή–Κυριακή)
+        url = f"{BASE_URL_FOOTBALL}/fixtures"
+        params = {"from": "2025-11-21", "to": "2025-11-23"}
+        response = requests.get(url, headers=HEADERS_FOOTBALL, params=params)
+        data = response.json()
 
-@app.route('/tuesday-recap')
+        shortlist = []
+        for f in data.get("response", []):
+            home = f["teams"]["home"]["name"]
+            away = f["teams"]["away"]["name"]
+            league = f["league"]["name"]
+            shortlist.append({
+                "league": league,
+                "home": home,
+                "away": away,
+                "fixture_id": f["fixture"]["id"]
+            })
+
+        result = {
+            "status": "Friday Shortlist complete",
+            "count": len(shortlist),
+            "shortlist": shortlist[:10]
+        }
+
+        if WEBHOOK_URL:
+            try:
+                requests.post(WEBHOOK_URL, json=result)
+            except Exception as e:
+                print("Webhook send failed:", e)
+
+        return jsonify(result)
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# ---------------------------------------------------------------------------
+# 📊 TUESDAY RECAP
+# ---------------------------------------------------------------------------
+
+@app.route("/tuesday-recap", methods=["GET"])
 def tuesday_recap():
-    timestamp = datetime.utcnow().isoformat()
-    return jsonify({
-        "status": "Tuesday Recap complete",
-        "timestamp": timestamp
-    })
+    try:
+        # Εδώ θα μπορούσαμε να τραβήξουμε παλιές αναφορές ή να δείξουμε dummy data
+        recap = {
+            "status": "Tuesday Recap complete",
+            "week": "Week 1",
+            "summary": {
+                "Draw Engine": {"bets": 10, "won": 4, "roi": "+6.2%"},
+                "Over/Under": {"bets": 8, "won": 5, "roi": "+11.5%"},
+                "FanBet Draws": {"bets": 15, "won": 6, "roi": "-3.1%"},
+                "Fraction Kelly": {"bets": 10, "won": 5, "roi": "+9.4%"}
+            }
+        }
+
+        if WEBHOOK_URL:
+            try:
+                requests.post(WEBHOOK_URL, json=recap)
+            except Exception as e:
+                print("Webhook send failed:", e)
+
+        return jsonify(recap)
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=10000)
+# ---------------------------------------------------------------------------
+# MAIN
+# ---------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=10000)
