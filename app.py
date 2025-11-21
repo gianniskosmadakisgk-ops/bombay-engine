@@ -13,26 +13,32 @@ WEBHOOK_URL = os.getenv("CHATGPT_WEBHOOK_URL")
 BASE_URL_FOOTBALL = "https://v3.football.api-sports.io"
 HEADERS_FOOTBALL = {"x-apisports-key": API_KEY_FOOTBALL}
 
-# ===== STARTUP TEST =====
-def send_webhook_test():
+
+# ===== HELPERS =====
+def send_webhook(event, message):
+    """Send JSON payload to ChatGPT Webhook"""
     if not WEBHOOK_URL:
         print("⚠️ No CHATGPT_WEBHOOK_URL found.")
         return
     payload = {
-        "event": "Startup",
-        "message": "Bombay Engine is live and connected ✅",
+        "event": event,
+        "message": message,
         "timestamp": datetime.utcnow().isoformat()
     }
     try:
         r = requests.post(WEBHOOK_URL, json=payload, timeout=10)
-        print(f"Webhook test sent: {r.status_code} - {r.text[:100]}")
+        print(f"Webhook → {event}: {r.status_code}")
     except Exception as e:
-        print(f"Webhook test failed: {e}")
+        print(f"Webhook error: {e}")
+
 
 # ===== BASIC ROUTES =====
 @app.route("/")
 def home():
+    """Startup check & webhook handshake"""
+    send_webhook("Startup", "Bombay Engine connected successfully ✅")
     return jsonify({"status": "Bombay Engine Active", "version": "6.0"})
+
 
 # ===== THURSDAY ANALYSIS =====
 @app.route("/thursday-analysis", methods=["GET"])
@@ -42,31 +48,34 @@ def thursday_analysis():
         params = {"date": datetime.utcnow().strftime("%Y-%m-%d")}
         r = requests.get(url, headers=HEADERS_FOOTBALL, params=params)
         data = r.json()
-        webhook_payload = {
+        result = {
             "event": "ThursdayAnalysis",
             "status": "complete",
             "fixture_count": len(data.get("response", [])),
             "timestamp": datetime.utcnow().isoformat()
         }
-        requests.post(WEBHOOK_URL, json=webhook_payload)
-        return jsonify(webhook_payload)
+        send_webhook("ThursdayAnalysis", f"✅ Thursday report ready ({result['fixture_count']} fixtures)")
+        return jsonify(result)
     except Exception as e:
+        send_webhook("ThursdayAnalysisError", str(e))
         return jsonify({"error": str(e)})
+
 
 # ===== FRIDAY SHORTLIST =====
 @app.route("/friday-shortlist", methods=["GET"])
 def friday_shortlist():
-    payload = {"status": "Friday Shortlist ready", "timestamp": datetime.utcnow().isoformat()}
-    requests.post(WEBHOOK_URL, json=payload)
-    return jsonify(payload)
+    result = {"status": "Friday Shortlist ready", "timestamp": datetime.utcnow().isoformat()}
+    send_webhook("FridayShortlist", "🎯 Friday shortlist generated successfully")
+    return jsonify(result)
+
 
 # ===== TUESDAY RECAP =====
 @app.route("/tuesday-recap", methods=["GET"])
 def tuesday_recap():
-    payload = {"status": "Tuesday Recap complete", "timestamp": datetime.utcnow().isoformat()}
-    requests.post(WEBHOOK_URL, json=payload)
-    return jsonify(payload)
+    result = {"status": "Tuesday Recap complete", "timestamp": datetime.utcnow().isoformat()}
+    send_webhook("TuesdayRecap", "📊 Tuesday recap completed successfully")
+    return jsonify(result)
+
 
 if __name__ == "__main__":
-    send_webhook_test()
     app.run(host="0.0.0.0", port=10000)
