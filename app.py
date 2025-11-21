@@ -3,11 +3,6 @@ import requests
 from flask import Flask, jsonify
 from datetime import datetime
 
-# Εισάγουμε τα modules των λειτουργιών
-from friday import run_friday_shortlist
-from simulate import run_thursday_analysis
-from logger import run_tuesday_recap
-
 app = Flask(__name__)
 
 # ===== CONFIGURATION =====
@@ -18,82 +13,60 @@ WEBHOOK_URL = os.getenv("CHATGPT_WEBHOOK_URL")
 BASE_URL_FOOTBALL = "https://v3.football.api-sports.io"
 HEADERS_FOOTBALL = {"x-apisports-key": API_KEY_FOOTBALL}
 
-
-# ===== SEND TO CHATGPT =====
-def notify_chat(event_name, payload):
+# ===== STARTUP TEST =====
+def send_webhook_test():
     if not WEBHOOK_URL:
-        print("⚠️ Missing CHATGPT_WEBHOOK_URL")
+        print("⚠️ No CHATGPT_WEBHOOK_URL found.")
         return
-    try:
-        message = {
-            "event": event_name,
-            "timestamp": datetime.utcnow().isoformat(),
-            "data": payload
-        }
-        requests.post(WEBHOOK_URL, json=message, timeout=10)
-        print(f"✅ Sent {event_name} update to ChatGPT webhook.")
-    except Exception as e:
-        print(f"❌ Webhook error: {e}")
-
-
-# ===== BASIC ROUTE =====
-@app.route("/", methods=["GET"])
-def home():
-    return jsonify({
-        "status": "Bombay Engine Active",
-        "version": "6.0",
+    payload = {
+        "event": "Startup",
+        "message": "Bombay Engine is live and connected ✅",
         "timestamp": datetime.utcnow().isoformat()
-    })
+    }
+    try:
+        r = requests.post(WEBHOOK_URL, json=payload, timeout=10)
+        print(f"Webhook test sent: {r.status_code} - {r.text[:100]}")
+    except Exception as e:
+        print(f"Webhook test failed: {e}")
 
+# ===== BASIC ROUTES =====
+@app.route("/")
+def home():
+    return jsonify({"status": "Bombay Engine Active", "version": "6.0"})
 
 # ===== THURSDAY ANALYSIS =====
 @app.route("/thursday-analysis", methods=["GET"])
 def thursday_analysis():
     try:
-        result = run_thursday_analysis()
-        response = {
-            "status": "Thursday Analysis complete",
-            "timestamp": datetime.utcnow().isoformat(),
-            "data": result
+        url = f"{BASE_URL_FOOTBALL}/fixtures"
+        params = {"date": datetime.utcnow().strftime("%Y-%m-%d")}
+        r = requests.get(url, headers=HEADERS_FOOTBALL, params=params)
+        data = r.json()
+        webhook_payload = {
+            "event": "ThursdayAnalysis",
+            "status": "complete",
+            "fixture_count": len(data.get("response", [])),
+            "timestamp": datetime.utcnow().isoformat()
         }
-        notify_chat("ThursdayAnalysis", response)
-        return jsonify(response)
+        requests.post(WEBHOOK_URL, json=webhook_payload)
+        return jsonify(webhook_payload)
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
+        return jsonify({"error": str(e)})
 
 # ===== FRIDAY SHORTLIST =====
 @app.route("/friday-shortlist", methods=["GET"])
 def friday_shortlist():
-    try:
-        result = run_friday_shortlist()
-        response = {
-            "status": "Friday Shortlist ready",
-            "timestamp": datetime.utcnow().isoformat(),
-            "data": result
-        }
-        notify_chat("FridayShortlist", response)
-        return jsonify(response)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
+    payload = {"status": "Friday Shortlist ready", "timestamp": datetime.utcnow().isoformat()}
+    requests.post(WEBHOOK_URL, json=payload)
+    return jsonify(payload)
 
 # ===== TUESDAY RECAP =====
 @app.route("/tuesday-recap", methods=["GET"])
 def tuesday_recap():
-    try:
-        result = run_tuesday_recap()
-        response = {
-            "status": "Tuesday Recap completed",
-            "timestamp": datetime.utcnow().isoformat(),
-            "data": result
-        }
-        notify_chat("TuesdayRecap", response)
-        return jsonify(response)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    payload = {"status": "Tuesday Recap complete", "timestamp": datetime.utcnow().isoformat()}
+    requests.post(WEBHOOK_URL, json=payload)
+    return jsonify(payload)
 
-
-# ====== START APP ======
 if __name__ == "__main__":
+    send_webhook_test()
     app.run(host="0.0.0.0", port=10000)
