@@ -14,6 +14,9 @@ WEBHOOK_URL = os.getenv("CHATGPT_WEBHOOK_URL")
 BASE_URL_FOOTBALL = "https://v3.football.api-sports.io"
 HEADERS_FOOTBALL = {"x-apisports-key": API_KEY_FOOTBALL}
 
+# Οι λίγκες που θα φέρνουμε πάντα για την Πέμπτη (αν δεν επιστρέψει τίποτα το API)
+FALLBACK_LEAGUES = [39, 140, 135, 78, 61, 94, 88]  # EPL, La Liga, Serie A, Bundesliga, Ligue 1, Eredivisie, Portugal
+
 # ================= BASIC ROUTES =================
 @app.route("/", methods=["GET"])
 def home():
@@ -26,18 +29,30 @@ def home():
 @app.route("/thursday-analysis", methods=["GET"])
 def thursday_analysis():
     try:
-        url = f"{BASE_URL_FOOTBALL}/fixtures"
-        params = {
-            "from": datetime.now().strftime("%Y-%m-%d"),
-            "to": (datetime.now() + timedelta(days=4)).strftime("%Y-%m-%d"),
-            "season": 2025
-        }
+        start_date = datetime.now().strftime("%Y-%m-%d")
+        end_date = (datetime.now() + timedelta(days=4)).strftime("%Y-%m-%d")
 
+        fixtures = []
+        print(f"[DEBUG] Fetching fixtures {start_date} → {end_date}")
+
+        # Δοκίμασε να φέρει όλα τα fixtures
+        url = f"{BASE_URL_FOOTBALL}/fixtures"
+        params = {"from": start_date, "to": end_date, "season": 2025}
         response = requests.get(url, headers=HEADERS_FOOTBALL, params=params)
-        fixtures = response.json().get("response", [])
+        data = response.json()
+
+        if not data.get("response"):
+            print("[DEBUG] No global fixtures, trying fallback leagues...")
+            for league in FALLBACK_LEAGUES:
+                params = {"league": league, "season": 2025, "from": start_date, "to": end_date}
+                r = requests.get(url, headers=HEADERS_FOOTBALL, params=params)
+                league_data = r.json().get("response", [])
+                fixtures.extend(league_data)
+        else:
+            fixtures = data.get("response", [])
 
         if not fixtures:
-            return jsonify({"status": "No fixtures found for analysis."})
+            return jsonify({"status": "No fixtures found for analysis.", "debug": data})
 
         report = []
         for fx in fixtures:
@@ -67,7 +82,7 @@ def thursday_analysis():
             "status": "Thursday Analysis complete",
             "timestamp": datetime.utcnow().isoformat(),
             "fixtures_count": len(report),
-            "fixtures": report
+            "fixtures": report[:20]  # μόνο τα 20 πρώτα για να μην είναι τεράστιο
         })
 
     except Exception as e:
