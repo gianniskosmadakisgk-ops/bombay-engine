@@ -4,12 +4,12 @@ from datetime import datetime, timedelta
 
 app = Flask(__name__)
 
-# 🔑 Βάλε εδώ το Football API key σου
-API_KEY = "API_KEY = "0e0464506d8f342bb0a2ee20ef6cad79""
+# ✅ ΣΩΣΤΟ API KEY ΜΕ ΕΙΣΑΓΩΓΙΚΑ
+API_KEY = "0e0464506d8f342bb0a2ee20ef6cad79"
 
 BASE_URL = "https://v3.football.api-sports.io/fixtures"
 
-# 📋 Λίγκες που παρακολουθούμε
+# 📋 Όλες οι λίγκες που τραβάμε δεδομένα
 LEAGUES = {
     "Premier League": 39,
     "La Liga": 140,
@@ -40,10 +40,10 @@ def run_thursday_analysis():
         response = requests.get(url, headers=headers)
         json_data = response.json()
 
-        # Καταγραφή αποτελεσμάτων για debugging
+        # 🔍 Debug info για να βλέπεις τι πιάνει
         debug_log.append({league_name: len(json_data.get("response", []))})
 
-        # Αν υπάρχουν αγώνες, κράτα τους
+        # Αν υπάρχουν fixtures, τα κρατάμε
         if json_data.get("response"):
             fixtures_data[league_name] = json_data["response"]
         else:
