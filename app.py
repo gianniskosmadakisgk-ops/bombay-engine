@@ -1,154 +1,68 @@
-import os
-import random
-import requests
-from datetime import datetime, timedelta
 from flask import Flask, jsonify
+import requests
 
 app = Flask(__name__)
 
-# ================= CONFIGURATION =================
-API_KEY_FOOTBALL = os.getenv("FOOTBALL_API_KEY")
-API_KEY_ODDS = os.getenv("ODDS_API_KEY")
-WEBHOOK_URL = os.getenv("CHATGPT_WEBHOOK_URL")
+API_KEY = "0e0464506d8f342bb0a2ee20ef6cad79"
 
-BASE_URL_FOOTBALL = "https://v3.football.api-sports.io"
-HEADERS_FOOTBALL = {"x-apisports-key": API_KEY_FOOTBALL}
+# Λίγκες που μας ενδιαφέρουν (μόνο οι κύριες για αρχή)
+LEAGUES = {
+    "Ligue 1": 61,
+    "Serie A": 135,
+    "La Liga": 140,
+    "Premier League": 39,
+    "Bundesliga": 78,
+    "Eredivisie": 88,
+    "Ligue 2": 62,
+    "Serie B": 136,
+    "Championship": 40
+}
 
-# Οι λίγκες που θα φέρνουμε πάντα για την Πέμπτη (αν δεν επιστρέψει τίποτα το API)
-FALLBACK_LEAGUES = [39, 140, 135, 78, 61, 94, 88]  # EPL, La Liga, Serie A, Bundesliga, Ligue 1, Eredivisie, Portugal
-
-# ================= BASIC ROUTES =================
-@app.route("/", methods=["GET"])
+@app.route("/")
 def home():
-    return jsonify({
-        "status": "Bombay Engine is live",
-        "timestamp": datetime.utcnow().isoformat()
-    })
+    return jsonify({"message": "Bombay Engine Active"})
 
-# ================= THURSDAY ANALYSIS =================
-@app.route("/thursday-analysis", methods=["GET"])
-def thursday_analysis():
-    try:
-        start_date = datetime.now().strftime("%Y-%m-%d")
-        end_date = (datetime.now() + timedelta(days=4)).strftime("%Y-%m-%d")
-
-        fixtures = []
-        print(f"[DEBUG] Fetching fixtures {start_date} → {end_date}")
-
-        # Δοκίμασε να φέρει όλα τα fixtures
-        url = f"{BASE_URL_FOOTBALL}/fixtures"
-        params = {"from": start_date, "to": end_date, "season": 2025}
-        response = requests.get(url, headers=HEADERS_FOOTBALL, params=params)
+@app.route("/run_thursday_analysis")
+def run_thursday_analysis():
+    results = {}
+    for league_name, league_id in LEAGUES.items():
+        url = f"https://v3.football.api-sports.io/fixtures?league={league_id}&season=2024&next=10"
+        headers = {"x-apisports-key": API_KEY}
+        response = requests.get(url, headers=headers)
         data = response.json()
 
-        if not data.get("response"):
-            print("[DEBUG] No global fixtures, trying fallback leagues...")
-            for league in FALLBACK_LEAGUES:
-                params = {"league": league, "season": 2025, "from": start_date, "to": end_date}
-                r = requests.get(url, headers=HEADERS_FOOTBALL, params=params)
-                league_data = r.json().get("response", [])
-                fixtures.extend(league_data)
-        else:
-            fixtures = data.get("response", [])
+        league_matches = []
+        for item in data.get("response", []):
+            match = item.get("teams", {})
+            home = match.get("home", {}).get("name")
+            away = match.get("away", {}).get("name")
+            if not home or not away:
+                continue
 
-        if not fixtures:
-            return jsonify({"status": "No fixtures found for analysis.", "debug": data})
+            # Fair odds (προσεγγιστικά για την επίδειξη)
+            fair_1 = round(2.0 + hash(home) % 50 / 100, 2)
+            fair_x = round(3.0 + hash(away) % 50 / 100, 2)
+            fair_2 = round(2.2 + (hash(home + away) % 40) / 100, 2)
+            fair_over = round(1.7 + (hash(away + home) % 20) / 100, 2)
+            score_draw = round((hash(home) % 10) + 1, 1)
+            score_over = round((hash(away) % 10) + 1, 1)
+            category = "Top Tier" if score_draw >= 7.5 or score_over >= 7.5 else "Average"
 
-        report = []
-        for fx in fixtures:
-            match = fx["teams"]["home"]["name"] + " - " + fx["teams"]["away"]["name"]
-            league = fx["league"]["name"]
-
-            fair_1 = round(random.uniform(1.40, 3.20), 2)
-            fair_x = round(random.uniform(2.50, 4.00), 2)
-            fair_2 = round(random.uniform(1.80, 3.50), 2)
-            fair_over = round(random.uniform(1.50, 2.10), 2)
-            score_draw = round(random.uniform(6.5, 9.5), 1)
-            score_over = round(random.uniform(6.5, 9.5), 1)
-
-            report.append({
-                "Match": match,
-                "League": league,
-                "Fair_1": fair_1,
-                "Fair_X": fair_x,
-                "Fair_2": fair_2,
-                "Fair_Over": fair_over,
-                "Score_Draw": score_draw,
-                "Score_Over": score_over,
-                "Category": "A" if score_draw >= 8 else "B"
+            league_matches.append({
+                "home": home,
+                "away": away,
+                "fair_1": fair_1,
+                "fair_x": fair_x,
+                "fair_2": fair_2,
+                "fair_over": fair_over,
+                "score_draw": score_draw,
+                "score_over": score_over,
+                "category": category
             })
 
-        return jsonify({
-            "status": "Thursday Analysis complete",
-            "timestamp": datetime.utcnow().isoformat(),
-            "fixtures_count": len(report),
-            "fixtures": report[:20]  # μόνο τα 20 πρώτα για να μην είναι τεράστιο
-        })
+        results[league_name] = league_matches
 
-    except Exception as e:
-        return jsonify({"error": str(e)})
+    return jsonify(results)
 
-# ================= FRIDAY SHORTLIST =================
-@app.route("/friday-shortlist", methods=["GET"])
-def friday_shortlist():
-    try:
-        shortlist = []
-        for i in range(10):
-            shortlist.append({
-                "Match": f"Team{i+1} - Team{i+2}",
-                "Type": random.choice(["Draw", "Over"]),
-                "Fair": round(random.uniform(1.70, 3.50), 2),
-                "Book": round(random.uniform(1.80, 3.80), 2),
-                "Diff": round(random.uniform(5, 20), 1),
-                "Stake": random.choice([15, 20]),
-                "Value": random.choice(["✅", "⚠️", "❌"])
-            })
-
-        return jsonify({
-            "status": "Friday Shortlist ready",
-            "timestamp": datetime.utcnow().isoformat(),
-            "picks": shortlist
-        })
-
-    except Exception as e:
-        return jsonify({"error": str(e)})
-
-# ================= TUESDAY RECAP =================
-@app.route("/tuesday-recap", methods=["GET"])
-def tuesday_recap():
-    try:
-        recap = [
-            {
-                "Engine": "Draw Engine",
-                "Picks": 20,
-                "Hits": 11,
-                "HitRate": "55%",
-                "ROI": "+8.4%",
-                "ProfitLoss": "+24.00",
-                "BankBefore": 400,
-                "BankAfter": 424
-            },
-            {
-                "Engine": "Over Engine",
-                "Picks": 18,
-                "Hits": 10,
-                "HitRate": "56%",
-                "ROI": "+7.1%",
-                "ProfitLoss": "+21.30",
-                "BankBefore": 300,
-                "BankAfter": 321.3
-            }
-        ]
-
-        return jsonify({
-            "status": "Tuesday Recap completed",
-            "timestamp": datetime.utcnow().isoformat(),
-            "recap": recap
-        })
-
-    except Exception as e:
-        return jsonify({"error": str(e)})
-
-# ================= MAIN =================
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
