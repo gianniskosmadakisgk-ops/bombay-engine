@@ -4,10 +4,8 @@ from datetime import datetime, timedelta
 
 app = Flask(__name__)
 
-# API key (βάλε τη δική σου από Render Environment)
 API_KEY = "0e0464506d8f342bb0a2ee20ef6cad79"
 
-# Όλες οι λίγκες που παρακολουθούμε
 LEAGUES = {
     "🇫🇷 Ligue 1": 61,
     "🇫🇷 Ligue 2": 62,
@@ -31,9 +29,12 @@ def home():
 def run_thursday_analysis():
     today = datetime.utcnow()
     from_date = today.strftime("%Y-%m-%d")
-    to_date = (today + timedelta(days=4)).strftime("%Y-%m-%d")
+    to_date = (today + timedelta(days=10)).strftime("%Y-%m-%d")
 
     results = {}
+    total_fixtures = 0
+    debug_log = []
+
     for league_name, league_id in LEAGUES.items():
         url = f"https://v3.football.api-sports.io/fixtures?league={league_id}&season=2024&from={from_date}&to={to_date}"
         headers = {"x-apisports-key": API_KEY}
@@ -48,17 +49,13 @@ def run_thursday_analysis():
             if not home or not away:
                 continue
 
-            # Fair odds & score evaluation
             fair_1 = round(2.0 + hash(home) % 50 / 100, 2)
             fair_x = round(3.0 + hash(away) % 50 / 100, 2)
             fair_2 = round(2.2 + (hash(home + away) % 40) / 100, 2)
             fair_over = round(1.7 + (hash(away + home) % 20) / 100, 2)
-
-            # Draw & Over scores
             score_draw = round((hash(home) % 10) + 1, 1)
             score_over = round((hash(away) % 10) + 1, 1)
 
-            # Κατηγορία
             if score_draw >= 7.5 or score_over >= 7.5:
                 category = "A"
             elif score_draw >= 6.0 or score_over >= 6.0:
@@ -78,12 +75,15 @@ def run_thursday_analysis():
             })
 
         results[league_name] = league_matches
+        total_fixtures += len(league_matches)
+        debug_log.append({league_name: len(league_matches)})
 
     return jsonify({
         "fixtures": results,
-        "fixtures_count": sum(len(v) for v in results.values()),
+        "fixtures_count": total_fixtures,
         "timestamp": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
-        "status": "Thursday Analysis complete"
+        "status": "Thursday Analysis complete",
+        "debug_log": debug_log
     })
 
 if __name__ == "__main__":
