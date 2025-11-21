@@ -1,29 +1,61 @@
 openapi: 3.1.1
 info:
   title: Bombay Engine API
-  version: "1.0.0"
-  description: API endpoints for internal automation.
+  version: "6.0.0"
+  description: |
+    Bombay Engine endpoints for automated football analytics and ChatGPT integration.
 servers:
   - url: https://bombay-engine.onrender.com
+
 paths:
   /thursday-analysis:
     get:
       operationId: runThursdayAnalysis
-      summary: Thursday Analysis
+      summary: Run Thursday Analysis
+      description: Triggers the Thursday analytics pipeline and returns status and data.
       responses:
         "200":
-          description: Thursday report ready.
+          description: Thursday analysis completed successfully.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AnalysisResponse"
+
   /friday-shortlist:
     get:
       operationId: runFridayShortlist
-      summary: Friday Shortlist
+      summary: Run Friday Shortlist
+      description: Generates Friday shortlist (draws, O/U, value picks).
       responses:
         "200":
-          description: Friday shortlist done.
+          description: Friday shortlist completed successfully.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AnalysisResponse"
+
   /tuesday-recap:
     get:
       operationId: runTuesdayRecap
-      summary: Tuesday Recap
+      summary: Run Tuesday Recap
+      description: Creates recap report for last sessions and performance summary.
       responses:
         "200":
-          description: Recap complete.
+          description: Tuesday recap completed successfully.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AnalysisResponse"
+
+components:
+  schemas:
+    AnalysisResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: "Thursday Analysis complete"
+        timestamp:
+          type: string
+          format: date-time
+          example: "2025-11-21T09:30:08.602463Z"
