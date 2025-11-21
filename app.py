@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 app = Flask(__name__)
 
 # 🔑 Βάλε εδώ το Football API key σου
-API_KEY = "your_api_key_here"
+API_KEY = "API_KEY = "0e0464506d8f342bb0a2ee20ef6cad79""
 
 BASE_URL = "https://v3.football.api-sports.io/fixtures"
 
