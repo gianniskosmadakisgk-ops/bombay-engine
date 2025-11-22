@@ -28,7 +28,7 @@ def run_thursday_analysis():
     start_date = today.strftime("%Y-%m-%d")
     end_date = (today + timedelta(days=10)).strftime("%Y-%m-%d")
 
-    fixtures_data = {}
+    all_fixtures = []
     debug_log = []
 
     for league_name, league_id in LEAGUES.items():
@@ -39,23 +39,45 @@ def run_thursday_analysis():
         }
 
         response = requests.get(url, headers=headers)
-        json_data = response.json()
+        data = response.json()
 
-        fixtures_data[league_name] = json_data.get("response", [])
+        fixtures = data.get("response", [])
+        for fx in fixtures:
+            fixture_info = fx.get("fixture", {})
+            teams = fx.get("teams", {})
+            home_team = teams.get("home", {}).get("name")
+            away_team = teams.get("away", {}).get("name")
+            date = fixture_info.get("date")
+
+            # Dummy fair odds until we apply model
+            fair_1 = round(1.6 + 1.0 * (hash(home_team) % 50) / 100, 2)
+            fair_x = round(3.0 + 0.5 * (hash(away_team) % 50) / 100, 2)
+            fair_2 = round(2.0 + 1.0 * (hash(home_team + away_team) % 50) / 100, 2)
+            fair_over = round(1.7 + 0.4 * (hash(date) % 50) / 100, 2)
+
+            all_fixtures.append({
+                "League": league_name,
+                "Date": date,
+                "Match": f"{home_team} - {away_team}",
+                "Fair_1": fair_1,
+                "Fair_X": fair_x,
+                "Fair_2": fair_2,
+                "Fair_Over": fair_over
+            })
+
         debug_log.append({
-            "league": league_name,
-            "url": url,
+            "League": league_name,
             "status_code": response.status_code,
-            "results": len(json_data.get("response", [])),
-            "error": json_data.get("errors")
+            "results": len(fixtures),
+            "url": url
         })
 
     return jsonify({
-        "debug_log": debug_log,
-        "fixtures": fixtures_data,
-        "fixtures_count": sum(len(v) for v in fixtures_data.values()),
+        "fixtures": all_fixtures,
+        "fixtures_count": len(all_fixtures),
         "status": "Thursday Analysis complete",
-        "timestamp": datetime.utcnow().isoformat()
+        "timestamp": datetime.utcnow().isoformat(),
+        "debug_log": debug_log
     })
 
 if __name__ == '__main__':
