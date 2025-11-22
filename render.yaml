@@ -2,6 +2,8 @@ services:
   - type: web
     name: bombay-engine
     env: python
-    buildCommand: pip install -r requirements.txt
+    buildCommand: |
+      apt-get update && apt-get install -y python3.9 python3.9-venv python3.9-distutils
+      ln -sf /usr/bin/python3.9 /usr/bin/python
+      pip install -r requirements.txt
     startCommand: gunicorn app:app
-    pythonVersion: 3.9.18
