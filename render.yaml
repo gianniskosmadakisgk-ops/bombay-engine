@@ -2,6 +2,7 @@ services:
   - type: web
     name: bombay-engine
     env: python
-    buildCommand: ""
-    startCommand: "gunicorn app:app"
     plan: free
+    pythonVersion: 3.10.12
+    buildCommand: pip install --upgrade pip setuptools wheel && pip install -r requirements.txt
+    startCommand: gunicorn app:app
