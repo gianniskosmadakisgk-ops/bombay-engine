@@ -1,96 +1,46 @@
 from flask import Flask, jsonify
-from datetime import datetime
-import os
 import requests
+import pandas as pd
+import datetime
 
 app = Flask(__name__)
 
-FOOTBALL_API_KEY = os.getenv("FOOTBALL_API_KEY")
-API_URL = "https://v3.football.api-sports.io/fixtures"
+API_KEY = "YOUR_API_KEY"  # βάλε εδώ το δικό σου API key
+API_URL = "https://api-football-v1.p.rapidapi.com/v3/fixtures"
+HEADERS = {"x-rapidapi-host": "api-football-v1.p.rapidapi.com", "x-rapidapi-key": API_KEY}
 
-headers = {
-    "x-apisports-key": FOOTBALL_API_KEY,
-    "accept": "application/json"
-}
+# 🔒 Locked leagues για Draw + Over analysis
+LEAGUES = [39, 140, 135, 78, 61, 62, 94, 169, 88, 144]
 
+def fetch_fixtures(league_id):
+    today = datetime.date.today()
+    from_date = today.strftime("%Y-%m-%d")
+    to_date = (today + datetime.timedelta(days=5)).strftime("%Y-%m-%d")
 
-def fetch_fixtures(league_id, mode="next"):
-    """Προσπαθεί να φέρει fixtures, αν δεν υπάρχουν upcoming φέρνει τα πιο πρόσφατα."""
-    res = requests.get(
-        f"{API_URL}?league={league_id}&season=2024&{mode}=50&timezone=Europe/Athens",
-        headers=headers
-    )
-    if res.status_code != 200:
-        return []
-    data = res.json().get("response", [])
-    if not data and mode == "next":
-        # fallback: πάρε τελευταία 10 αν δεν υπάρχουν επόμενοι
-        return fetch_fixtures(league_id, mode="last")
-    return data
+    params = {"league": league_id, "season": 2024, "from": from_date, "to": to_date}
+    response = requests.get(API_URL, headers=HEADERS, params=params)
+    data = response.json()
+    return data.get("response", [])
 
+@app.route("/run_thursday_analysis", methods=["GET"])
+def run_thursday_analysis():
+    all_fixtures = []
+    for league in LEAGUES:
+        fixtures = fetch_fixtures(league)
+        for match in fixtures:
+            info = match["teams"]
+            league_name = match["league"]["name"]
+            all_fixtures.append({
+                "league": league_name,
+                "home": info["home"]["name"],
+                "away": info["away"]["name"],
+                "date": match["fixture"]["date"],
+                "status": match["fixture"]["status"]["short"]
+            })
 
-# -----------------------------
-# Thursday – Draw Analytics
-# -----------------------------
-@app.route("/thursday-analysis")
-def thursday_analysis():
-    leagues = [39, 140, 135, 78, 61]  # Premier League, La Liga, Serie A, Bundesliga, Ligue 1
-    fixtures_total = 0
-    draws_predicted = []
-
-    for league in leagues:
-        data = fetch_fixtures(league)
-        fixtures_total += len(data)
-        for match in data:
-            home = match["teams"]["home"]["name"]
-            away = match["teams"]["away"]["name"]
-            draws_predicted.append(f"{home} vs {away}")
-
-    result = {
-        "status": "success",
-        "timestamp": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC"),
-        "analysis_type": "draws",
-        "fixtures_analyzed": fixtures_total,
-        "draw_score_model": "v3.4 adaptive",
-        "predicted_draws": draws_predicted[:10],
-        "message": "Live or fallback draw fixtures fetched & analyzed."
-    }
-    return jsonify(result)
-
-
-# -----------------------------
-# Friday – Over/Under Analytics
-# -----------------------------
-@app.route("/friday-analysis")
-def friday_analysis():
-    leagues = [40, 136, 62, 141, 79]  # Championship, Serie B, Ligue 2, La Liga 2, 2. Bundesliga
-    fixtures_total = 0
-    over_candidates = []
-
-    for league in leagues:
-        data = fetch_fixtures(league)
-        fixtures_total += len(data)
-        for match in data:
-            home = match["teams"]["home"]["name"]
-            away = match["teams"]["away"]["name"]
-            over_candidates.append(f"{home} vs {away}")
-
-    result = {
-        "status": "success",
-        "timestamp": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC"),
-        "analysis_type": "over-under",
-        "fixtures_analyzed": fixtures_total,
-        "over_under_model": "v2.4 dynamic",
-        "predicted_over_fixtures": over_candidates[:10],
-        "message": "Live or fallback over/under fixtures fetched & analyzed."
-    }
-    return jsonify(result)
-
-
-@app.route("/")
-def home():
-    return "✅ Bombay Engine is running and connected (Live + Fallback mode)."
-
+    df = pd.DataFrame(all_fixtures)
+    result = df.to_dict(orient="records")
+    return jsonify({"status": "success", "count": len(result), "data": result})
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
