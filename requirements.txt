@@ -2,5 +2,6 @@ Flask==3.0.3
 gunicorn==21.2.0
 requests==2.32.3
 numpy==1.26.4
-setuptools>=68.0.0
-wheel>=0.38.0
+setuptools==68.0.0
+wheel==0.38.0
+pandas==2.2.3
