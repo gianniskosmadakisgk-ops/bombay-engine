@@ -13,6 +13,7 @@ headers = {
     "accept": "application/json"
 }
 
+
 # -----------------------------
 # Thursday – Draw Analytics
 # -----------------------------
@@ -24,7 +25,7 @@ def thursday_analysis():
 
     for league in leagues:
         res = requests.get(
-            f"{API_URL}?league={league}&season=2024&next=20",
+            f"{API_URL}?league={league}&season=2024&next=15&timezone=Europe/Athens",
             headers=headers
         )
         if res.status_code == 200:
@@ -60,7 +61,7 @@ def friday_analysis():
 
     for league in leagues:
         res = requests.get(
-            f"{API_URL}?league={league}&season=2024&next=20",
+            f"{API_URL}?league={league}&season=2024&next=15&timezone=Europe/Athens",
             headers=headers
         )
         if res.status_code == 200:
@@ -87,7 +88,7 @@ def friday_analysis():
 
 @app.route("/")
 def home():
-    return "✅ Bombay Engine is running and connected (Live Data mode)."
+    return "✅ Bombay Engine is running and connected (Live Fixtures mode)."
 
 
 if __name__ == "__main__":
