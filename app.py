@@ -14,6 +14,21 @@ headers = {
 }
 
 
+def fetch_fixtures(league_id, mode="next"):
+    """Προσπαθεί να φέρει fixtures, αν δεν υπάρχουν upcoming φέρνει τα πιο πρόσφατα."""
+    res = requests.get(
+        f"{API_URL}?league={league_id}&season=2024&{mode}=50&timezone=Europe/Athens",
+        headers=headers
+    )
+    if res.status_code != 200:
+        return []
+    data = res.json().get("response", [])
+    if not data and mode == "next":
+        # fallback: πάρε τελευταία 10 αν δεν υπάρχουν επόμενοι
+        return fetch_fixtures(league_id, mode="last")
+    return data
+
+
 # -----------------------------
 # Thursday – Draw Analytics
 # -----------------------------
@@ -24,28 +39,21 @@ def thursday_analysis():
     draws_predicted = []
 
     for league in leagues:
-        res = requests.get(
-            f"{API_URL}?league={league}&season=2024&next=15&timezone=Europe/Athens",
-            headers=headers
-        )
-        if res.status_code == 200:
-            data = res.json().get("response", [])
-            fixtures_total += len(data)
-            for match in data:
-                home = match["teams"]["home"]["name"]
-                away = match["teams"]["away"]["name"]
-                draws_predicted.append(f"{home} vs {away}")
-        else:
-            print(f"League {league} returned status {res.status_code}")
+        data = fetch_fixtures(league)
+        fixtures_total += len(data)
+        for match in data:
+            home = match["teams"]["home"]["name"]
+            away = match["teams"]["away"]["name"]
+            draws_predicted.append(f"{home} vs {away}")
 
     result = {
         "status": "success",
         "timestamp": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC"),
         "analysis_type": "draws",
         "fixtures_analyzed": fixtures_total,
-        "draw_score_model": "v3.3 adaptive",
+        "draw_score_model": "v3.4 adaptive",
         "predicted_draws": draws_predicted[:10],
-        "message": "Live draw fixtures fetched & analyzed."
+        "message": "Live or fallback draw fixtures fetched & analyzed."
     }
     return jsonify(result)
 
@@ -60,35 +68,28 @@ def friday_analysis():
     over_candidates = []
 
     for league in leagues:
-        res = requests.get(
-            f"{API_URL}?league={league}&season=2024&next=15&timezone=Europe/Athens",
-            headers=headers
-        )
-        if res.status_code == 200:
-            data = res.json().get("response", [])
-            fixtures_total += len(data)
-            for match in data:
-                home = match["teams"]["home"]["name"]
-                away = match["teams"]["away"]["name"]
-                over_candidates.append(f"{home} vs {away}")
-        else:
-            print(f"League {league} returned status {res.status_code}")
+        data = fetch_fixtures(league)
+        fixtures_total += len(data)
+        for match in data:
+            home = match["teams"]["home"]["name"]
+            away = match["teams"]["away"]["name"]
+            over_candidates.append(f"{home} vs {away}")
 
     result = {
         "status": "success",
         "timestamp": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC"),
         "analysis_type": "over-under",
         "fixtures_analyzed": fixtures_total,
-        "over_under_model": "v2.3 dynamic",
+        "over_under_model": "v2.4 dynamic",
         "predicted_over_fixtures": over_candidates[:10],
-        "message": "Live over/under fixtures fetched & analyzed."
+        "message": "Live or fallback over/under fixtures fetched & analyzed."
     }
     return jsonify(result)
 
 
 @app.route("/")
 def home():
-    return "✅ Bombay Engine is running and connected (Live Fixtures mode)."
+    return "✅ Bombay Engine is running and connected (Live + Fallback mode)."
 
 
 if __name__ == "__main__":
