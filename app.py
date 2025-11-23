@@ -6,11 +6,10 @@ app = Flask(__name__)
 
 API_URL = "https://v3.football.api-sports.io/fixtures"
 HEADERS = {
-    "x-rapidapi-key": "YOUR_API_KEY_HERE",
-    "x-rapidapi-host": "v3.football.api-sports.io"
+    "x-api-key": "0e0464506d8f342bb0a2ee20ef6cad79",
+    "x-apisports-host": "v3.football.api-sports.io"
 }
 
-# 🔹 Λίστες Λιγκών για το Thursday Report
 LEAGUE_IDS = {
     "Ligue 1": 61,
     "Serie A": 135,
@@ -25,13 +24,7 @@ LEAGUE_IDS = {
     "Jupiler Pro League": 144
 }
 
-# --------------------------------------------------
-# 🔹 Fetch Fixtures (Παρασκευή – Δευτέρα)
-# --------------------------------------------------
 def fetch_fixtures(league_id):
-    """
-    Τραβάει fixtures από Παρασκευή έως Δευτέρα για τη συγκεκριμένη λίγκα.
-    """
     today = datetime.date.today()
     next_friday = today + datetime.timedelta((4 - today.weekday()) % 7)
     monday_after = next_friday + datetime.timedelta(days=3)
@@ -48,9 +41,6 @@ def fetch_fixtures(league_id):
 
     return data.get("response", [])
 
-# --------------------------------------------------
-# 🔹 Thursday Analysis Route
-# --------------------------------------------------
 @app.route("/run_thursday_analysis")
 def run_thursday_analysis():
     all_fixtures = []
@@ -72,9 +62,6 @@ def run_thursday_analysis():
     print(f"📊 Total Fixtures Collected: {total_count}")
     return jsonify({"count": total_count, "data": all_fixtures, "status": "success"})
 
-# --------------------------------------------------
-# 🔹 Default Route
-# --------------------------------------------------
 @app.route("/")
 def home():
     return jsonify({
@@ -82,8 +69,5 @@ def home():
         "routes": ["/run_thursday_analysis"]
     })
 
-# --------------------------------------------------
-# 🔹 Entry Point
-# --------------------------------------------------
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
