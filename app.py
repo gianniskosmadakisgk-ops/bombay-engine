@@ -1,5 +1,5 @@
 from flask import Flask, jsonify
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 import requests
 
@@ -13,6 +13,7 @@ headers = {
     "accept": "application/json"
 }
 
+
 # -----------------------------
 # Thursday – Draw Analytics
 # -----------------------------
@@ -22,8 +23,14 @@ def thursday_analysis():
     fixtures_total = 0
     draws_predicted = []
 
+    today = datetime.utcnow().date()
+    two_days_later = today + timedelta(days=2)
+
     for league in leagues:
-        res = requests.get(f"{API_URL}?league={league}&season=2024&next=10", headers=headers)
+        res = requests.get(
+            f"{API_URL}?league={league}&season=2024&from={today}&to={two_days_later}",
+            headers=headers
+        )
         if res.status_code == 200:
             data = res.json().get("response", [])
             fixtures_total += len(data)
@@ -39,8 +46,8 @@ def thursday_analysis():
         "timestamp": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC"),
         "analysis_type": "draws",
         "fixtures_analyzed": fixtures_total,
-        "draw_score_model": "v3.1 adaptive",
-        "predicted_draws": draws_predicted[:5],
+        "draw_score_model": "v3.2 adaptive",
+        "predicted_draws": draws_predicted[:10],
         "message": "Live draw fixtures fetched & analyzed."
     }
     return jsonify(result)
@@ -55,8 +62,14 @@ def friday_analysis():
     fixtures_total = 0
     over_candidates = []
 
+    today = datetime.utcnow().date()
+    two_days_later = today + timedelta(days=2)
+
     for league in leagues:
-        res = requests.get(f"{API_URL}?league={league}&season=2024&next=10", headers=headers)
+        res = requests.get(
+            f"{API_URL}?league={league}&season=2024&from={today}&to={two_days_later}",
+            headers=headers
+        )
         if res.status_code == 200:
             data = res.json().get("response", [])
             fixtures_total += len(data)
@@ -72,8 +85,8 @@ def friday_analysis():
         "timestamp": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC"),
         "analysis_type": "over-under",
         "fixtures_analyzed": fixtures_total,
-        "over_under_model": "v2.1 dynamic",
-        "predicted_over_fixtures": over_candidates[:5],
+        "over_under_model": "v2.2 dynamic",
+        "predicted_over_fixtures": over_candidates[:10],
         "message": "Live over/under fixtures fetched & analyzed."
     }
     return jsonify(result)
@@ -81,7 +94,7 @@ def friday_analysis():
 
 @app.route("/")
 def home():
-    return "Bombay Engine is running and connected (Live API mode)."
+    return "✅ Bombay Engine is running and connected (Live API mode)."
 
 
 if __name__ == "__main__":
