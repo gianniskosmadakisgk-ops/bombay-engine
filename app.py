@@ -1,46 +1,89 @@
-from flask import Flask, jsonify
-import requests
-import pandas as pd
 import datetime
+import requests
+from flask import Flask, jsonify
 
 app = Flask(__name__)
 
-API_KEY = "YOUR_API_KEY"  # βάλε εδώ το δικό σου API key
-API_URL = "https://api-football-v1.p.rapidapi.com/v3/fixtures"
-HEADERS = {"x-rapidapi-host": "api-football-v1.p.rapidapi.com", "x-rapidapi-key": API_KEY}
+API_URL = "https://v3.football.api-sports.io/fixtures"
+HEADERS = {
+    "x-rapidapi-key": "YOUR_API_KEY_HERE",
+    "x-rapidapi-host": "v3.football.api-sports.io"
+}
 
-# 🔒 Locked leagues για Draw + Over analysis
-LEAGUES = [39, 140, 135, 78, 61, 62, 94, 169, 88, 144]
+# 🔹 Λίστες Λιγκών για το Thursday Report
+LEAGUE_IDS = {
+    "Ligue 1": 61,
+    "Serie A": 135,
+    "La Liga": 140,
+    "Championship": 40,
+    "Serie B": 136,
+    "Ligue 2": 62,
+    "Liga Portugal 2": 88,
+    "Swiss Super League": 207,
+    "Bundesliga": 78,
+    "Eredivisie": 88,
+    "Jupiler Pro League": 144
+}
 
+# --------------------------------------------------
+# 🔹 Fetch Fixtures (Παρασκευή – Δευτέρα)
+# --------------------------------------------------
 def fetch_fixtures(league_id):
+    """
+    Τραβάει fixtures από Παρασκευή έως Δευτέρα για τη συγκεκριμένη λίγκα.
+    """
     today = datetime.date.today()
-    from_date = today.strftime("%Y-%m-%d")
-    to_date = (today + datetime.timedelta(days=5)).strftime("%Y-%m-%d")
+    next_friday = today + datetime.timedelta((4 - today.weekday()) % 7)
+    monday_after = next_friday + datetime.timedelta(days=3)
+
+    from_date = next_friday.strftime("%Y-%m-%d")
+    to_date = monday_after.strftime("%Y-%m-%d")
 
     params = {"league": league_id, "season": 2024, "from": from_date, "to": to_date}
     response = requests.get(API_URL, headers=HEADERS, params=params)
     data = response.json()
+
+    count = len(data.get("response", []))
+    print(f"✅ League {league_id}: Found {count} fixtures ({from_date} → {to_date})")
+
     return data.get("response", [])
 
-@app.route("/run_thursday_analysis", methods=["GET"])
+# --------------------------------------------------
+# 🔹 Thursday Analysis Route
+# --------------------------------------------------
+@app.route("/run_thursday_analysis")
 def run_thursday_analysis():
     all_fixtures = []
-    for league in LEAGUES:
-        fixtures = fetch_fixtures(league)
-        for match in fixtures:
-            info = match["teams"]
-            league_name = match["league"]["name"]
-            all_fixtures.append({
-                "league": league_name,
-                "home": info["home"]["name"],
-                "away": info["away"]["name"],
-                "date": match["fixture"]["date"],
-                "status": match["fixture"]["status"]["short"]
-            })
+    total_count = 0
 
-    df = pd.DataFrame(all_fixtures)
-    result = df.to_dict(orient="records")
-    return jsonify({"status": "success", "count": len(result), "data": result})
+    for league_name, league_id in LEAGUE_IDS.items():
+        fixtures = fetch_fixtures(league_id)
+        if fixtures:
+            for f in fixtures:
+                fixture_info = {
+                    "league": league_name,
+                    "match": f"{f['teams']['home']['name']} – {f['teams']['away']['name']}",
+                    "date": f['fixture']['date'],
+                    "status": f['fixture']['status']['short']
+                }
+                all_fixtures.append(fixture_info)
+            total_count += len(fixtures)
 
+    print(f"📊 Total Fixtures Collected: {total_count}")
+    return jsonify({"count": total_count, "data": all_fixtures, "status": "success"})
+
+# --------------------------------------------------
+# 🔹 Default Route
+# --------------------------------------------------
+@app.route("/")
+def home():
+    return jsonify({
+        "status": "running",
+        "routes": ["/run_thursday_analysis"]
+    })
+
+# --------------------------------------------------
+# 🔹 Entry Point
+# --------------------------------------------------
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+    app.run(host="0.0.0.0", port=5000)
