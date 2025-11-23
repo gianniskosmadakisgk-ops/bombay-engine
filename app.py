@@ -9,7 +9,8 @@ FOOTBALL_API_KEY = os.getenv("FOOTBALL_API_KEY")
 API_URL = "https://v3.football.api-sports.io/fixtures"
 
 headers = {
-    "x-apisports-key": FOOTBALL_API_KEY
+    "x-apisports-key": FOOTBALL_API_KEY,
+    "accept": "application/json"
 }
 
 # -----------------------------
@@ -17,7 +18,7 @@ headers = {
 # -----------------------------
 @app.route("/thursday-analysis")
 def thursday_analysis():
-    leagues = [39, 140, 135, 78, 61]  # Premier, La Liga, Serie A, Bundesliga, Ligue 1
+    leagues = [39, 140, 135, 78, 61]  # Premier League, La Liga, Serie A, Bundesliga, Ligue 1
     fixtures_total = 0
     draws_predicted = []
 
@@ -30,13 +31,15 @@ def thursday_analysis():
                 home = match["teams"]["home"]["name"]
                 away = match["teams"]["away"]["name"]
                 draws_predicted.append(f"{home} vs {away}")
+        else:
+            print(f"League {league} returned status {res.status_code}")
 
     result = {
         "status": "success",
         "timestamp": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC"),
         "analysis_type": "draws",
         "fixtures_analyzed": fixtures_total,
-        "draw_score_model": "v3.0 adaptive",
+        "draw_score_model": "v3.1 adaptive",
         "predicted_draws": draws_predicted[:5],
         "message": "Live draw fixtures fetched & analyzed."
     }
@@ -61,22 +64,21 @@ def friday_analysis():
                 home = match["teams"]["home"]["name"]
                 away = match["teams"]["away"]["name"]
                 over_candidates.append(f"{home} vs {away}")
+        else:
+            print(f"League {league} returned status {res.status_code}")
 
     result = {
         "status": "success",
         "timestamp": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC"),
         "analysis_type": "over-under",
         "fixtures_analyzed": fixtures_total,
-        "over_under_model": "v2.0 dynamic",
+        "over_under_model": "v2.1 dynamic",
         "predicted_over_fixtures": over_candidates[:5],
         "message": "Live over/under fixtures fetched & analyzed."
     }
     return jsonify(result)
 
 
-# -----------------------------
-# Root endpoint
-# -----------------------------
 @app.route("/")
 def home():
     return "Bombay Engine is running and connected (Live API mode)."
