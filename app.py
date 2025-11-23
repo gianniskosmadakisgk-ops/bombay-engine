@@ -4,8 +4,7 @@ import requests
 
 app = Flask(__name__)
 
-# ---- ROUTES ----
-
+# ---- HEALTH & ROOT ----
 @app.route('/')
 def home():
     return "✅ Bombay Engine is running and connected."
@@ -14,21 +13,38 @@ def home():
 def health():
     return jsonify({"status": "ok", "service": "bombay-engine"})
 
-@app.route('/analyze', methods=['POST'])
-def analyze():
+# ---- THURSDAY ANALYSIS ----
+@app.route('/thursday-analysis', methods=['GET'])
+def thursday_analysis():
     """
-    Example endpoint for football data analysis.
-    This will later call your logic for draws/over predictions.
+    Run Thursday analytics pipeline and return data summary.
+    This connects with your internal Bombay Engine pipeline.
     """
-    data = request.get_json(force=True)
-    # Dummy response for now
-    return jsonify({
-        "message": "Data received successfully.",
-        "data_preview": str(data)[:100]
-    })
+    try:
+        # External analysis engine endpoint
+        url = "https://bombay-engine.onrender.com/run_thursday_analysis"
+        response = requests.get(url, timeout=60)
+
+        if response.status_code == 200:
+            return jsonify({
+                "status": "success",
+                "analysis_result": response.json()
+            })
+        else:
+            return jsonify({
+                "status": "error",
+                "message": f"Engine returned status {response.status_code}",
+                "details": response.text
+            }), 500
+
+    except Exception as e:
+        return jsonify({
+            "status": "failed",
+            "error": str(e)
+        }), 500
+
 
 # ---- MAIN ----
-
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
