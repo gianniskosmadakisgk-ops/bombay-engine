@@ -1,101 +1,157 @@
 import json
 import numpy as np
+import requests
 from datetime import datetime
+import os
 
-# -----------------------------
-# Friday Shortlist Generator
-# -----------------------------
+# ---------------------------------------
+# Config
+# ---------------------------------------
+API_URL = "https://bombay-engine.onrender.com/run_thursday_analysis"
+FAIR_KEYS = ["fair_1", "fair_x", "fair_2", "fair_over"]
+ACTUAL_KEYS = ["odd_1", "odd_x", "odd_2", "odd_over"]
 
-THRESHOLD_SCORE = 7.5
-KELLY_FRACTION = 0.40
+# ---------------------------------------
+# Core scoring engines
+# ---------------------------------------
 
-def load_data():
-    try:
-        with open('logs/thursday_output.json', 'r') as f:
-            data = json.load(f)
-        return data.get('data', [])
-    except FileNotFoundError:
-        print("⚠️ Thursday analysis file not found.")
-        return []
-
-def calc_kelly(fair_odds, real_odds, win_prob):
-    b = real_odds - 1
-    q = 1 - win_prob
-    k = ((b * win_prob - q) / b) * KELLY_FRACTION
-    return max(0, k)
-
-def shortlist_games(data):
-    draw_picks, over_picks, kelly_picks = [], [], []
-
-    for match in data:
-        try:
-            teams = match.get('teams', {})
-            fair = match.get('fair_odds', {})
-            real = match.get('real_odds', {})
-            scores = match.get('scores', {})
-
-            draw_score = scores.get('draw', 0)
-            over_score = scores.get('over', 0)
-
-            if draw_score >= THRESHOLD_SCORE:
-                draw_picks.append({
-                    "home": teams.get('home', {}).get('name', ''),
-                    "away": teams.get('away', {}).get('name', ''),
-                    "score": draw_score,
-                    "league": match.get('league', {}).get('name', ''),
-                    "date": match.get('fixture', {}).get('date', '')
-                })
-
-            if over_score >= THRESHOLD_SCORE:
-                over_picks.append({
-                    "home": teams.get('home', {}).get('name', ''),
-                    "away": teams.get('away', {}).get('name', ''),
-                    "score": over_score,
-                    "league": match.get('league', {}).get('name', ''),
-                    "date": match.get('fixture', {}).get('date', '')
-                })
-
-            for key in ['home', 'draw', 'away', 'over']:
-                fair_odd = fair.get(key)
-                real_odd = real.get(key)
-                if fair_odd and real_odd and real_odd > fair_odd:
-                    diff = (real_odd - fair_odd) / fair_odd * 100
-                    win_prob = 1 / fair_odd
-                    kelly = calc_kelly(fair_odd, real_odd, win_prob)
-                    if kelly > 0:
-                        kelly_picks.append({
-                            "bet_type": key,
-                            "home": teams.get('home', {}).get('name', ''),
-                            "away": teams.get('away', {}).get('name', ''),
-                            "diff_pct": round(diff, 2),
-                            "kelly_stake": round(kelly, 4),
-                            "league": match.get('league', {}).get('name', ''),
-                            "date": match.get('fixture', {}).get('date', '')
-                        })
-        except Exception as e:
-            print(f"⚠️ Error processing match: {e}")
-            continue
-
-    draw_picks = sorted(draw_picks, key=lambda x: x['score'], reverse=True)[:10]
-    over_picks = sorted(over_picks, key=lambda x: x['score'], reverse=True)[:10]
-    kelly_picks = sorted(kelly_picks, key=lambda x: x['diff_pct'], reverse=True)[:10]
-
-    return {
-        "timestamp": datetime.now().isoformat(),
-        "draw_top10": draw_picks,
-        "over_top10": over_picks,
-        "kelly_top10": kelly_picks
+def calc_draw_score(match):
+    """Υπολογίζει Draw Score βάσει των παραμέτρων"""
+    weights = {
+        "avg_xg_diff": 0.25,
+        "spi_diff": 0.15,
+        "form_similarity": 0.15,
+        "h2h_draw_rate": 0.10,
+        "league_draw_rate": 0.10,
+        "motivation_balance": 0.05,
+        "injury_impact": 0.05,
+        "weather_balance": 0.05,
+        "fair_odds_alignment": 0.10
     }
 
-def save_shortlist(result):
-    with open('logs/friday_shortlist.json', 'w') as f:
-        json.dump(result, f, indent=2, ensure_ascii=False)
-    print("✅ Friday shortlist saved successfully!")
+    # παράδειγμα normalized παραμέτρων (0–1)
+    params = {
+        "avg_xg_diff": match.get("avg_xg_diff", 0.5),
+        "spi_diff": match.get("spi_diff", 0.5),
+        "form_similarity": match.get("form_similarity", 0.5),
+        "h2h_draw_rate": match.get("h2h_draw_rate", 0.5),
+        "league_draw_rate": match.get("league_draw_rate", 0.5),
+        "motivation_balance": match.get("motivation_balance", 0.5),
+        "injury_impact": match.get("injury_impact", 0.5),
+        "weather_balance": match.get("weather_balance", 0.5),
+        "fair_odds_alignment": match.get("fair_odds_alignment", 0.5),
+    }
 
+    score = sum(params[k] * v for k, v in weights.items()) * 10
+    return round(score, 2)
+
+def calc_over_score(match):
+    """Υπολογίζει Over Score βάσει των παραμέτρων"""
+    weights = {
+        "avg_xg_total": 0.25,
+        "league_over_rate": 0.15,
+        "form_over_rate": 0.10,
+        "attack_strength": 0.10,
+        "defense_weakness": 0.10,
+        "weather_effect": 0.05,
+        "spi_diff": 0.05,
+        "motivation_index": 0.05,
+        "injury_impact": 0.05,
+        "fair_odds_calibration": 0.10
+    }
+
+    params = {
+        "avg_xg_total": match.get("avg_xg_total", 0.5),
+        "league_over_rate": match.get("league_over_rate", 0.5),
+        "form_over_rate": match.get("form_over_rate", 0.5),
+        "attack_strength": match.get("attack_strength", 0.5),
+        "defense_weakness": match.get("defense_weakness", 0.5),
+        "weather_effect": match.get("weather_effect", 0.5),
+        "spi_diff": match.get("spi_diff", 0.5),
+        "motivation_index": match.get("motivation_index", 0.5),
+        "injury_impact": match.get("injury_impact", 0.5),
+        "fair_odds_calibration": match.get("fair_odds_calibration", 0.5),
+    }
+
+    score = sum(params[k] * v for k, v in weights.items()) * 10
+    return round(score, 2)
+
+# ---------------------------------------
+# Kelly Criterion
+# ---------------------------------------
+
+def kelly_fraction(p, b):
+    """Υπολογίζει το ποσοστό Kelly"""
+    return max(((p * (b + 1) - 1) / b), 0)
+
+def calc_kelly_value(match):
+    """Υπολογίζει τη διαφορά fair-actual και το stake"""
+    results = {}
+    bankroll = 300
+    fraction = 0.4  # 40% του Kelly
+    for fair_key, odd_key in zip(FAIR_KEYS, ACTUAL_KEYS):
+        fair = match.get(fair_key)
+        actual = match.get(odd_key)
+        if not fair or not actual:
+            continue
+        fair_prob = 1 / fair
+        actual_prob = 1 / actual
+        edge = fair_prob - actual_prob
+        value_diff = round(((actual - fair) / fair) * 100, 2)
+        k = kelly_fraction(fair_prob, actual - 1)
+        stake = round(bankroll * k * fraction, 2)
+        results[odd_key] = {
+            "value_diff_%": value_diff,
+            "kelly_fraction": round(k, 3),
+            "stake": stake
+        }
+    return results
+
+# ---------------------------------------
+# Friday Shortlist Generator
+# ---------------------------------------
+
+def generate_friday_shortlist():
+    """Φέρνει τα δεδομένα της Thursday και δημιουργεί Shortlists"""
+    try:
+        response = requests.get(API_URL, timeout=20)
+        data = response.json().get("data", [])
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+    draw_list, over_list, kelly_list = [], [], []
+
+    for match in data:
+        draw_score = calc_draw_score(match)
+        over_score = calc_over_score(match)
+        kelly_info = calc_kelly_value(match)
+
+        match["draw_score"] = draw_score
+        match["over_score"] = over_score
+        match["kelly_info"] = kelly_info
+
+        if draw_score >= 7.5:
+            draw_list.append(match)
+        if over_score >= 7.5:
+            over_list.append(match)
+        if any(v["value_diff_%"] > 10 for v in kelly_info.values()):
+            kelly_list.append(match)
+
+    draw_top = sorted(draw_list, key=lambda x: x["draw_score"], reverse=True)[:10]
+    over_top = sorted(over_list, key=lambda x: x["over_score"], reverse=True)[:10]
+    kelly_top = sorted(kelly_list, key=lambda x: max(v["value_diff_%"] for v in x["kelly_info"].values()), reverse=True)[:10]
+
+    return {
+        "status": "success",
+        "timestamp": datetime.utcnow().isoformat(),
+        "draw_shortlist": draw_top,
+        "over_shortlist": over_top,
+        "kelly_shortlist": kelly_top
+    }
+
+# ---------------------------------------
+# Manual Test
+# ---------------------------------------
 if __name__ == "__main__":
-    data = load_data()
-    if not data:
-        print("⚠️ No Thursday data to process.")
-    else:
-        result = shortlist_games(data)
-        save_shortlist(result)
+    result = generate_friday_shortlist()
+    print(json.dumps(result, indent=2))
