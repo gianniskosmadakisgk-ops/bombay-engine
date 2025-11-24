@@ -1,6 +1,8 @@
 name: Run Thursday Analysis
 
 on:
+  schedule:
+    - cron: "0 9 * * 4"   # Κάθε Πέμπτη 11:00 ώρα Ελλάδας (UTC+2)
   workflow_dispatch:
 
 jobs:
@@ -14,7 +16,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
       - name: Install dependencies
         run: |
@@ -25,8 +27,12 @@ jobs:
         env:
           FOOTBALL_API_KEY: ${{ secrets.FOOTBALL_API_KEY }}
         run: |
-          python - <<'EOF'
-          from app import run_thursday_analysis
-          run_thursday_analysis()
-          print("✅ Thursday analysis completed successfully.")
-          EOF
+          echo "Running Thursday Analysis..."
+          python thursday_analysis.py > logs/thursday_output.json
+          echo "Analysis complete."
+
+      - name: Upload results as artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: thursday-analysis-report
+          path: logs/thursday_output.json
