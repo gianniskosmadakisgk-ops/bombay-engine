@@ -2,9 +2,6 @@ name: Run Thursday Analysis
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
 
 jobs:
   run-analysis:
@@ -17,21 +14,19 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: "3.11"
+          python-version: '3.11'
 
       - name: Install dependencies
         run: |
+          python -m pip install --upgrade pip
           pip install -r requirements.txt
 
       - name: Run Thursday Analysis
         env:
           FOOTBALL_API_KEY: ${{ secrets.FOOTBALL_API_KEY }}
         run: |
-          python - <<EOF
+          python - <<'EOF'
           from app import run_thursday_analysis
           run_thursday_analysis()
+          print("✅ Thursday analysis completed successfully.")
           EOF
-
-      - name: Trigger Render Deploy
-        run: |
-          curl -X POST ${{ secrets.RENDER_DEPLOY_HOOK }}
