@@ -1,105 +1,27 @@
-import json
-import numpy as np
-from datetime import datetime
+name: Tuesday Auto Recap
 
-# -----------------------------
-# Tuesday Auto Recap
-# -----------------------------
+on:
+  workflow_dispatch:
 
-def load_file(path):
-    try:
-        with open(path, 'r') as f:
-            return json.load(f)
-    except FileNotFoundError:
-        print(f"⚠️ File not found: {path}")
-        return {}
-    except json.JSONDecodeError:
-        print(f"⚠️ Invalid JSON in {path}")
-        return {}
+jobs:
+  run-tuesday-recap:
+    runs-on: ubuntu-latest
 
-def match_result(fixture):
-    try:
-        goals = fixture.get('goals', {})
-        if goals.get('home') is None or goals.get('away') is None:
-            return None
-        if goals['home'] == goals['away']:
-            return 'draw'
-        elif goals['home'] > goals['away']:
-            return 'home'
-        else:
-            return 'away'
-    except Exception:
-        return None
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
 
-def recap(friday_data, fixtures_data):
-    recap_results = []
-    wins, losses = 0, 0
-    bankroll = 1000
-    unit = 20
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
 
-    friday_games = {f"{m['home']} vs {m['away']}": m for m in friday_data.get("kelly_top10", [])}
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
-    for fx in fixtures_data.get('data', []):
-        try:
-            home = fx['teams']['home']['name']
-            away = fx['teams']['away']['name']
-            key = f"{home} vs {away}"
-            result = match_result(fx)
-            if key not in friday_games or not result:
-                continue
-
-            pick = friday_games[key]
-            bet_type = pick['bet_type']
-            odds = fx.get('odds', {}).get(bet_type)
-            if not odds:
-                continue
-
-            stake = unit * pick.get('kelly_stake', 1)
-            if bet_type == result:
-                profit = stake * (odds - 1)
-                bankroll += profit
-                wins += 1
-                outcome = "✅ WIN"
-            else:
-                bankroll -= stake
-                losses += 1
-                outcome = "❌ LOSS"
-
-            recap_results.append({
-                "match": key,
-                "pick": bet_type,
-                "result": result,
-                "odds": odds,
-                "stake": round(stake, 2),
-                "outcome": outcome,
-                "bankroll": round(bankroll, 2)
-            })
-        except Exception as e:
-            print(f"⚠️ Error processing fixture: {e}")
-            continue
-
-    roi = ((bankroll - 1000) / 1000) * 100
-    summary = {
-        "wins": wins,
-        "losses": losses,
-        "roi_pct": round(roi, 2),
-        "final_bankroll": round(bankroll, 2),
-        "timestamp": datetime.now().isoformat()
-    }
-
-    return {"summary": summary, "recap": recap_results}
-
-def save_recap(result):
-    with open('logs/tuesday_recap.json', 'w') as f:
-        json.dump(result, f, indent=2, ensure_ascii=False)
-    print("✅ Tuesday recap saved successfully!")
-
-if __name__ == "__main__":
-    friday_data = load_file('logs/friday_shortlist.json')
-    fixtures_data = load_file('logs/fixtures_results.json')
-
-    if not friday_data or not fixtures_data:
-        print("⚠️ Missing source data (Friday shortlist or fixtures).")
-    else:
-        result = recap(friday_data, fixtures_data)
-        save_recap(result)
+      - name: Run Tuesday Recap
+        env:
+          FOOTBALL_API_KEY: ${{ secrets.FOOTBALL_API_KEY }}
+        run: python tuesday_recap.py
