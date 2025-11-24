@@ -1,15 +1,29 @@
 name: Friday Auto Shortlist
+
 on:
-  schedule:
-    - cron: "0 9 * * FRI"  # Παρασκευή 12:00 ώρα Ελλάδας (UTC+3)
   workflow_dispatch:
 
 jobs:
-  run-logger:
+  run-friday-shortlist:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Notify Bombay Chat
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
         run: |
-          curl -X POST https://bombay-engine.onrender.com/friday_shortlist \
-          -H "Content-Type: application/json" \
-          -d '{"text": "📅 Friday shortlist triggered automatically by Bombay Engine."}'
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Friday Shortlist
+        env:
+          FOOTBALL_API_KEY: ${{ secrets.FOOTBALL_API_KEY }}
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+        run: |
+          python friday.py
