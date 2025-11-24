@@ -1,102 +1,67 @@
-from flask import Flask, jsonify
-import os
+from flask import Flask, jsonify, request
+from datetime import datetime
+from friday import generate_friday_shortlist
 import requests
-import datetime
-import numpy as np
 
 app = Flask(__name__)
 
-# === CONFIG ===
-API_KEY = os.getenv("FOOTBALL_API_KEY")
-BASE_URL = "https://v3.football.api-sports.io/fixtures"
-HEADERS = {"x-apisports-key": API_KEY}
-
-
-# === MAIN ANALYSIS FUNCTION ===
-def run_thursday_analysis():
-    today = datetime.date.today()
-    friday = today + datetime.timedelta(days=(4 - today.weekday()) % 7)  # Friday
-    monday = friday + datetime.timedelta(days=3)  # Monday window
-
-    params = {
-        "from": friday.strftime("%Y-%m-%d"),
-        "to": monday.strftime("%Y-%m-%d"),
-        "season": 2024,
-    }
-
-    response = requests.get(BASE_URL, headers=HEADERS, params=params)
-    data = response.json().get("response", [])
-
-    results = []
-    for match in data:
-        try:
-            league = match["league"]["name"]
-            home = match["teams"]["home"]["name"]
-            away = match["teams"]["away"]["name"]
-
-            # === Fair Odds ===
-            fair_1 = np.random.uniform(1.60, 3.00)
-            fair_x = np.random.uniform(2.80, 3.40)
-            fair_2 = np.random.uniform(1.80, 3.20)
-            fair_over = np.random.uniform(1.60, 1.90)
-
-            # === Draw Score Formula ===
-            score_draw = round(
-                10
-                * (
-                    np.random.uniform(0.15, 0.25) * 0.20  # H2H Draw Rate
-                    + np.random.uniform(0.15, 0.35) * 0.15  # League Draw Rate
-                    + np.random.uniform(0.10, 0.30) * 0.10  # Form balance
-                    + np.random.uniform(0.10, 0.25) * 0.10  # SPI diff
-                    + np.random.uniform(0.05, 0.15) * 0.05  # Weather
-                ),
-                2,
-            )
-
-            # === Over Score Formula ===
-            score_over = round(
-                10
-                * (
-                    np.random.uniform(0.30, 0.45) * 0.25  # Avg xG total
-                    + np.random.uniform(0.15, 0.25) * 0.15  # League Over rate
-                    + np.random.uniform(0.10, 0.20) * 0.10  # Form Over rate
-                    + np.random.uniform(0.10, 0.20) * 0.10  # Attack strength
-                    + np.random.uniform(0.05, 0.10) * 0.05  # Weather
-                ),
-                2,
-            )
-
-            results.append({
-                "league": league,
-                "match": f"{home} – {away}",
-                "fair1": round(fair_1, 2),
-                "fairx": round(fair_x, 2),
-                "fair2": round(fair_2, 2),
-                "fairover": round(fair_over, 2),
-                "score_draw": score_draw,
-                "score_over": score_over,
-                "category": "Draw" if score_draw > score_over else "Over",
-            })
-        except Exception as e:
-            print("Error processing match:", e)
-            continue
-
-    return {"count": len(results), "data": results, "status": "success"}
-
-
+# ----------------------------------------------------------
+# Root
+# ----------------------------------------------------------
 @app.route("/")
 def home():
-    return jsonify({"status": "ok", "message": "Bombay Engine active"})
+    return jsonify({
+        "status": "ok",
+        "message": "Bombay Engine API is running",
+        "timestamp": datetime.utcnow().isoformat()
+    })
 
-
+# ----------------------------------------------------------
+# Thursday Analysis
+# ----------------------------------------------------------
 @app.route("/run_thursday_analysis", methods=["GET"])
-def run_thursday():
+def run_thursday_analysis():
     try:
-        result = run_thursday_analysis()
+        # Σημείωση: εδώ μιλάμε με τον Thursday engine
+        response = requests.get("https://bombay-engine.onrender.com/run_thursday_analysis", timeout=25)
+        data = response.json()
+        return jsonify({
+            "status": "success",
+            "timestamp": datetime.utcnow().isoformat(),
+            "data": data
+        })
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        })
+
+# ----------------------------------------------------------
+# Friday Shortlist
+# ----------------------------------------------------------
+@app.route("/run_friday_shortlist", methods=["GET"])
+def run_friday_shortlist():
+    try:
+        result = generate_friday_shortlist()
         return jsonify(result)
     except Exception as e:
-        return jsonify({"status": "error", "message": str(e)})
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        })
 
+# ----------------------------------------------------------
+# Health Check
+# ----------------------------------------------------------
+@app.route("/ping", methods=["GET"])
+def ping():
+    return jsonify({
+        "pong": True,
+        "timestamp": datetime.utcnow().isoformat()
+    })
 
+# ----------------------------------------------------------
+# Run Flask app
+# ----------------------------------------------------------
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
