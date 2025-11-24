@@ -1,109 +1,98 @@
-import datetime
-import random
+import os
+import requests
+from datetime import datetime, timedelta
 import json
 
-# ----------------------------------------------------------
-#  Thursday Analysis — Bombay Engine v6.3 (Bookmaker Logic)
-# ----------------------------------------------------------
+# === Config ===
+FOOTBALL_API_KEY = os.getenv("FOOTBALL_API_KEY")
+API_URL = "https://v3.football.api-sports.io/fixtures"
+HEADERS = {"x-apisports-key": FOOTBALL_API_KEY}
 
+# === Multi-league setup (Paid API) ===
 LEAGUES = [
-    "Ligue 1", "Serie A", "La Liga", "Championship", "Serie B",
-    "Ligue 2", "Liga Portugal 2", "Swiss Super League",
-    "Eredivisie", "Jupiler Pro League"
+    39,   # Premier League
+    61,   # Ligue 1
+    140,  # La Liga
+    135,  # Serie A
+    41,   # Championship
+    71,   # Serie B
+    62,   # Ligue 2
+    94,   # Liga Portugal 2
+    197,  # Swiss Super League
+    88,   # Eredivisie
+    144   # Jupiler Pro League
 ]
 
-# League baseline draw and over tendencies
-LEAGUE_FACTORS = {
-    "Ligue 1": {"draw": 0.29, "over": 0.54},
-    "Serie A": {"draw": 0.27, "over": 0.56},
-    "La Liga": {"draw": 0.28, "over": 0.51},
-    "Championship": {"draw": 0.30, "over": 0.49},
-    "Serie B": {"draw": 0.31, "over": 0.46},
-    "Ligue 2": {"draw": 0.32, "over": 0.47},
-    "Liga Portugal 2": {"draw": 0.30, "over": 0.48},
-    "Swiss Super League": {"draw": 0.27, "over": 0.59},
-    "Eredivisie": {"draw": 0.25, "over": 0.63},
-    "Jupiler Pro League": {"draw": 0.26, "over": 0.61},
-}
+# === Date range: Fri–Mon ===
+today = datetime.utcnow()
+days_ahead = (4 - today.weekday()) % 7  # Friday
+friday = today + timedelta(days=days_ahead)
+monday = friday + timedelta(days=3)
+date_from, date_to = friday.strftime("%Y-%m-%d"), monday.strftime("%Y-%m-%d")
 
-def compute_team_strength():
-    return round(random.uniform(0.4, 1.6), 2)
+# === Scoring functions ===
+def fair_odd_calc(fixture, outcome):
+    """Δίκαιες αποδόσεις (προβλεπόμενες πιθανότητες)"""
+    if outcome == "draw":
+        base = 3.00
+    elif outcome == "home":
+        base = 2.00
+    else:
+        base = 3.50
+    return round(base, 2)
 
-def bookmaker_fair_odds(str_home, str_away, league):
-    total = str_home + str_away
-    prob_home = str_home / total
-    prob_away = str_away / total
-    prob_draw = LEAGUE_FACTORS[league]["draw"]
+def score_draw_calc(f):
+    """Υπολογισμός Score Ισοπαλίας"""
+    score = 0
+    league_draw_rate = 30  # placeholder %
+    xg_diff = abs(1.4 - 1.3)
+    team_form = 0.8
+    score = 5 + (1 - xg_diff) + team_form
+    return round(min(score, 10), 2)
 
-    margin = 0.04
-    total_prob = prob_home + prob_away + prob_draw
-    prob_home = prob_home / total_prob * (1 - margin)
-    prob_draw = prob_draw / total_prob * (1 - margin)
-    prob_away = prob_away / total_prob * (1 - margin)
+def score_over_calc(f):
+    """Υπολογισμός Score Over"""
+    avg_xg = 2.8
+    form_boost = 0.3
+    score = 5 + (avg_xg - 2.5) + form_boost
+    return round(min(score, 10), 2)
 
-    fair_1 = round(1 / prob_home, 2)
-    fair_x = round(1 / prob_draw, 2)
-    fair_2 = round(1 / prob_away, 2)
+def classify_fixture(f):
+    """Κατηγορία αγώνα"""
+    return "balanced"
 
-    base_over = LEAGUE_FACTORS[league]["over"]
-    adj_over = base_over + random.uniform(-0.05, 0.05)
-    fair_over = round(1 / adj_over, 2)
+# === Pull fixtures ===
+fixtures = []
+for league_id in LEAGUES:
+    params = {"league": league_id, "season": 2025, "from": date_from, "to": date_to}
+    res = requests.get(API_URL, headers=HEADERS, params=params)
+    data = res.json()
 
-    return fair_1, fair_x, fair_2, fair_over
-
-def draw_score_formula(league):
-    base = LEAGUE_FACTORS[league]["draw"] * 10
-    h2h_factor = random.uniform(0, 2)
-    form_factor = random.uniform(-1, 1)
-    xg_balance = random.uniform(0, 1)
-    weather_factor = random.choice([0, 0.3, 0.5])
-    score = base * 0.5 + h2h_factor + form_factor + xg_balance + weather_factor
-    return round(min(max(score, 0), 10), 1)
-
-def over_score_formula(league):
-    base = LEAGUE_FACTORS[league]["over"] * 10
-    xg_factor = random.uniform(0, 2)
-    momentum = random.uniform(-0.5, 1)
-    h2h_over = random.uniform(0, 1.5)
-    weather_factor = random.choice([0, 0.2, 0.3])
-    score = base * 0.5 + xg_factor + momentum + h2h_over + weather_factor
-    return round(min(max(score, 0), 10), 1)
-
-def generate_fixture_report():
-    today = datetime.date.today()
-    from_date = today + datetime.timedelta(days=4)
-    to_date = from_date + datetime.timedelta(days=3)
-
-    fixtures = []
-    for league in LEAGUES:
-        for _ in range(random.randint(3, 6)):
-            home = random.choice(["Lille", "Marseille", "Roma", "Porto", "PSV", "Anderlecht", "Basel", "Toulouse", "Palermo", "Levante"])
-            away = random.choice(["Nice", "Juventus", "Benfica", "Twente", "Club Brugge", "Young Boys", "Lorient", "Atalanta", "Cadiz", "Empoli"])
-            str_home, str_away = compute_team_strength(), compute_team_strength()
-            fair_1, fair_x, fair_2, fair_over = bookmaker_fair_odds(str_home, str_away, league)
-            score_draw = draw_score_formula(league)
-            score_over = over_score_formula(league)
-            category = "Draw-prone" if score_draw >= 7.5 else "Open" if score_over >= 7.5 else "Balanced"
-
+    if data and data.get("response"):
+        for f in data["response"]:
             fixtures.append({
-                "match": f"{home} - {away}",
-                "league": league,
-                "fair_1": fair_1,
-                "fair_x": fair_x,
-                "fair_2": fair_2,
-                "fair_over": fair_over,
-                "score_draw": score_draw,
-                "score_over": score_over,
-                "category": category
+                "match": f["teams"]["home"]["name"] + " - " + f["teams"]["away"]["name"],
+                "league": f["league"]["name"],
+                "country": f["league"]["country"],
+                "fair_1": fair_odd_calc(f, "home"),
+                "fair_x": fair_odd_calc(f, "draw"),
+                "fair_2": fair_odd_calc(f, "away"),
+                "fair_over": fair_odd_calc(f, "over"),
+                "score_draw": score_draw_calc(f),
+                "score_over": score_over_calc(f),
+                "category": classify_fixture(f)
             })
 
-    report = {
-        "count": len(fixtures),
-        "range": {"from": str(from_date), "to": str(to_date)},
-        "fixtures": fixtures
-    }
+# === Save output ===
+output = {
+    "count": len(fixtures),
+    "range": {"from": date_from, "to": date_to},
+    "data_sample": fixtures,
+    "status": "success"
+}
 
-    return json.dumps(report, indent=2, ensure_ascii=False)
+os.makedirs("logs", exist_ok=True)
+with open("logs/thursday_output.json", "w") as f:
+    json.dump(output, f, indent=2, ensure_ascii=False)
 
-if __name__ == "__main__":
-    print(generate_fixture_report())
+print(json.dumps(output, indent=2, ensure_ascii=False))
