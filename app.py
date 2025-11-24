@@ -1,14 +1,10 @@
 import os
 import requests
-from datetime import datetime, timedelta
 from flask import Flask, jsonify
 
 app = Flask(__name__)
 
-# Παίρνει το API key από το Render Environment
 API_KEY = os.getenv("FOOTBALL_API_KEY")
-
-# Βασική διαδρομή API
 BASE_URL = "https://v3.football.api-sports.io/fixtures"
 
 # Λίγκες που παρακολουθούμε
@@ -29,15 +25,12 @@ LEAGUES = [
 @app.route("/run_thursday_analysis", methods=["GET"])
 def run_thursday_analysis():
     try:
-        today = datetime.now()
-        start_date = (today + timedelta(days=(4 - today.weekday()) % 7)).strftime("%Y-%m-%d")  # Παρασκευή
-        end_date = (datetime.strptime(start_date, "%Y-%m-%d") + timedelta(days=3)).strftime("%Y-%m-%d")  # Δευτέρα
+        # Επόμενο Σαββατοκύριακο
+        start_date = "2024-11-29"
+        end_date = "2024-12-02"
 
         fixtures = []
-
-        headers = {
-            "x-apisports-key": API_KEY
-        }
+        headers = {"x-apisports-key": API_KEY}
 
         for league_id in LEAGUES:
             params = {
