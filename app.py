@@ -10,10 +10,11 @@ FOOTBALL_API_KEY = os.getenv("FOOTBALL_API_KEY")
 API_URL = "https://v3.football.api-sports.io/fixtures"
 
 HEADERS = {
-    "x-apisports-key": FOOTBALL_API_KEY
+    "x-apisports-key": FOOTBALL_API_KEY,
+    "x-rapidapi-host": "v3.football.api-sports.io"
 }
 
-# Υπολογισμός επόμενης Παρασκευής - Δευτέρας
+# Υπολογισμός Παρασκευής–Δευτέρας
 def next_weekend_dates():
     today = datetime.utcnow()
     days_ahead = (4 - today.weekday()) % 7  # Παρασκευή
@@ -31,39 +32,16 @@ def run_thursday_analysis():
     params = {
         "from": friday,
         "to": monday,
-        "season": 2024
+        "season": 2025  # ✅ Διόρθωση σε 2025
     }
 
-    response = requests.get(API_URL, headers=HEADERS, params=params)
     try:
+        response = requests.get(API_URL, headers=HEADERS, params=params, timeout=30)
         data = response.json().get("response", [])
         return jsonify({
             "count": len(data),
             "range": {"from": friday, "to": monday},
-            "data_sample": data[:2],  # δείχνουμε μόνο 2 για να μην είναι τεράστιο
-            "status": "success"
-        })
-    except Exception as e:
-        return jsonify({"error": str(e), "status": "fail"}), 500
-
-
-@app.route("/run_friday_shortlist", methods=["GET"])
-def run_friday_shortlist():
-    friday, monday = next_weekend_dates()
-    params = {
-        "from": friday,
-        "to": monday,
-        "season": 2024
-    }
-
-    response = requests.get(API_URL, headers=HEADERS, params=params)
-    try:
-        data = response.json().get("response", [])
-        shortlist = [{"home": f["teams"]["home"]["name"], "away": f["teams"]["away"]["name"]}
-                     for f in data[:10]]
-        return jsonify({
-            "count": len(shortlist),
-            "shortlist": shortlist,
+            "data_sample": data[:3],
             "status": "success"
         })
     except Exception as e:
