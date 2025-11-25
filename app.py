@@ -1,8 +1,7 @@
 import os
-import requests
-from datetime import datetime
-from flask import Flask, jsonify, request
 import json
+import requests
+from flask import Flask, jsonify, request
 from waitress import serve
 
 app = Flask(__name__)
@@ -26,26 +25,18 @@ def healthcheck():
     return jsonify({"message": "Server running", "status": "ok"})
 
 # -----------------------------------------------------------
-# Thursday Analysis – Next 50 Global Fixtures (Guaranteed results)
+# Thursday Analysis – Fetch 50 global fixtures
 # -----------------------------------------------------------
 @app.route("/run_thursday_analysis", methods=["GET"])
 def run_thursday_analysis():
-    params = {
-        "next": 50,
-        "timezone": "Europe/London"
-    }
+    params = {"next": 50, "timezone": "Europe/London"}
 
     print(f"📡 Fetching next 50 fixtures globally...")
     print(f"🔑 Using API key: {FOOTBALL_API_KEY[:6]}***")
-    print(f"⚙️ Params: {params}")
 
     try:
         response = requests.get(API_URL, headers=HEADERS, params=params, timeout=30)
-        print(f"🌍 API URL called: {response.url}")
-        print(f"📦 Status code: {response.status_code}")
-
         data = response.json()
-        print(f"🧾 API Response (first 600 chars): {json.dumps(data, indent=2)[:600]}")
 
         if not data.get("response"):
             print("⚠️ Empty API response!")
@@ -60,7 +51,6 @@ def run_thursday_analysis():
             json.dump(data, f, ensure_ascii=False, indent=2)
 
         print(f"✅ Fixtures fetched: {len(data['response'])} saved to thursday_output_final_v3.json")
-
         return jsonify({
             "count": len(data.get("response", [])),
             "status": "success",
@@ -72,18 +62,26 @@ def run_thursday_analysis():
         return jsonify({"error": str(e), "status": "fail"}), 500
 
 # -----------------------------------------------------------
-# Chat forward helper
+# Send full report to chat
 # -----------------------------------------------------------
-def send_to_chat(message):
+def send_full_report_to_chat(file_path, title):
+    if not os.path.exists(file_path):
+        print(f"⚠️ File not found: {file_path}")
+        return
     try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            report_data = json.load(f)
+
+        message = f"{title}\n\n{json.dumps(report_data, ensure_ascii=False, indent=2)}"
+
         response = requests.post(
             "https://bombay-engine.onrender.com/chat_forward",
             json={"message": message},
-            timeout=10
+            timeout=15
         )
-        print("Chat forward:", response.status_code)
+        print(f"📨 Report sent to chat, status: {response.status_code}")
     except Exception as e:
-        print("Chat forward error:", e)
+        print(f"❌ Error sending report to chat: {e}")
 
 # -----------------------------------------------------------
 # Chat command handler
@@ -96,25 +94,23 @@ def chat_command():
 
         if "thursday" in command:
             os.system("python3 thursday_analysis_v1.py")
-            send_to_chat("🧠 Thursday Analysis executed successfully.")
-            return jsonify({"response": "🧠 Thursday Analysis executed", "status": "ok"})
+            send_full_report_to_chat("thursday_report_v1.json", "🧠 Thursday Analysis Report")
+            return jsonify({"response": "🧠 Thursday Analysis executed and sent", "status": "ok"})
 
         elif "friday" in command:
             os.system("python3 friday.py")
-            send_to_chat("🎯 Friday Shortlist executed successfully.")
-            return jsonify({"response": "🎯 Friday Shortlist executed", "status": "ok"})
+            send_full_report_to_chat("friday_shortlist_v1.json", "🎯 Friday Shortlist Report")
+            return jsonify({"response": "🎯 Friday Shortlist executed and sent", "status": "ok"})
 
         elif "tuesday" in command:
             os.system("python3 tuesday_recap.py")
-            send_to_chat("📊 Tuesday Recap executed successfully.")
-            return jsonify({"response": "📊 Tuesday Recap executed", "status": "ok"})
+            send_full_report_to_chat("tuesday_recap_v1.json", "📊 Tuesday Recap Report")
+            return jsonify({"response": "📊 Tuesday Recap executed and sent", "status": "ok"})
 
         else:
-            send_to_chat("❓ Unknown command received.")
             return jsonify({"response": "❓ Unknown command", "status": "fail"}), 400
 
     except Exception as e:
-        send_to_chat(f"⚠️ Error in chat_command: {str(e)}")
         return jsonify({"response": str(e), "status": "error"}), 500
 
 # -----------------------------------------------------------
@@ -131,7 +127,7 @@ def chat_forward():
         return jsonify({"status": "error", "error": str(e)}), 500
 
 # -----------------------------------------------------------
-# API Key check route
+# API Key check
 # -----------------------------------------------------------
 @app.route("/check_api_key", methods=["GET"])
 def check_api_key():
