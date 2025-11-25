@@ -8,6 +8,7 @@ on:
 jobs:
   run-thursday-analysis:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -26,10 +27,12 @@ jobs:
         env:
           FOOTBALL_API_KEY: ${{ secrets.FOOTBALL_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        run: python thursday_analysis_v1.py
+        run: |
+          mkdir -p ./output
+          python thursday_analysis_v1.py
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: thursday-analysis-report
-          path: thursday_output_final.json
+          path: ./output/thursday_output_final_v3.json
