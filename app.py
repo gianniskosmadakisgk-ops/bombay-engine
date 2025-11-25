@@ -31,7 +31,7 @@ def healthcheck():
 @app.route("/run_thursday_analysis", methods=["GET"])
 def run_thursday_analysis():
     params = {
-        "next": 50,  # παίρνει τους επόμενους 50 αγώνες
+        "next": 50,
         "timezone": "Europe/London"
     }
 
@@ -56,7 +56,6 @@ def run_thursday_analysis():
                 "query": params
             }), 200
 
-        # Αποθήκευση των fixtures
         with open("thursday_output_final_v3.json", "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
 
@@ -117,6 +116,19 @@ def chat_command():
     except Exception as e:
         send_to_chat(f"⚠️ Error in chat_command: {str(e)}")
         return jsonify({"response": str(e), "status": "error"}), 500
+
+# -----------------------------------------------------------
+# Chat Forward Endpoint (δέχεται reports)
+# -----------------------------------------------------------
+@app.route("/chat_forward", methods=["POST"])
+def chat_forward():
+    try:
+        data = request.get_json()
+        print("💬 Incoming message to chat:", data.get("message", "No message"))
+        return jsonify({"status": "received", "message": data.get("message")}), 200
+    except Exception as e:
+        print(f"⚠️ Error in chat_forward: {e}")
+        return jsonify({"status": "error", "error": str(e)}), 500
 
 # -----------------------------------------------------------
 # API Key check route
