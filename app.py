@@ -7,7 +7,9 @@ from waitress import serve
 
 app = Flask(__name__)
 
+# -----------------------------------------------------------
 # Environment variables
+# -----------------------------------------------------------
 FOOTBALL_API_KEY = os.getenv("FOOTBALL_API_KEY")
 API_URL = "https://v3.football.api-sports.io/fixtures"
 
@@ -16,7 +18,9 @@ HEADERS = {
     "x-rapidapi-host": "v3.football.api-sports.io"
 }
 
+# -----------------------------------------------------------
 # Helper: Υπολογισμός Παρασκευής - Δευτέρας
+# -----------------------------------------------------------
 def next_weekend_dates():
     today = datetime.utcnow()
     days_ahead = (4 - today.weekday()) % 7  # Παρασκευή
@@ -24,12 +28,16 @@ def next_weekend_dates():
     monday = today + timedelta(days=days_ahead + 3)
     return friday.strftime("%Y-%m-%d"), monday.strftime("%Y-%m-%d")
 
+# -----------------------------------------------------------
 # Health check
+# -----------------------------------------------------------
 @app.route("/healthcheck", methods=["GET"])
 def healthcheck():
     return jsonify({"message": "Server running", "status": "ok"})
 
-# Thursday Analysis API endpoint
+# -----------------------------------------------------------
+# Thursday Analysis (με debug logging)
+# -----------------------------------------------------------
 @app.route("/run_thursday_analysis", methods=["GET"])
 def run_thursday_analysis():
     friday, monday = next_weekend_dates()
@@ -39,24 +47,35 @@ def run_thursday_analysis():
         "season": 2025
     }
 
+    print(f"📡 Fetching fixtures from {friday} to {monday}...")
+    print(f"🔑 Using API key: {FOOTBALL_API_KEY[:6]}***")
+
     try:
         response = requests.get(API_URL, headers=HEADERS, params=params, timeout=30)
+        print(f"🌍 API URL called: {response.url}")
+        print(f"📦 Status code: {response.status_code}")
         data = response.json()
+        print(f"🧾 API Response: {json.dumps(data, indent=2)[:800]}")
+
+        if not data.get("response"):
+            print("⚠️ Empty API response!")
+            return jsonify({"status": "empty", "message": "No fixtures returned"}), 200
+
         return jsonify({
             "count": len(data.get("response", [])),
             "range": {"from": friday, "to": monday},
             "data_sample": data.get("response", []),
             "status": "success"
         })
-    except Exception as e:
-        return jsonify({"error": str(e), "status": "fail"}), 500
 
+    except Exception as e:
+        print(f"❌ Error fetching fixtures: {e}")
+        return jsonify({"error": str(e), "status": "fail"}), 500
 
 # -----------------------------------------------------------
 # Chat forward helper
 # -----------------------------------------------------------
 def send_to_chat(message):
-    """Forward messages to the chat endpoint"""
     try:
         response = requests.post(
             "https://bombay-engine.onrender.com/chat_forward",
@@ -66,7 +85,6 @@ def send_to_chat(message):
         print("Chat forward:", response.status_code)
     except Exception as e:
         print("Chat forward error:", e)
-
 
 # -----------------------------------------------------------
 # Chat command handler
@@ -100,11 +118,9 @@ def chat_command():
         send_to_chat(f"⚠️ Error in chat_command: {str(e)}")
         return jsonify({"response": str(e), "status": "error"}), 500
 
-
 # -----------------------------------------------------------
-# Main
+# API Key check route
 # -----------------------------------------------------------
-# Test route για να δούμε αν το Render διαβάζει το key
 @app.route("/check_api_key", methods=["GET"])
 def check_api_key():
     key = os.getenv("FOOTBALL_API_KEY")
@@ -112,5 +128,9 @@ def check_api_key():
         return jsonify({"status": "ok", "key_length": len(key), "starts_with": key[:6]})
     else:
         return jsonify({"status": "missing", "key": None})
+
+# -----------------------------------------------------------
+# Main
+# -----------------------------------------------------------
 if __name__ == "__main__":
     serve(app, host="0.0.0.0", port=10000)
