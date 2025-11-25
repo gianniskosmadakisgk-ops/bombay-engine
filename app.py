@@ -19,16 +19,6 @@ HEADERS = {
 }
 
 # -----------------------------------------------------------
-# Helper: Υπολογισμός Παρασκευής - Δευτέρας
-# -----------------------------------------------------------
-def next_weekend_dates():
-    today = datetime.utcnow()
-    days_ahead = (4 - today.weekday()) % 7  # Παρασκευή
-    friday = today + timedelta(days=days_ahead)
-    monday = today + timedelta(days=days_ahead + 3)
-    return friday.strftime("%Y-%m-%d"), monday.strftime("%Y-%m-%d")
-
-# -----------------------------------------------------------
 # Health check
 # -----------------------------------------------------------
 @app.route("/healthcheck", methods=["GET"])
@@ -36,18 +26,21 @@ def healthcheck():
     return jsonify({"message": "Server running", "status": "ok"})
 
 # -----------------------------------------------------------
-# Thursday Analysis (με debug logging και πραγματικά fixtures)
+# Thursday Analysis – Pull fixtures dynamically (7-day window)
 # -----------------------------------------------------------
 @app.route("/run_thursday_analysis", methods=["GET"])
 def run_thursday_analysis():
-    friday, _ = next_weekend_dates()
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    seven_days = (datetime.utcnow() + timedelta(days=7)).strftime("%Y-%m-%d")
+
     params = {
-        "date": friday,
+        "from": today,
+        "to": seven_days,
         "season": 2024,
         "timezone": "Europe/London"
     }
 
-    print(f"📡 Fetching fixtures for {friday}...")
+    print(f"📡 Fetching fixtures from {today} to {seven_days}...")
     print(f"🔑 Using API key: {FOOTBALL_API_KEY[:6]}***")
     print(f"⚙️ Params: {params}")
 
@@ -55,6 +48,7 @@ def run_thursday_analysis():
         response = requests.get(API_URL, headers=HEADERS, params=params, timeout=30)
         print(f"🌍 API URL called: {response.url}")
         print(f"📦 Status code: {response.status_code}")
+
         data = response.json()
         print(f"🧾 API Response (first 600 chars): {json.dumps(data, indent=2)[:600]}")
 
@@ -62,12 +56,11 @@ def run_thursday_analysis():
             print("⚠️ Empty API response!")
             return jsonify({
                 "status": "empty",
-                "message": "No fixtures returned",
+                "message": "No fixtures found in next 7 days",
                 "api_status": data.get("errors", {}),
                 "query": params
             }), 200
 
-        # Αποθήκευση των fixtures
         with open("thursday_output_final_v3.json", "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
 
@@ -75,7 +68,7 @@ def run_thursday_analysis():
 
         return jsonify({
             "count": len(data.get("response", [])),
-            "range": {"date": friday},
+            "range": {"from": today, "to": seven_days},
             "status": "success"
         })
 
