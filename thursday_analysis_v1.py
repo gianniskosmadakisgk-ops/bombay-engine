@@ -92,3 +92,26 @@ with open(output_file, "w", encoding="utf-8") as f:
     json.dump({"count": len(analyzed), "matches": analyzed}, f, ensure_ascii=False, indent=2)
 
 print(f"✅ Thursday Analysis completed — {len(analyzed)} matches analyzed and saved to {output_file}")
+
+# -----------------------------------------------------------
+# Αποστολή του report στο Chat
+# -----------------------------------------------------------
+try:
+    with open(output_file, "r", encoding="utf-8") as f:
+        report_data = json.load(f)
+
+    chat_message = {
+        "message": f"📊 Thursday Report ({len(report_data.get('matches', []))} matches) sent successfully.",
+        "data": report_data
+    }
+
+    response = requests.post(
+        "https://bombay-engine.onrender.com/chat_forward",
+        json=chat_message,
+        timeout=15
+    )
+
+    print(f"📤 Report sent to chat, status: {response.status_code}")
+
+except Exception as e:
+    print(f"⚠️ Error sending report to chat: {e}")
