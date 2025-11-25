@@ -77,3 +77,27 @@ def chat_command():
 if __name__ == "__main__":
     from waitress import serve
     serve(app, host="0.0.0.0", port=10000)
+# Chat command handler
+@app.route("/chat_command", methods=["POST"])
+def chat_command():
+    try:
+        data = request.get_json()
+        command = data.get("command", "").lower().strip()
+
+        if "thursday" in command:
+            os.system("python3 thursday_analysis_v1.py")
+            return jsonify({"response": "🧠 Thursday Analysis executed", "status": "ok"})
+
+        elif "friday" in command:
+            os.system("python3 friday.py")
+            return jsonify({"response": "🎯 Friday Shortlist executed", "status": "ok"})
+
+        elif "tuesday" in command:
+            os.system("python3 tuesday_recap.py")
+            return jsonify({"response": "📊 Tuesday Recap executed", "status": "ok"})
+
+        else:
+            return jsonify({"response": "❓ Unknown command", "status": "fail"}), 400
+
+    except Exception as e:
+        return jsonify({"response": str(e), "status": "error"}), 500
