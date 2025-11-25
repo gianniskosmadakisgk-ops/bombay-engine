@@ -1,40 +1,35 @@
-name: Thursday Analysis
+name: Run Thursday Analysis
 
 on:
   schedule:
-    - cron: "0 9 * * 4"  # Κάθε Πέμπτη 11:00 Ελλάδας (09:00 UTC)
-  workflow_dispatch:      # Για manual run
+    - cron: "0 9 * * 4"  # κάθε Πέμπτη στις 11:00 ώρα Ελλάδας
+  workflow_dispatch:
 
 jobs:
   run-thursday-analysis:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v3
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: "3.11"
+          python-version: "3.10"
 
-      - name: Install Dependencies
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install requests
 
-      - name: Run Thursday Multi-League Fetch
-        env:
-          FOOTBALL_API_KEY: ${{ secrets.FOOTBALL_API_KEY }}
-        run: python thursday_multi_league_test_v3.py
-
       - name: Run Thursday Analysis
         env:
+          FOOTBALL_API_KEY: ${{ secrets.FOOTBALL_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: python thursday_analysis_v1.py
 
-      - name: Upload Report as Artifact
-        uses: actions/upload-artifact@v3
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
         with:
-          name: Thursday_Report
-          path: thursday_report_v1.json
+          name: thursday-analysis-report
+          path: thursday_output_final.json
