@@ -26,7 +26,7 @@ def healthcheck():
     return jsonify({"message": "Server running", "status": "ok"})
 
 # -----------------------------------------------------------
-# Thursday Analysis – Pull fixtures dynamically (7-day window)
+# Thursday Analysis – Global fixtures (all leagues, next 7 days)
 # -----------------------------------------------------------
 @app.route("/run_thursday_analysis", methods=["GET"])
 def run_thursday_analysis():
@@ -36,11 +36,10 @@ def run_thursday_analysis():
     params = {
         "from": today,
         "to": seven_days,
-        "season": 2024,
-        "timezone": "Europe/London"
+        "season": 2024
     }
 
-    print(f"📡 Fetching fixtures from {today} to {seven_days}...")
+    print(f"📡 Fetching ALL fixtures from {today} to {seven_days}...")
     print(f"🔑 Using API key: {FOOTBALL_API_KEY[:6]}***")
     print(f"⚙️ Params: {params}")
 
@@ -56,11 +55,12 @@ def run_thursday_analysis():
             print("⚠️ Empty API response!")
             return jsonify({
                 "status": "empty",
-                "message": "No fixtures found in next 7 days",
+                "message": "No fixtures returned from API",
                 "api_status": data.get("errors", {}),
                 "query": params
             }), 200
 
+        # Save fixtures to JSON
         with open("thursday_output_final_v3.json", "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
 
