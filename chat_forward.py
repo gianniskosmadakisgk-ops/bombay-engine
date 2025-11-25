@@ -1,30 +1,36 @@
-import requests
 import os
-from datetime import datetime
+import requests
+from flask import Flask, request, jsonify
 
-def send_to_chat(message):
-    chat_url = os.getenv("CHATGPT_WEBHOOK_URL")  # Παίρνει το secret από GitHub
-    if not chat_url:
-        print("❌ CHATGPT_WEBHOOK_URL not found.")
-        return False
+app = Flask(__name__)
 
-    payload = {
-        "text": message,
-        "timestamp": datetime.utcnow().isoformat()
-    }
+CHAT_WEBHOOK_URL = os.getenv("CHAT_WEBHOOK_URL", "https://api.openai.com/v1/chat/completions")  # placeholder
 
+@app.route("/chat_forward", methods=["POST"])
+def chat_forward():
     try:
-        r = requests.post(chat_url, json=payload, timeout=10)
-        if r.status_code == 200:
-            print("✅ Message sent to ChatGPT successfully.")
-            return True
+        data = request.get_json()
+        message = data.get("message", "No message")
+
+        payload = {
+            "model": "gpt-5",
+            "messages": [{"role": "user", "content": message}]
+        }
+
+        headers = {
+            "Authorization": f"Bearer {os.getenv('OPENAI_API_KEY')}",
+            "Content-Type": "application/json"
+        }
+
+        response = requests.post(CHAT_WEBHOOK_URL, json=payload, headers=headers)
+        if response.status_code == 200:
+            return jsonify({"status": "sent", "response": response.json()}), 200
         else:
-            print(f"⚠️ ChatGPT responded with {r.status_code}: {r.text}")
-            return False
+            return jsonify({"status": "fail", "error": response.text}), 500
+
     except Exception as e:
-        print("❌ Error sending to ChatGPT:", e)
-        return False
+        return jsonify({"status": "error", "error": str(e)}), 500
 
 
 if __name__ == "__main__":
-    send_to_chat("📡 Bombay Engine live test message at " + datetime.utcnow().isoformat())
+    app.run(host="0.0.0.0", port=5005)
