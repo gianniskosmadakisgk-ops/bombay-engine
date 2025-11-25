@@ -7,46 +7,49 @@ import os
 input_file = "thursday_output_final_v3.json"
 output_file = "thursday_report_v1.json"
 
-# Διαβάζει τα fixtures από το προηγούμενο αρχείο
-with open(input_file, "r", encoding="utf-8") as f:
-    data = json.load(f)
+# --- Αν δεν υπάρχει αρχείο εισόδου, μην ρίχνεις σφάλμα ---
+if not os.path.exists(input_file):
+    print(f"⚠️ Δεν βρέθηκε το αρχείο εισόδου: {input_file}. Δημιουργείται κενό dataset.")
+    fixtures = []
+else:
+    with open(input_file, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    fixtures = data.get("data_sample", [])
 
-fixtures = data.get("data_sample", [])
-
-# Αν δεν υπάρχουν δεδομένα, σταματά
+# Αν δεν υπάρχουν δεδομένα, απλώς συνέχισε χωρίς ανάλυση
 if not fixtures:
-    print("⚠️ Δεν βρέθηκαν fixtures στο αρχείο εισόδου.")
-    exit()
+    print("⚠️ Δεν βρέθηκαν fixtures στο αρχείο εισόδου. Δημιουργείται κενό report.")
+    analyzed = []
+else:
+    # Μοντέλα υπολογισμού fair odds & score
+    def calc_fair_odds():
+        fair1 = round(random.uniform(1.6, 3.0), 2)
+        fairx = round(random.uniform(2.8, 4.5), 2)
+        fair2 = round(random.uniform(1.8, 3.5), 2)
+        fairover = round(random.uniform(1.7, 2.4), 2)
+        return fair1, fairx, fair2, fairover
 
-# Μοντέλα υπολογισμού fair odds & score
-def calc_fair_odds():
-    fair1 = round(random.uniform(1.6, 3.0), 2)
-    fairx = round(random.uniform(2.8, 4.5), 2)
-    fair2 = round(random.uniform(1.8, 3.5), 2)
-    fairover = round(random.uniform(1.7, 2.4), 2)
-    return fair1, fairx, fair2, fairover
+    def calc_score():
+        scoredraw = round(random.uniform(5.5, 9.8), 1)
+        scoreover = round(random.uniform(5.0, 9.5), 1)
+        return scoredraw, scoreover
 
-def calc_score():
-    scoredraw = round(random.uniform(5.5, 9.8), 1)
-    scoreover = round(random.uniform(5.0, 9.5), 1)
-    return scoredraw, scoreover
+    # Ανάλυση αγώνων
+    analyzed = []
+    for m in fixtures:
+        fair1, fairx, fair2, fairover = calc_fair_odds()
+        scoredraw, scoreover = calc_score()
 
-# Ανάλυση αγώνων
-analyzed = []
-for m in fixtures:
-    fair1, fairx, fair2, fairover = calc_fair_odds()
-    scoredraw, scoreover = calc_score()
-
-    analyzed.append({
-        "league": m.get("league"),
-        "match": m.get("match"),
-        "fair_1": fair1,
-        "fair_x": fairx,
-        "fair_2": fair2,
-        "fair_over": fairover,
-        "score_draw": scoredraw,
-        "score_over": scoreover
-    })
+        analyzed.append({
+            "league": m.get("league"),
+            "match": m.get("match"),
+            "fair_1": fair1,
+            "fair_x": fairx,
+            "fair_2": fair2,
+            "fair_over": fairover,
+            "score_draw": scoredraw,
+            "score_over": scoreover
+        })
 
 # Αποθήκευση αποτελεσμάτων
 with open(output_file, "w", encoding="utf-8") as f:
