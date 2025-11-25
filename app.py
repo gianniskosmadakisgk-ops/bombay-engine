@@ -44,27 +44,39 @@ def run_thursday_analysis():
     params = {
         "from": friday,
         "to": monday,
-        "season": 2025
+        "season": 2025,
+        "timezone": "Europe/London",  # κρίσιμο
+        "league": 39                  # προσωρινά Premier League
     }
 
     print(f"📡 Fetching fixtures from {friday} to {monday}...")
     print(f"🔑 Using API key: {FOOTBALL_API_KEY[:6]}***")
+    print(f"⚙️ Params: {params}")
 
     try:
         response = requests.get(API_URL, headers=HEADERS, params=params, timeout=30)
         print(f"🌍 API URL called: {response.url}")
         print(f"📦 Status code: {response.status_code}")
         data = response.json()
-        print(f"🧾 API Response: {json.dumps(data, indent=2)[:800]}")
+        print(f"🧾 API Response (first 600 chars): {json.dumps(data, indent=2)[:600]}")
 
         if not data.get("response"):
             print("⚠️ Empty API response!")
-            return jsonify({"status": "empty", "message": "No fixtures returned"}), 200
+            return jsonify({
+                "status": "empty",
+                "message": "No fixtures returned",
+                "api_status": data.get("errors", {})
+            }), 200
+
+        # Αποθήκευση των fixtures
+        with open("thursday_output_final_v3.json", "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+
+        print(f"✅ Fixtures fetched: {len(data['response'])} saved to thursday_output_final_v3.json")
 
         return jsonify({
             "count": len(data.get("response", [])),
             "range": {"from": friday, "to": monday},
-            "data_sample": data.get("response", []),
             "status": "success"
         })
 
