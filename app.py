@@ -36,20 +36,18 @@ def healthcheck():
     return jsonify({"message": "Server running", "status": "ok"})
 
 # -----------------------------------------------------------
-# Thursday Analysis (με debug logging)
+# Thursday Analysis (με debug logging και πραγματικά fixtures)
 # -----------------------------------------------------------
 @app.route("/run_thursday_analysis", methods=["GET"])
 def run_thursday_analysis():
-    friday, monday = next_weekend_dates()
+    friday, _ = next_weekend_dates()
     params = {
-        "from": friday,
-        "to": monday,
-        "season": 2025,
-        "timezone": "Europe/London",  # κρίσιμο
-        "league": 39                  # προσωρινά Premier League
+        "date": friday,
+        "season": 2024,
+        "timezone": "Europe/London"
     }
 
-    print(f"📡 Fetching fixtures from {friday} to {monday}...")
+    print(f"📡 Fetching fixtures for {friday}...")
     print(f"🔑 Using API key: {FOOTBALL_API_KEY[:6]}***")
     print(f"⚙️ Params: {params}")
 
@@ -65,7 +63,8 @@ def run_thursday_analysis():
             return jsonify({
                 "status": "empty",
                 "message": "No fixtures returned",
-                "api_status": data.get("errors", {})
+                "api_status": data.get("errors", {}),
+                "query": params
             }), 200
 
         # Αποθήκευση των fixtures
@@ -76,7 +75,7 @@ def run_thursday_analysis():
 
         return jsonify({
             "count": len(data.get("response", [])),
-            "range": {"from": friday, "to": monday},
+            "range": {"date": friday},
             "status": "success"
         })
 
