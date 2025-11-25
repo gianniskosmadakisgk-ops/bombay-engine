@@ -1,6 +1,6 @@
 import os
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime
 from flask import Flask, jsonify, request
 import json
 from waitress import serve
@@ -26,20 +26,16 @@ def healthcheck():
     return jsonify({"message": "Server running", "status": "ok"})
 
 # -----------------------------------------------------------
-# Thursday Analysis – Global fixtures (all leagues, next 7 days)
+# Thursday Analysis – Next 50 Global Fixtures (Guaranteed results)
 # -----------------------------------------------------------
 @app.route("/run_thursday_analysis", methods=["GET"])
 def run_thursday_analysis():
-    today = datetime.utcnow().strftime("%Y-%m-%d")
-    seven_days = (datetime.utcnow() + timedelta(days=7)).strftime("%Y-%m-%d")
-
     params = {
-        "from": today,
-        "to": seven_days,
-        "season": 2024
+        "next": 50,  # παίρνει τους επόμενους 50 αγώνες
+        "timezone": "Europe/London"
     }
 
-    print(f"📡 Fetching ALL fixtures from {today} to {seven_days}...")
+    print(f"📡 Fetching next 50 fixtures globally...")
     print(f"🔑 Using API key: {FOOTBALL_API_KEY[:6]}***")
     print(f"⚙️ Params: {params}")
 
@@ -60,7 +56,7 @@ def run_thursday_analysis():
                 "query": params
             }), 200
 
-        # Save fixtures to JSON
+        # Αποθήκευση των fixtures
         with open("thursday_output_final_v3.json", "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
 
@@ -68,8 +64,8 @@ def run_thursday_analysis():
 
         return jsonify({
             "count": len(data.get("response", [])),
-            "range": {"from": today, "to": seven_days},
-            "status": "success"
+            "status": "success",
+            "range": "next 50 fixtures"
         })
 
     except Exception as e:
