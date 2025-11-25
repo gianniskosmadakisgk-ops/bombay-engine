@@ -104,5 +104,13 @@ def chat_command():
 # -----------------------------------------------------------
 # Main
 # -----------------------------------------------------------
+# Test route για να δούμε αν το Render διαβάζει το key
+@app.route("/check_api_key", methods=["GET"])
+def check_api_key():
+    key = os.getenv("FOOTBALL_API_KEY")
+    if key:
+        return jsonify({"status": "ok", "key_length": len(key), "starts_with": key[:6]})
+    else:
+        return jsonify({"status": "missing", "key": None})
 if __name__ == "__main__":
     serve(app, host="0.0.0.0", port=10000)
