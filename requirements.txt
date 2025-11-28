@@ -6,3 +6,4 @@ setuptools==68.0.0
 wheel==0.38.0
 pandas==2.2.3
 waitress
+PyYAML
