@@ -1,105 +1,76 @@
 import os
 import json
-import random
-import requests
+from datetime import datetime
 
-# -----------------------------------------------------------
-# Ρυθμίσεις API & Paths
-# -----------------------------------------------------------
-REPORT_SOURCE = "friday_shortlist_v1.json"  # ή "thursday_report_v1.json" αν δεν υπάρχει shortlist
-OUTPUT_FILE = "tuesday_recap_v1.json"
-CHAT_ENDPOINT = "https://bombay-engine.onrender.com/chat_forward"
+# === PATHS ===
+LOG_DIR = "logs"
+REPORT_PATH = os.path.join(LOG_DIR, "tuesday_recap_v1.json")
 
-# -----------------------------------------------------------
-# Διαβάζει το αρχείο εισόδου
-# -----------------------------------------------------------
-print("📊 Starting Tuesday Recap...")
-
-if not os.path.exists(REPORT_SOURCE):
-    print(f"⚠️ Δεν βρέθηκε το αρχείο {REPORT_SOURCE}. Θα γίνει fallback στο thursday_report_v1.json")
-    REPORT_SOURCE = "thursday_report_v1.json"
-
-if not os.path.exists(REPORT_SOURCE):
-    print("❌ Δεν υπάρχουν δεδομένα για recap.")
-    with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
-        json.dump({"status": "fail", "reason": "no source data"}, f, ensure_ascii=False, indent=2)
-    exit()
-
-with open(REPORT_SOURCE, "r", encoding="utf-8") as f:
-    data = json.load(f)
-
-matches = data.get("matches", [])
-if not matches:
-    print("⚠️ Δεν υπάρχουν αγώνες στο αρχείο.")
-    exit()
-
-# -----------------------------------------------------------
-# Ανάλυση – δημιουργία στατιστικών
-# -----------------------------------------------------------
-recap_results = []
-total_value_hits = 0
-total_over_hits = 0
-total_draw_hits = 0
-
-for m in matches:
-    # Προσομοίωση αποτελέσματος
-    result = random.choice(["1", "X", "2"])
-    goals = random.randint(0, 5)
-    opp_goals = random.randint(0, 5)
-    over = goals + opp_goals > 2.5
-
-    recap_results.append({
-        "match": m.get("teams", "Unknown"),
-        "result": result,
-        "score": f"{goals}-{opp_goals}",
-        "was_over": over,
-        "fair_1": m.get("fair_1"),
-        "fair_x": m.get("fair_x"),
-        "fair_2": m.get("fair_2"),
-        "fair_over": m.get("fair_over")
-    })
-
-    if over:
-        total_over_hits += 1
-    if result == "X":
-        total_draw_hits += 1
-    if m.get("fair_1", 0) < 2.0 or m.get("fair_2", 0) < 2.0:
-        total_value_hits += 1
-
-# -----------------------------------------------------------
-# Δημιουργία αναφοράς
-# -----------------------------------------------------------
-summary = {
-    "total_matches": len(recap_results),
-    "value_hits": total_value_hits,
-    "over_hits": total_over_hits,
-    "draw_hits": total_draw_hits,
-    "success_rate": f"{round((total_value_hits + total_over_hits + total_draw_hits) / len(recap_results) * 33, 1)}%",
+# === FILE SOURCES ===
+FILES = {
+    "Draw": "friday_draw_shortlist.json",
+    "Over": "friday_over_shortlist.json",
+    "FunBet Draw": "friday_funbet_draw.json",
+    "FunBet Over": "friday_funbet_over.json",
+    "Kelly": "friday_kelly.json"
 }
 
-final_report = {
-    "summary": summary,
-    "recap_details": recap_results
+BANKS = {
+    "Draw": 400,
+    "Over": 300,
+    "FunBet Draw": 200,
+    "FunBet Over": 200,
+    "Kelly": 300
 }
 
-# Αποθήκευση
-with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
-    json.dump(final_report, f, ensure_ascii=False, indent=2)
+# === Helper: calculate metrics ===
+def calculate_recap(data, bankroll):
+    if not data or "fixtures" not in data:
+        return {"hits": 0, "bets": 0, "roi": 0, "profit": 0, "bank_after": bankroll}
 
-print(f"✅ Tuesday Recap completed — {len(recap_results)} matches analyzed and saved to {OUTPUT_FILE}")
+    fixtures = data["fixtures"]
+    bets = len(fixtures)
+    hits = sum(1 for f in fixtures if f.get("won", False))
 
-# -----------------------------------------------------------
-# Αποστολή στο Chat
-# -----------------------------------------------------------
-try:
-    with open(OUTPUT_FILE, "r", encoding="utf-8") as f:
-        report_data = f.read()
+    avg_odds = sum(f.get("offered_draw", 0) or f.get("offered_over", 0) for f in fixtures) / max(bets, 1)
+    stake = fixtures[0].get("stake", 10)
+    total_staked = stake * bets
+    winnings = hits * stake * avg_odds
 
-    response = requests.post(
-        CHAT_ENDPOINT,
-        json={"message": f"📊 Tuesday Recap Report\n\n{report_data}"},
-        timeout=10
-    )
-    print("💬 Report sent to chat:", response.status_code)
-except Exception as e:
-    print(f"⚠️ Could not send to chat: {e}")
+    profit = winnings - total_staked
+    roi = (profit / total_staked * 100) if total_staked else 0
+    bank_after = bankroll + profit
+
+    return {
+        "hits": hits,
+        "bets": bets,
+        "roi": round(roi, 2),
+        "profit": round(profit, 2),
+        "bank_after": round(bank_after, 2)
+    }
+
+# === Process all funds ===
+recap = {"generated_at": datetime.utcnow().isoformat(), "funds": {}}
+os.makedirs(LOG_DIR, exist_ok=True)
+
+for fund, filename in FILES.items():
+    path = os.path.join(LOG_DIR, filename)
+    if os.path.exists(path):
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            recap["funds"][fund] = calculate_recap(data, BANKS[fund])
+    else:
+        recap["funds"][fund] = {"error": "File not found", "bank_after": BANKS[fund]}
+
+# === Totals ===
+total_roi = sum(v.get("roi", 0) for v in recap["funds"].values()) / len(recap["funds"])
+recap["total_roi"] = round(total_roi, 2)
+recap["lifetime_bank"] = sum(v.get("bank_after", 0) for v in recap["funds"].values())
+recap["status"] = "Tuesday recap complete"
+
+# === Save ===
+with open(REPORT_PATH, "w", encoding="utf-8") as f:
+    json.dump(recap, f, indent=2, ensure_ascii=False)
+
+print("✅ Tuesday recap complete.")
+print(json.dumps(recap, indent=2, ensure_ascii=False))
