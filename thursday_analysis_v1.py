@@ -1,128 +1,92 @@
-from flask import Flask, request, jsonify
-import subprocess
-import requests
-import json
 import os
+import requests
+from datetime import datetime, timedelta
+import json
 
-app = Flask(__name__)
+# === Config ===
+FOOTBALL_API_KEY = os.getenv("FOOTBALL_API_KEY")
+API_URL = "https://v3.football.api-sports.io/fixtures"
+HEADERS = {"x-apisports-key": FOOTBALL_API_KEY}
 
-# -----------------------------------------------------------
-# Chat Forward URL (όπου στέλνονται τα reports)
-# -----------------------------------------------------------
-CHAT_FORWARD_URL = "https://bombay-engine.onrender.com/chat_forward"
+# === Multi-league setup ===
+LEAGUES = [
+    39,   # Premier League
+    61,   # Ligue 1
+    140,  # La Liga
+    135,  # Serie A
+    41,   # Championship
+    71,   # Serie B
+    62,   # Ligue 2
+    94,   # Liga Portugal 2
+    197,  # Swiss Super League
+    88,   # Eredivisie
+    144   # Jupiler Pro League
+]
 
+# === Date range: Fri–Mon ===
+today = datetime.utcnow()
+days_ahead = (4 - today.weekday()) % 7  # Friday
+friday = today + timedelta(days=days_ahead)
+monday = friday + timedelta(days=3)
+date_from, date_to = friday.strftime("%Y-%m-%d"), monday.strftime("%Y-%m-%d")
 
-# -----------------------------------------------------------
-# Chat Command Handler
-# -----------------------------------------------------------
-@app.route("/chat_command", methods=["POST"])
-def chat_command():
+# === Utility functions ===
+def fair_odd_calc(fixture, outcome):
+    if outcome == "draw":
+        base = 3.00
+    elif outcome == "home":
+        base = 2.00
+    else:
+        base = 3.50
+    return round(base, 2)
+
+def score_draw_calc(f):
+    score = 5 + (1 - abs(1.4 - 1.3)) + 0.8
+    return round(min(score, 10), 2)
+
+def score_over_calc(f):
+    score = 5 + ((2.8 - 2.5) + 0.3)
+    return round(min(score, 10), 2)
+
+def classify_fixture(f):
+    return "balanced"
+
+# === Fetch fixtures ===
+fixtures = []
+for league_id in LEAGUES:
+    params = {"league": league_id, "season": 2025, "from": date_from, "to": date_to}
     try:
-        data = request.get_json()
-        command = data.get("command", "").lower().strip()
-
-        # Αναγνώριση εντολής
-        if "thursday" in command:
-            script = "thursday_analysis_v1.py"
-            label = "Thursday Analysis"
-        elif "friday" in command:
-            script = "friday_shortlist_v1.py"
-            label = "Friday Shortlist"
-        elif "tuesday" in command:
-            script = "tuesday_recap.py"
-            label = "Tuesday Recap"
-        else:
-            return jsonify({"error": "❓ Unknown command"}), 400
-
-        print(f"🚀 Εκτέλεση εντολής: {label} ({script})")
-
-        # -----------------------------------------------------------
-        # Εκτέλεση του script (με logs)
-        # -----------------------------------------------------------
-        result = subprocess.run(
-            ["python3", script],
-            capture_output=True, text=True
-        )
-
-        print("----- SCRIPT OUTPUT START -----")
-        print(result.stdout)
-        print("----- SCRIPT OUTPUT END -----")
-        if result.stderr:
-            print("⚠️ SCRIPT ERRORS:")
-            print(result.stderr)
-
-        # -----------------------------------------------------------
-        # Διαβάζει το παραγόμενο JSON report (αν υπάρχει)
-        # -----------------------------------------------------------
-        report_file = None
-        if "thursday" in script:
-            report_file = "thursday_report_v1.json"
-        elif "friday" in script:
-            report_file = "friday_shortlist_v1.json"
-        elif "tuesday" in script:
-            report_file = "tuesday_recap_v1.json"
-
-        report_data = None
-        if report_file and os.path.exists(report_file):
-            try:
-                with open(report_file, "r", encoding="utf-8") as f:
-                    report_data = json.load(f)
-            except Exception as e:
-                report_data = {"error": f"⚠️ Error reading report file: {str(e)}"}
-        else:
-            report_data = {"info": "⚠️ No report file found."}
-
-        # -----------------------------------------------------------
-        # Προετοιμασία δεδομένων για αποστολή στο Chat
-        # -----------------------------------------------------------
-        message = {
-            "message": f"✅ {label} ολοκληρώθηκε επιτυχώς.",
-            "output": result.stdout or "No console output",
-            "data": report_data
-        }
-
-        # -----------------------------------------------------------
-        # Αποστολή στο Chat Forward endpoint
-        # -----------------------------------------------------------
-        response = requests.post(CHAT_FORWARD_URL, json=message, timeout=20)
-        print(f"📤 Report sent to chat, status: {response.status_code}")
-
-        return jsonify({
-            "response": f"{label} executed",
-            "status": "ok",
-            "http_status": response.status_code
-        })
-
+        res = requests.get(API_URL, headers=HEADERS, params=params, timeout=10)
+        data = res.json()
+        if data and data.get("response"):
+            for f in data["response"]:
+                fixtures.append({
+                    "match": f["teams"]["home"]["name"] + " - " + f["teams"]["away"]["name"],
+                    "league": f["league"]["name"],
+                    "country": f["league"]["country"],
+                    "fair_1": fair_odd_calc(f, "home"),
+                    "fair_x": fair_odd_calc(f, "draw"),
+                    "fair_2": fair_odd_calc(f, "away"),
+                    "fair_over": fair_odd_calc(f, "over"),
+                    "score_draw": score_draw_calc(f),
+                    "score_over": score_over_calc(f),
+                    "category": classify_fixture(f)
+                })
     except Exception as e:
-        print(f"⚠️ Error executing command: {e}")
-        return jsonify({"error": str(e)}), 500
+        print(f"⚠️ Error fetching league {league_id}: {e}")
 
+# === Save output ===
+os.makedirs("logs", exist_ok=True)
+report_path = os.path.join("logs", "thursday_report_v1.json")
 
-# -----------------------------------------------------------
-# Chat Forward Endpoint (δέχεται reports)
-# -----------------------------------------------------------
-@app.route("/chat_forward", methods=["POST"])
-def chat_forward():
-    try:
-        data = request.get_json()
-        print("💬 Incoming message to chat:", data.get("message", "No message"))
-        return jsonify({"status": "received", "message": data.get("message")}), 200
-    except Exception as e:
-        print(f"⚠️ Error in chat_forward: {e}")
-        return jsonify({"status": "error", "error": str(e)}), 500
+output = {
+    "status": "success",
+    "count": len(fixtures),
+    "range": {"from": date_from, "to": date_to},
+    "data_sample": fixtures[:10]  # δείγμα για πιο μικρό JSON
+}
 
+with open(report_path, "w", encoding="utf-8") as f:
+    json.dump(output, f, indent=2, ensure_ascii=False)
 
-# -----------------------------------------------------------
-# Healthcheck (έλεγχος λειτουργίας)
-# -----------------------------------------------------------
-@app.route("/healthcheck", methods=["GET"])
-def healthcheck():
-    return jsonify({"message": "Server running", "status": "ok"})
-
-
-# -----------------------------------------------------------
-# Main (εκκίνηση Flask server)
-# -----------------------------------------------------------
-if __name__ == "__main__":
-    print("🟢 Starting Bombay Engine Flask Server...")
-    app.run(host="0.0.0.0", port=10000)
+print(f"✅ Thursday Analysis complete — saved {len(fixtures)} fixtures to {report_path}")
