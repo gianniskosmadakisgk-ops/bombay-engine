@@ -4,10 +4,9 @@ import requests
 import json
 import os
 import sys
-import time
 
 # -----------------------------------------------------------
-# 🔧 Fix για το Render: κάνει τα print() να εμφανίζονται αμέσως στα logs
+# 🔧 Render log flush (ώστε να βλέπεις τα print άμεσα)
 # -----------------------------------------------------------
 try:
     sys.stdout.reconfigure(line_buffering=True)
@@ -15,7 +14,7 @@ except AttributeError:
     sys.stdout = os.fdopen(sys.stdout.fileno(), 'w', buffering=1)
 
 # -----------------------------------------------------------
-# Flask App
+# Flask App setup
 # -----------------------------------------------------------
 app = Flask(__name__)
 
@@ -23,14 +22,12 @@ CHAT_FORWARD_URL = "https://bombay-engine.onrender.com/chat_forward"
 
 
 # -----------------------------------------------------------
-# Chat Command Endpoint
+# /chat_command — Trigger engine commands
 # -----------------------------------------------------------
 @app.route("/chat_command", methods=["POST"])
 def chat_command():
     try:
         print("📩 Received POST /chat_command")
-
-        # Διαβάζει τα δεδομένα
         data = request.get_json(force=True)
         print(f"🧾 Raw data: {data}")
 
@@ -48,14 +45,14 @@ def chat_command():
             script = "tuesday_recap.py"
             label = "Tuesday Recap"
         else:
-            print("❌ Unknown command")
+            print("❌ Unknown command received.")
             return jsonify({"error": "❓ Unknown command"}), 400
 
         print(f"🚀 Εκτέλεση εντολής: {label} ({script})")
 
-        # Εκτέλεση του script με πλήρες περιβάλλον
+        # Εκτέλεση script στο Render environment
         env = os.environ.copy()
-        print("⚙️ Starting subprocess now...")
+        print("⚙️ Starting subprocess...")
 
         result = subprocess.run(
             ["python3", script],
@@ -75,9 +72,7 @@ def chat_command():
             print("⚠️ SCRIPT ERRORS:")
             print(result.stderr)
 
-        # -----------------------------------------------------------
-        # Αν υπάρχει JSON report
-        # -----------------------------------------------------------
+        # Εύρεση του report file
         report_file = {
             "thursday_analysis_v1.py": "logs/thursday_report_v1.json",
             "friday_shortlist_v1.py": "logs/friday_shortlist_v1.json",
@@ -85,27 +80,15 @@ def chat_command():
         }.get(script)
 
         report_data = {}
-
-        # 🔁 Retry 3 φορές για να περιμένει το αρχείο να γραφτεί
-        for attempt in range(3):
-            if report_file and os.path.exists(report_file):
-                print(f"✅ Found report file on attempt {attempt + 1}")
-                break
-            print(f"⌛ Waiting for report file... attempt {attempt + 1}/3")
-            time.sleep(2)
-
-        # Διάβασμα JSON report
         if report_file and os.path.exists(report_file):
             with open(report_file, "r", encoding="utf-8") as f:
                 report_data = json.load(f)
         else:
-            print("⚠️ No report file found after waiting.")
+            print("⚠️ No report file found after script run.")
 
-        # -----------------------------------------------------------
-        # Αποστολή αποτελέσματος στο chat
-        # -----------------------------------------------------------
+        # Αποστολή δεδομένων στο Chat
         message = {
-            "message": f"✅ {label} ολοκληρώθηκε.",
+            "message": f"✅ {label} ολοκληρώθηκε επιτυχώς.",
             "output": result.stdout or "No console output",
             "data": report_data or {"info": "No data"},
         }
@@ -113,7 +96,11 @@ def chat_command():
         response = requests.post(CHAT_FORWARD_URL, json=message, timeout=15)
         print(f"📤 Report sent to chat, status: {response.status_code}")
 
-        return jsonify({"response": f"{label} executed", "status": "ok"})
+        return jsonify({
+            "response": f"{label} executed",
+            "status": "ok",
+            "http_status": response.status_code
+        })
 
     except subprocess.CalledProcessError as e:
         print(f"❌ Subprocess failed: {e}")
@@ -127,7 +114,7 @@ def chat_command():
 
 
 # -----------------------------------------------------------
-# Chat Forward Endpoint
+# /chat_forward — internal messages
 # -----------------------------------------------------------
 @app.route("/chat_forward", methods=["POST"])
 def chat_forward():
@@ -141,7 +128,7 @@ def chat_forward():
 
 
 # -----------------------------------------------------------
-# Healthcheck
+# /healthcheck — server heartbeat
 # -----------------------------------------------------------
 @app.route("/healthcheck", methods=["GET"])
 def healthcheck():
@@ -149,7 +136,7 @@ def healthcheck():
 
 
 # -----------------------------------------------------------
-# Main Entry Point
+# MAIN ENTRYPOINT
 # -----------------------------------------------------------
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
