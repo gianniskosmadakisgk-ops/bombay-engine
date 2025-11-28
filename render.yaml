@@ -26,9 +26,7 @@ services:
       apt-get update && apt-get install -y python3.9 python3.9-venv python3.9-distutils
       ln -sf /usr/bin/python3.9 /usr/bin/python
       pip install -r requirements.txt
-    startCommand: gunicorn listener_service:app
+    startCommand: gunicorn listener_service:application
     envVars:
-      - key: OPENAI_API_KEY
-        sync: false
       - key: CHAT_FORWARD_URL
         sync: false
