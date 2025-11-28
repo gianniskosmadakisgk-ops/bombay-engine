@@ -5,24 +5,20 @@ import requests
 
 app = Flask(__name__)
 
-# === Root route ===
 @app.route("/", methods=["GET"])
 def index():
-    return jsonify({"message": "Listener service running", "status": "ok"})
+    return jsonify({"message": "Listener service running", "status": "ok"}), 200
 
-# === Health check ===
 @app.route("/health", methods=["GET"])
 def health():
-    return jsonify({"message": "Listener running", "status": "ok"})
+    return jsonify({"message": "Listener running", "status": "ok"}), 200
 
-# === Main listener endpoint ===
 @app.route("/listener", methods=["POST"])
 def listener():
     try:
         data = request.get_json(force=True)
         print("📩 Received report from Render:", json.dumps(data, indent=2, ensure_ascii=False))
 
-        # Αν θέλουμε, μπορούμε να στέλνουμε το report πίσω στο ChatGPT API
         chat_url = os.environ.get("CHAT_FORWARD_URL", "")
         if chat_url:
             print(f"📤 Forwarding report to chat at {chat_url}")
@@ -41,3 +37,6 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10001))
     print(f"🟢 Starting listener service on port {port}...")
     app.run(host="0.0.0.0", port=port, use_reloader=False)
+
+# Required for gunicorn
+application = app
