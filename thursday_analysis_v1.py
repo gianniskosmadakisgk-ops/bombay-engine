@@ -34,13 +34,22 @@ def chat_command():
         else:
             return jsonify({"error": "❓ Unknown command"}), 400
 
-        print(f"🚀 Running {label} using script: {script}")
+        print(f"🚀 Εκτέλεση εντολής: {label} ({script})")
 
-        # Εκτέλεση του script
+        # -----------------------------------------------------------
+        # Εκτέλεση του script (με logs)
+        # -----------------------------------------------------------
         result = subprocess.run(
             ["python3", script],
             capture_output=True, text=True
         )
+
+        print("----- SCRIPT OUTPUT START -----")
+        print(result.stdout)
+        print("----- SCRIPT OUTPUT END -----")
+        if result.stderr:
+            print("⚠️ SCRIPT ERRORS:")
+            print(result.stderr)
 
         # -----------------------------------------------------------
         # Διαβάζει το παραγόμενο JSON report (αν υπάρχει)
@@ -67,7 +76,7 @@ def chat_command():
         # Προετοιμασία δεδομένων για αποστολή στο Chat
         # -----------------------------------------------------------
         message = {
-            "message": f"✅ {label} executed successfully.",
+            "message": f"✅ {label} ολοκληρώθηκε επιτυχώς.",
             "output": result.stdout or "No console output",
             "data": report_data
         }
@@ -115,4 +124,5 @@ def healthcheck():
 # Main (εκκίνηση Flask server)
 # -----------------------------------------------------------
 if __name__ == "__main__":
+    print("🟢 Starting Bombay Engine Flask Server...")
     app.run(host="0.0.0.0", port=10000)
