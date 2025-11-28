@@ -1,52 +1,43 @@
 from flask import Flask, request, jsonify
-import requests
 import os
+import json
+import requests
 
 app = Flask(__name__)
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+# === Root route ===
+@app.route("/", methods=["GET"])
+def index():
+    return jsonify({"message": "Listener service running", "status": "ok"})
 
+# === Health check ===
+@app.route("/health", methods=["GET"])
+def health():
+    return jsonify({"message": "Listener running", "status": "ok"})
+
+# === Main listener endpoint ===
 @app.route("/listener", methods=["POST"])
 def listener():
     try:
-        data = request.get_json()
-        message = data.get("message", "")
-        summary = data.get("data", {}).get("summary", "")
+        data = request.get_json(force=True)
+        print("📩 Received report from Render:", json.dumps(data, indent=2, ensure_ascii=False))
 
-        print("📥 Received report from Render:")
-        print(message)
-        print(summary)
+        # Αν θέλουμε, μπορούμε να στέλνουμε το report πίσω στο ChatGPT API
+        chat_url = os.environ.get("CHAT_FORWARD_URL", "")
+        if chat_url:
+            print(f"📤 Forwarding report to chat at {chat_url}")
+            r = requests.post(chat_url, json=data, timeout=20)
+            print(f"✅ Forwarded with status: {r.status_code}")
+        else:
+            print("⚠️ CHAT_FORWARD_URL not set")
 
-        # === Send report to ChatGPT ===
-        payload = {
-            "model": "gpt-4o-mini",
-            "messages": [
-                {"role": "system", "content": "Εμφάνισε καθαρά αναφορές Bombay Engine"},
-                {"role": "user", "content": f"{message}\n\n{summary}"}
-            ]
-        }
-
-        headers = {
-            "Authorization": f"Bearer {OPENAI_API_KEY}",
-            "Content-Type": "application/json"
-        }
-
-        r = requests.post("https://api.openai.com/v1/chat/completions", json=payload, headers=headers)
-        print("✅ Forwarded to ChatGPT API")
-
-        return jsonify({"status": "ok", "openai_response": r.json()}), 200
-
+        return jsonify({"status": "ok", "message": "Report received"}), 200
     except Exception as e:
-        print(f"❌ Listener error: {e}")
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/listener/health", methods=["GET"])
-def healthcheck():
-    return jsonify({"message": "Listener running", "status": "ok"})
+        print(f"❌ Error in listener: {e}")
+        return jsonify({"status": "error", "error": str(e)}), 500
 
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10001))
-    print(f"🟢 Starting listener service on port {port}")
-    app.run(host="0.0.0.0", port=port)
+    print(f"🟢 Starting listener service on port {port}...")
+    app.run(host="0.0.0.0", port=port, use_reloader=False)
