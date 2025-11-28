@@ -1,0 +1,46 @@
+# === BOOKMAKER LOGIC CONFIG (v1.0) ===
+# Defines how fair odds and market calibration are estimated.
+
+version: 1.0
+description: "Core bookmaker logic — fair odds, margin, drift and market behavior calibration."
+
+margins:
+  european_bookmakers:
+    bet365: 0.06
+    pinnacle: 0.04
+    unibet: 0.05
+    william_hill: 0.07
+  default_margin: 0.05
+
+fair_odds:
+  formula: "fair = offered * (1 - margin)"
+  tolerance: 0.03  # acceptable deviation threshold
+
+drift_analysis:
+  threshold_percent: 7
+  classification:
+    positive: "Odds shortened (> +7%)"
+    negative: "Odds drifted (< -7%)"
+    neutral: "Within normal range"
+
+value_thresholds:
+  draw:
+    strong: 7.5
+    playable: 7.0
+  over_under:
+    premium: 7.5
+    strong: 7.0
+  kelly_value_cutoff: 1.05  # value ratio required for betting consideration
+
+odds_sources:
+  priority_order:
+    - bet365
+    - pinnacle
+    - unibet
+    - william_hill
+
+calibration_notes: >
+  Η τυπική γκανιότα για ισοπαλίες κυμαίνεται μεταξύ 5–7%.
+  Για Over/Under αγορές, η μέση margin είναι 4–5%.
+  Οι fair αποδόσεις προκύπτουν αφαιρώντας τη margin από την προσφερόμενη τιμή
+  και χρησιμοποιούνται για υπολογισμό value score & Kelly index.
