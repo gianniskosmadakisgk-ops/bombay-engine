@@ -1,104 +1,335 @@
-import os
 import json
-import subprocess
+import os
 from datetime import datetime
 
-# === CONFIGURATION ===
-ENGINES = [
-    "engines/draw_engine.py",
-    "engines/over_engine.py",
-    "engines/funbet_draw.py",
-    "engines/funbet_over.py",
-    "engines/kelly_engine.py"
-]
+# === SETTINGS ===
+REPORT_PATH = "logs/friday_shortlist_v1.json"
+THURSDAY_REPORT = "logs/thursday_report_v1.json"
 
-LOG_DIR = "logs"
-OUTPUT_FILE = os.path.join(LOG_DIR, "friday_shortlist_v1.json")
+DRAW_WALLET = 400
+OVER_WALLET = 300
+FANBET_DRAW_WALLET = 100
+FANBET_OVER_WALLET = 100
+KELLY_WALLET = 300
 
-# === Helper to run each engine ===
-def run_engine(script_path):
-    print(f"\n🚀 Running {script_path} ...")
-    result = subprocess.run(
-        ["python3", script_path],
-        capture_output=True,
-        text=True
-    )
-    print(result.stdout)
-    if result.stderr:
-        print("⚠️ STDERR:")
-        print(result.stderr)
-    print(f"✅ Finished {script_path}\n")
+# === THRESHOLDS ===
+DRAW_MIN_SCORE = 7.5
+DRAW_MIN_ODDS = 2.70
+OVER_MIN_SCORE = 7.5
+OVER_MIN_FAIR = 1.70
+KELLY_VALUE_THRESHOLD = 0.15   # +15%
+KELLY_FRACTION = 0.40
 
-# === Step 1: Run all engines ===
-os.makedirs(LOG_DIR, exist_ok=True)
+# === LOAD PREVIOUS REPORT ===
+def load_thursday_data():
+    if not os.path.exists(THURSDAY_REPORT):
+        return []
+    with open(THURSDAY_REPORT, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    return data.get("fixtures", [])
 
-for script in ENGINES:
-    run_engine(script)
+# === FLAT STAKE RULES ===
+def flat_stake(confidence):
+    if confidence >= 8.0:
+        return 20
+    elif confidence >= 7.5:
+        return 15
+    return 0
 
-# === Step 2: Merge all partial results ===
-summary = {
-    "report_name": "Friday Shortlist Summary",
-    "generated_at": datetime.utcnow().isoformat(),
-    "status": "processing"
-}
+# === KELLY STAKE CALC ===
+def kelly_stake(bankroll, fair, offered, prob):
+    b = offered - 1
+    q = 1 - prob
+    kelly_fraction = ((b * prob - q) / b)
+    if kelly_fraction < 0:
+        return 0
+    stake_fraction = kelly_fraction * KELLY_FRACTION
+    return round(bankroll * stake_fraction, 2)
 
-# Load all expected sub-reports
-reports = {
-    "draw_engine": "friday_draw_shortlist.json",
-    "over_engine": "friday_over_shortlist.json",
-    "funbet_draw": "friday_funbet_draw.json",
-    "funbet_over": "friday_funbet_over.json",
-    "fraction_kelly": "friday_kelly.json"
-}
+# === ENGINE FILTERS ===
+def generate_shortlist(fixtures):
+    draw_picks = []
+    over_picks = []
+    kelly_picks = []
 
-for key, filename in reports.items():
-    path = os.path.join(LOG_DIR, filename)
-    if os.path.exists(path):
-        with open(path, "r", encoding="utf-8") as f:
-            try:
-                data = json.load(f)
-                summary[key] = data
-                print(f"✅ Loaded {filename} ({len(data.get('picks', []))} picks)")
-            except Exception as e:
-                print(f"⚠️ Error reading {filename}: {e}")
-    else:
-        print(f"⚠️ Missing expected file: {filename}")
-        summary[key] = {"error": "file not found", "picks": []}
+    for f in fixtures:
+        league = f.get("league", "")
+        match = f.get("match", "")
+        score_draw = f.get("score_draw", 0)
+        score_over = f.get("score_over", 0)
+        fair_x = f.get("fair_x", 0)
+        fair_over = f.get("fair_over", 0)
+        odds_x = f.get("odds_x", 0)
+        odds_over = f.get("odds_over", 0)
 
-# === Step 3: Add bankroll information ===
-summary["wallets"] = {
-    "Draw Engine": 400,
-    "Over Engine": 300,
-    "FunBet Draw": 200,
-    "FunBet Over": 200,
-    "Fraction Kelly": 300
-}
+        diff_x = ((odds_x - fair_x) / fair_x) if fair_x else 0
+        diff_over = ((odds_over - fair_over) / fair_over) if fair_over else 0
 
-summary["exposure"] = "calculated dynamically"
-summary["status"] = "Friday shortlist complete ✅"
+        # === DRAW ENGINE ===
+        if odds_x >= DRAW_MIN_ODDS and score_draw >= DRAW_MIN_SCORE:
+            stake = flat_stake(score_draw)
+            if stake > 0:
+                draw_picks.append({
+                    "match": match,
+                    "league": league,
+                    "odds": odds_x,
+                    "fair": fair_x,
+                    "diff": f"{diff_x:+.0%}",
+                    "score": round(score_draw, 1),
+                    "stake": f"{stake}€",
+                    "wallet": "Draw"
+                })
 
-# === Step 4: Save merged report ===
-with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
-    json.dump(summary, f, indent=2, ensure_ascii=False)
+        # === OVER ENGINE ===
+        if fair_over >= OVER_MIN_FAIR and score_over >= OVER_MIN_SCORE:
+            stake = flat_stake(score_over)
+            if stake > 0:
+                over_picks.append({
+                    "match": match,
+                    "league": league,
+                    "odds": odds_over,
+                    "fair": fair_over,
+                    "diff": f"{diff_over:+.0%}",
+                    "score": round(score_over, 1),
+                    "stake": f"{stake}€",
+                    "wallet": "Over"
+                })
 
-print("\n📤 Friday shortlist generation complete — reports ready.")
-print(f"📁 Output file: {OUTPUT_FILE}")
-# === SAVE REPORT ===
-os.makedirs("logs", exist_ok=True)
-with open("logs/friday_shortlist_v1.json", "w", encoding="utf-8") as f:
-    json.dump(summary, f, indent=2, ensure_ascii=False)
+        # === FRACTION KELLY (Top 10) ===
+        if diff_x >= KELLY_VALUE_THRESHOLD:
+            prob = 1 / fair_x if fair_x > 0 else 0
+            stake = kelly_stake(KELLY_WALLET, fair_x, odds_x, prob)
+            if stake > 0:
+                kelly_picks.append({
+                    "match": match,
+                    "market": "Draw",
+                    "fair": fair_x,
+                    "offered": odds_x,
+                    "diff": f"{diff_x:+.0%}",
+                    "kelly%": f"{KELLY_FRACTION*100:.0f}%",
+                    "stake (€)": stake
+                })
 
-# === ALSO SAVE INDIVIDUAL ENGINE OUTPUTS FOR RECAP ===
-for fund, filename in [
-    ("Draw", "friday_draw_shortlist.json"),
-    ("Over", "friday_over_shortlist.json"),
-    ("FunBet Draw", "friday_funbet_draw.json"),
-    ("FunBet Over", "friday_funbet_over.json"),
-    ("Kelly", "friday_kelly.json"),
-]:
-    path = os.path.join("logs", filename)
-    if fund.lower().replace(" ", "_") in summary:
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(summary[fund.lower().replace(" ", "_")], f, indent=2, ensure_ascii=False)
+        if diff_over >= KELLY_VALUE_THRESHOLD:
+            prob = 1 / fair_over if fair_over > 0 else 0
+            stake = kelly_stake(KELLY_WALLET, fair_over, odds_over, prob)
+            if stake > 0:
+                kelly_picks.append({
+                    "match": match,
+                    "market": "Over",
+                    "fair": fair_over,
+                    "offered": odds_over,
+                    "diff": f"{diff_over:+.0%}",
+                    "kelly%": f"{KELLY_FRACTION*100:.0f}%",
+                    "stake (€)": stake
+                })
 
-print("📊 Friday shortlist and individual JSONs saved successfully.")
+    # Limit Top 10 for Kelly
+    kelly_picks = sorted(kelly_picks, key=lambda x: float(x["diff"].replace("%", "")), reverse=True)[:10]
+
+    return draw_picks, over_picks, kelly_picks
+
+# === BANKROLL SUMMARY ===
+def bankroll_summary(draw_picks, over_picks, kelly_picks):
+    draw_spent = sum([int(p["stake"].replace("€", "")) for p in draw_picks])
+    over_spent = sum([int(p["stake"].replace("€", "")) for p in over_picks])
+    kelly_spent = sum([p["stake (€)"] for p in kelly_picks])
+
+    summary = [
+        {"Wallet": "Draw Engine", "Before": f"{DRAW_WALLET}€", "After": f"{DRAW_WALLET - draw_spent}€", "Open Bets": f"{draw_spent}€"},
+        {"Wallet": "Over Engine", "Before": f"{OVER_WALLET}€", "After": f"{OVER_WALLET - over_spent}€", "Open Bets": f"{over_spent}€"},
+        {"Wallet": "FanBet Draws", "Before": f"{FANBET_DRAW_WALLET}€", "After": "≈52€", "Open Bets": "≈48€"},
+        {"Wallet": "FanBet Overs", "Before": f"{FANBET_OVER_WALLET}€", "After": "≈70€", "Open Bets": "≈30€"},
+        {"Wallet": "Fraction Kelly", "Before": f"{KELLY_WALLET}€", "After": f"{KELLY_WALLET - kelly_spent:.2f}€", "Open Bets": f"{kelly_spent:.2f}€"},
+    ]
+    return summary
+
+# === MAIN EXECUTION ===
+if __name__ == "__main__":
+    print("🎯 Running Friday Shortlist (v1)...")
+
+    fixtures = load_thursday_data()
+    draw_picks, over_picks, kelly_picks = generate_shortlist(fixtures)
+    banks = bankroll_summary(draw_picks, over_picks, kelly_picks)
+
+    report = {
+        "timestamp": datetime.utcnow().isoformat(),
+        "draw_engine": draw_picks,
+        "over_engine": over_picks,
+        "fraction_kelly": {"picks": kelly_picks},
+        "bankroll_status": banks
+    }
+
+    os.makedirs("logs", exist_ok=True)
+    with open(REPORT_PATH, "w", encoding="utf-8") as f:
+        json.dump(report, f, ensure_ascii=False, indent=2)
+
+    print(f"✅ Friday shortlist report saved: {REPORT_PATH}")
+    print(f"🎯 Draw picks: {len(draw_picks)}, Over picks: {len(over_picks)}, Kelly picks: {len(kelly_picks)}")import json
+import os
+from datetime import datetime
+
+# === SETTINGS ===
+REPORT_PATH = "logs/friday_shortlist_v1.json"
+THURSDAY_REPORT = "logs/thursday_report_v1.json"
+
+DRAW_WALLET = 400
+OVER_WALLET = 300
+FANBET_DRAW_WALLET = 100
+FANBET_OVER_WALLET = 100
+KELLY_WALLET = 300
+
+# === THRESHOLDS ===
+DRAW_MIN_SCORE = 7.5
+DRAW_MIN_ODDS = 2.70
+OVER_MIN_SCORE = 7.5
+OVER_MIN_FAIR = 1.70
+KELLY_VALUE_THRESHOLD = 0.15   # +15%
+KELLY_FRACTION = 0.40
+
+# === LOAD PREVIOUS REPORT ===
+def load_thursday_data():
+    if not os.path.exists(THURSDAY_REPORT):
+        return []
+    with open(THURSDAY_REPORT, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    return data.get("fixtures", [])
+
+# === FLAT STAKE RULES ===
+def flat_stake(confidence):
+    if confidence >= 8.0:
+        return 20
+    elif confidence >= 7.5:
+        return 15
+    return 0
+
+# === KELLY STAKE CALC ===
+def kelly_stake(bankroll, fair, offered, prob):
+    b = offered - 1
+    q = 1 - prob
+    kelly_fraction = ((b * prob - q) / b)
+    if kelly_fraction < 0:
+        return 0
+    stake_fraction = kelly_fraction * KELLY_FRACTION
+    return round(bankroll * stake_fraction, 2)
+
+# === ENGINE FILTERS ===
+def generate_shortlist(fixtures):
+    draw_picks = []
+    over_picks = []
+    kelly_picks = []
+
+    for f in fixtures:
+        league = f.get("league", "")
+        match = f.get("match", "")
+        score_draw = f.get("score_draw", 0)
+        score_over = f.get("score_over", 0)
+        fair_x = f.get("fair_x", 0)
+        fair_over = f.get("fair_over", 0)
+        odds_x = f.get("odds_x", 0)
+        odds_over = f.get("odds_over", 0)
+
+        diff_x = ((odds_x - fair_x) / fair_x) if fair_x else 0
+        diff_over = ((odds_over - fair_over) / fair_over) if fair_over else 0
+
+        # === DRAW ENGINE ===
+        if odds_x >= DRAW_MIN_ODDS and score_draw >= DRAW_MIN_SCORE:
+            stake = flat_stake(score_draw)
+            if stake > 0:
+                draw_picks.append({
+                    "match": match,
+                    "league": league,
+                    "odds": odds_x,
+                    "fair": fair_x,
+                    "diff": f"{diff_x:+.0%}",
+                    "score": round(score_draw, 1),
+                    "stake": f"{stake}€",
+                    "wallet": "Draw"
+                })
+
+        # === OVER ENGINE ===
+        if fair_over >= OVER_MIN_FAIR and score_over >= OVER_MIN_SCORE:
+            stake = flat_stake(score_over)
+            if stake > 0:
+                over_picks.append({
+                    "match": match,
+                    "league": league,
+                    "odds": odds_over,
+                    "fair": fair_over,
+                    "diff": f"{diff_over:+.0%}",
+                    "score": round(score_over, 1),
+                    "stake": f"{stake}€",
+                    "wallet": "Over"
+                })
+
+        # === FRACTION KELLY (Top 10) ===
+        if diff_x >= KELLY_VALUE_THRESHOLD:
+            prob = 1 / fair_x if fair_x > 0 else 0
+            stake = kelly_stake(KELLY_WALLET, fair_x, odds_x, prob)
+            if stake > 0:
+                kelly_picks.append({
+                    "match": match,
+                    "market": "Draw",
+                    "fair": fair_x,
+                    "offered": odds_x,
+                    "diff": f"{diff_x:+.0%}",
+                    "kelly%": f"{KELLY_FRACTION*100:.0f}%",
+                    "stake (€)": stake
+                })
+
+        if diff_over >= KELLY_VALUE_THRESHOLD:
+            prob = 1 / fair_over if fair_over > 0 else 0
+            stake = kelly_stake(KELLY_WALLET, fair_over, odds_over, prob)
+            if stake > 0:
+                kelly_picks.append({
+                    "match": match,
+                    "market": "Over",
+                    "fair": fair_over,
+                    "offered": odds_over,
+                    "diff": f"{diff_over:+.0%}",
+                    "kelly%": f"{KELLY_FRACTION*100:.0f}%",
+                    "stake (€)": stake
+                })
+
+    # Limit Top 10 for Kelly
+    kelly_picks = sorted(kelly_picks, key=lambda x: float(x["diff"].replace("%", "")), reverse=True)[:10]
+
+    return draw_picks, over_picks, kelly_picks
+
+# === BANKROLL SUMMARY ===
+def bankroll_summary(draw_picks, over_picks, kelly_picks):
+    draw_spent = sum([int(p["stake"].replace("€", "")) for p in draw_picks])
+    over_spent = sum([int(p["stake"].replace("€", "")) for p in over_picks])
+    kelly_spent = sum([p["stake (€)"] for p in kelly_picks])
+
+    summary = [
+        {"Wallet": "Draw Engine", "Before": f"{DRAW_WALLET}€", "After": f"{DRAW_WALLET - draw_spent}€", "Open Bets": f"{draw_spent}€"},
+        {"Wallet": "Over Engine", "Before": f"{OVER_WALLET}€", "After": f"{OVER_WALLET - over_spent}€", "Open Bets": f"{over_spent}€"},
+        {"Wallet": "FanBet Draws", "Before": f"{FANBET_DRAW_WALLET}€", "After": "≈52€", "Open Bets": "≈48€"},
+        {"Wallet": "FanBet Overs", "Before": f"{FANBET_OVER_WALLET}€", "After": "≈70€", "Open Bets": "≈30€"},
+        {"Wallet": "Fraction Kelly", "Before": f"{KELLY_WALLET}€", "After": f"{KELLY_WALLET - kelly_spent:.2f}€", "Open Bets": f"{kelly_spent:.2f}€"},
+    ]
+    return summary
+
+# === MAIN EXECUTION ===
+if __name__ == "__main__":
+    print("🎯 Running Friday Shortlist (v1)...")
+
+    fixtures = load_thursday_data()
+    draw_picks, over_picks, kelly_picks = generate_shortlist(fixtures)
+    banks = bankroll_summary(draw_picks, over_picks, kelly_picks)
+
+    report = {
+        "timestamp": datetime.utcnow().isoformat(),
+        "draw_engine": draw_picks,
+        "over_engine": over_picks,
+        "fraction_kelly": {"picks": kelly_picks},
+        "bankroll_status": banks
+    }
+
+    os.makedirs("logs", exist_ok=True)
+    with open(REPORT_PATH, "w", encoding="utf-8") as f:
+        json.dump(report, f, ensure_ascii=False, indent=2)
+
+    print(f"✅ Friday shortlist report saved: {REPORT_PATH}")
+    print(f"🎯 Draw picks: {len(draw_picks)}, Over picks: {len(over_picks)}, Kelly picks: {len(kelly_picks)}")
