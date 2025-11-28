@@ -7,3 +7,26 @@ services:
       ln -sf /usr/bin/python3.9 /usr/bin/python
       pip install -r requirements.txt
     startCommand: gunicorn app:app
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: CHAT_FORWARD_URL
+        sync: false
+      - key: FOOTBALL_API_KEY
+        sync: false
+      - key: ODDS_API_KEY
+        sync: false
+      - key: BOMBAY_API_URL
+        sync: false
+
+  - type: web
+    name: bombay-listener
+    env: python
+    buildCommand: |
+      apt-get update && apt-get install -y python3.9 python3.9-venv python3.9-distutils
+      ln -sf /usr/bin/python3.9 /usr/bin/python
+      pip install -r requirements.txt
+    startCommand: gunicorn listener_service:app
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false
