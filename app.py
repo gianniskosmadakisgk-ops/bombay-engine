@@ -82,7 +82,15 @@ def chat_command():
             "friday_shortlist_v1.py": "logs/friday_shortlist_v1.json",
             "tuesday_recap.py": "logs/tuesday_recap_v1.json",
         }.get(script)
+import time
 
+# 🔁 Retry 3 φορές για το JSON report (σε περίπτωση καθυστέρησης write)
+for attempt in range(3):
+    if report_file and os.path.exists(report_file):
+        print(f"✅ Found report file on attempt {attempt+1}")
+        break
+    print(f"⌛ Waiting for report file... attempt {attempt+1}/3")
+    time.sleep(2)
         report_data = {}
         if report_file and os.path.exists(report_file):
             with open(report_file, "r", encoding="utf-8") as f:
