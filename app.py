@@ -4,9 +4,10 @@ import requests
 import json
 import os
 import sys
+import time
 
 # -----------------------------------------------------------
-# 🔧 Fix για το Render: κάνε τα print() να εμφανίζονται αμέσως στα logs
+# 🔧 Fix για το Render: κάνει τα print() να εμφανίζονται αμέσως στα logs
 # -----------------------------------------------------------
 try:
     sys.stdout.reconfigure(line_buffering=True)
@@ -78,36 +79,27 @@ def chat_command():
         # Αν υπάρχει JSON report
         # -----------------------------------------------------------
         report_file = {
-            "thursday_analysis_v1.py": "logs/thursday_report_v1.json",  # ✅ Διορθωμένο
+            "thursday_analysis_v1.py": "logs/thursday_report_v1.json",
             "friday_shortlist_v1.py": "logs/friday_shortlist_v1.json",
             "tuesday_recap.py": "logs/tuesday_recap_v1.json",
         }.get(script)
-import time
 
-# 🔁 Retry 3 φορές για το JSON report (σε περίπτωση καθυστέρησης write)
-for attempt in range(3):
-    if report_file and os.path.exists(report_file):
-        print(f"✅ Found report file on attempt {attempt+1}")
-        break
-    print(f"⌛ Waiting for report file... attempt {attempt+1}/3")
-    time.sleep(2)
         report_data = {}
+
+        # 🔁 Retry 3 φορές για να περιμένει το αρχείο να γραφτεί
+        for attempt in range(3):
+            if report_file and os.path.exists(report_file):
+                print(f"✅ Found report file on attempt {attempt + 1}")
+                break
+            print(f"⌛ Waiting for report file... attempt {attempt + 1}/3")
+            time.sleep(2)
+
+        # Διάβασμα JSON report
         if report_file and os.path.exists(report_file):
             with open(report_file, "r", encoding="utf-8") as f:
                 report_data = json.load(f)
         else:
-            # fallback -> ψάξε οποιοδήποτε JSON υπάρχει μέσα στο logs/
-            print("⚠️ No specific report file found, searching fallback logs/")
-            if os.path.exists("logs"):
-                for file in os.listdir("logs"):
-                    if file.endswith(".json"):
-                        path = os.path.join("logs", file)
-                        print(f"📄 Found fallback JSON: {path}")
-                        with open(path, "r", encoding="utf-8") as f:
-                            report_data = json.load(f)
-                        break
-            else:
-                print("⚠️ No logs/ directory found at all.")
+            print("⚠️ No report file found after waiting.")
 
         # -----------------------------------------------------------
         # Αποστολή αποτελέσματος στο chat
