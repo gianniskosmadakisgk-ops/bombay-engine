@@ -83,3 +83,22 @@ with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
 
 print("\n📤 Friday shortlist generation complete — reports ready.")
 print(f"📁 Output file: {OUTPUT_FILE}")
+# === SAVE REPORT ===
+os.makedirs("logs", exist_ok=True)
+with open("logs/friday_shortlist_v1.json", "w", encoding="utf-8") as f:
+    json.dump(summary, f, indent=2, ensure_ascii=False)
+
+# === ALSO SAVE INDIVIDUAL ENGINE OUTPUTS FOR RECAP ===
+for fund, filename in [
+    ("Draw", "friday_draw_shortlist.json"),
+    ("Over", "friday_over_shortlist.json"),
+    ("FunBet Draw", "friday_funbet_draw.json"),
+    ("FunBet Over", "friday_funbet_over.json"),
+    ("Kelly", "friday_kelly.json"),
+]:
+    path = os.path.join("logs", filename)
+    if fund.lower().replace(" ", "_") in summary:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(summary[fund.lower().replace(" ", "_")], f, indent=2, ensure_ascii=False)
+
+print("📊 Friday shortlist and individual JSONs saved successfully.")
