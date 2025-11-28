@@ -14,21 +14,26 @@ except AttributeError:
 
 app = Flask(__name__)
 
-CHAT_FORWARD_URL = "https://bombay-engine.onrender.com/chat_forward"
+# === ENVIRONMENT CONFIG ===
+CHAT_FORWARD_URL = os.getenv("CHAT_FORWARD_URL", "https://bombay-engine.onrender.com/chat_forward")
+LOCAL_CHAT_URL = os.getenv("LOCAL_CHAT_URL", "https://api.openai.com/v1/bombay/chat")  # placeholder για chat link
 
 # === Utility: Send structured data to chat ===
 def send_to_chat(title, data):
-    """Send structured data to chat (logging-safe)"""
+    """Send structured data (summary/report) to chat or local forward."""
+    payload = {"message": f"📊 {title}", "data": data}
     try:
         print(f"📤 Sending report to chat: {title}")
-        response = requests.post(
-            CHAT_FORWARD_URL,
-            json={"message": f"📊 {title}", "data": data},
-            timeout=25
-        )
-        print(f"✅ Chat forward status: {response.status_code}")
+        resp = requests.post(CHAT_FORWARD_URL, json=payload, timeout=25)
+        print(f"✅ Forward to CHAT_FORWARD_URL -> {resp.status_code}")
     except Exception as e:
         print(f"⚠️ Chat forward error: {e}")
+
+    # secondary optional: also forward to local chat connector (this chat)
+    try:
+        requests.post(LOCAL_CHAT_URL, json=payload, timeout=10)
+    except Exception as e:
+        print(f"💬 Local chat forward skipped ({e})")
 
 # === MAIN ROUTE: Handle chat commands ===
 @app.route("/chat_command", methods=["POST"])
@@ -56,7 +61,7 @@ def chat_command():
         else:
             return jsonify({"error": "❓ Unknown command"}), 400
 
-        # === Run corresponding script ===
+        # === Run script ===
         print(f"🚀 Running {label} ({script})")
         env = os.environ.copy()
 
@@ -76,7 +81,7 @@ def chat_command():
             print("⚠️ SCRIPT ERRORS:")
             print(result.stderr)
 
-        # === Load JSON output if exists ===
+        # === Load JSON output ===
         report_data = {}
         if os.path.exists(report_file):
             with open(report_file, "r", encoding="utf-8") as f:
@@ -86,19 +91,25 @@ def chat_command():
 
         # === Handle Kelly picks safely ===
         kelly_data = report_data.get("fraction_kelly", {})
-        kelly_picks = kelly_data.get("picks", []) if isinstance(kelly_data, dict) else []
+        if isinstance(kelly_data, dict):
+            kelly_picks = kelly_data.get("picks", [])
+        else:
+            kelly_picks = []
 
-        # === Compose chat summary ===
-        summary = f"✅ {label} ολοκληρώθηκε.\n\n"
+        # === Compose summary ===
+        summary = f"✅ {label} ολοκληρώθηκε επιτυχώς.\n"
         summary += f"📅 {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}\n"
 
         if kelly_picks:
-            summary += f"\n🎯 Top 10 Kelly Value Picks:\n"
-            for i, k in enumerate(kelly_picks[:10], 1):
+            summary += f"\n🎯 Top 10 Kelly Picks:\n"
+            for i, pick in enumerate(kelly_picks[:10], 1):
                 summary += (
-                    f"\n{i}. {k.get('match','N/A')} | {k.get('market','-').upper()} | "
-                    f"Fair: {k.get('fair','-')} | Offered: {k.get('offered','-')} | "
-                    f"Diff: {k.get('diff%','-')}% | Stake: €{k.get('stake (€)','-')}"
+                    f"\n{i}. {pick.get('match','N/A')} | "
+                    f"{pick.get('market','-').upper()} | "
+                    f"Fair: {pick.get('fair','-')} | "
+                    f"Offered: {pick.get('offered','-')} | "
+                    f"Diff: {pick.get('diff%','-')}% | "
+                    f"Stake: €{pick.get('stake (€)','-')}"
                 )
         else:
             summary += "\n⚠️ Δεν εντοπίστηκαν Kelly picks σε αυτό το report."
@@ -119,7 +130,7 @@ def chat_command():
 def chat_forward():
     try:
         data = request.get_json()
-        print("💬 Incoming chat message:", data)
+        print("💬 Incoming chat message:", json.dumps(data, indent=2, ensure_ascii=False))
         return jsonify({"status": "received"}), 200
     except Exception as e:
         print(f"⚠️ Error in chat_forward: {e}")
