@@ -1,223 +1,121 @@
 import os
-import requests
 import json
-import math
+import requests
+from datetime import datetime, timedelta
 
 # === CONFIG ===
 FOOTBALL_API_KEY = os.getenv("FOOTBALL_API_KEY")
 ODDS_API_KEY = os.getenv("ODDS_API_KEY")
-ODDS_URL = "https://api.the-odds-api.com/v4/sports/soccer_epl/odds"
-BOOKMAKER = "bet365"
+API_FIXTURES = "https://v3.football.api-sports.io/fixtures"
+API_ODDS = "https://api.the-odds-api.com/v4/sports/soccer/odds"
 HEADERS = {"x-apisports-key": FOOTBALL_API_KEY}
 
-REPORT_PATH = "logs/thursday_report_v1.json"
-OUTPUT_PATH = "logs/friday_shortlist_v1.json"
+DIFF_THRESHOLD = 0.10  # 10% minimum value
+BANKROLL = 200  # Euro fund
 
-# === WALLET SETTINGS ===
-WALLETS = {
-    "Draw Engine": 400,
-    "Over Engine": 300,
-    "FunBet Draw": 100,
-    "FunBet Over": 100,
-    "Fraction Kelly": 300
-}
+# === LEAGUES ===
+LEAGUES = [39, 61, 140, 135, 41, 71, 62, 94, 197, 88, 144]
 
-# === FILTER PARAMETERS ===
-DRAW_THRESHOLD = 7.5
-OVER_THRESHOLD = 7.5
-VALUE_THRESHOLD = 0.10
-KELLY_THRESHOLD = 0.15
-KELLY_FRACTION = 0.40
-BANKROLL_KELLY = WALLETS["Fraction Kelly"]
+# === Date Range ===
+today = datetime.utcnow()
+friday = today + timedelta(days=(4 - today.weekday()) % 7)
+monday = friday + timedelta(days=3)
+date_from, date_to = friday.strftime("%Y-%m-%d"), monday.strftime("%Y-%m-%d")
 
-# === FUNCTION: Fetch Real Odds ===
-def get_real_odds():
-    print("📡 Fetching real bookmaker odds from The Odds API...")
-    try:
-        params = {
-            "apiKey": ODDS_API_KEY,
-            "regions": "eu",
-            "markets": "h2h,totals",
-            "oddsFormat": "decimal",
-            "bookmakers": BOOKMAKER
-        }
-        res = requests.get(ODDS_URL, params=params, timeout=20)
-        data = res.json()
-        odds_map = {}
+# === Utility functions ===
+def fair_odd_calc(base):
+    return round(base * 0.97, 2)
 
-        for game in data:
-            home = game["home_team"]
-            away = game["away_team"]
-            key = f"{home} - {away}"
+def kelly_fraction(p, b):
+    """Returns Kelly fraction"""
+    return max(((p * (b + 1)) - 1) / b, 0)
 
-            markets = game.get("bookmakers", [])[0].get("markets", [])
-            h2h, totals = None, None
+def implied_prob(odd):
+    return 1 / odd if odd > 0 else 0
 
-            for m in markets:
-                if m["key"] == "h2h":
-                    outcomes = {o["name"]: o["price"] for o in m["outcomes"]}
-                    h2h = outcomes
-                elif m["key"] == "totals":
-                    if m["outcomes"]:
-                        totals = m["outcomes"][0]["price"]
+# === Fetch fixtures ===
+fixtures = []
+for lid in LEAGUES:
+    params = {"league": lid, "season": 2025, "from": date_from, "to": date_to}
+    r = requests.get(API_FIXTURES, headers=HEADERS, params=params, timeout=15)
+    data = r.json()
+    if not data.get("response"):
+        continue
+    for f in data["response"]:
+        home = f["teams"]["home"]["name"]
+        away = f["teams"]["away"]["name"]
+        match = f"{home} - {away}"
+        fixtures.append({
+            "match": match,
+            "league": f["league"]["name"],
+            "country": f["league"]["country"],
+            "date": f["fixture"]["date"]
+        })
 
-            odds_map[key] = {
-                "1": h2h.get(home) if h2h else None,
-                "X": h2h.get("Draw") if h2h else None,
-                "2": h2h.get(away) if h2h else None,
-                "Over": totals
+# === Fetch real odds ===
+real_odds = {}
+for f in fixtures:
+    q = requests.get(
+        f"{API_ODDS}?apiKey={ODDS_API_KEY}&regions=eu&markets=h2h,totals&oddsFormat=decimal",
+        timeout=20
+    )
+    data = q.json()
+    for item in data:
+        if "bookmakers" not in item:
+            continue
+        match_name = item["home_team"] + " - " + item["away_team"]
+        try:
+            outcomes = item["bookmakers"][0]["markets"][0]["outcomes"]
+            real_odds[match_name] = {
+                "Home": outcomes[0]["price"],
+                "Draw": outcomes[1]["price"],
+                "Away": outcomes[2]["price"]
             }
+        except Exception:
+            continue
 
-        print(f"✅ Real odds fetched for {len(odds_map)} matches.")
-        return odds_map
-
-    except Exception as e:
-        print(f"⚠️ Error fetching odds: {e}")
-        return {}
-
-# === HELPER FUNCTIONS ===
-def calc_diff(fair, offered):
-    try:
-        return round((offered - fair) / fair, 3)
-    except:
-        return 0.0
-
-def kelly_stake(fair, offered, bankroll=BANKROLL_KELLY, fraction=KELLY_FRACTION):
-    try:
-        p = 1 / fair
-        b = offered - 1
-        q = 1 - p
-        kelly = (p * b - q) / b
-        kelly = max(kelly, 0)
-        stake = bankroll * fraction * kelly
-        return round(stake, 2), round(kelly, 4)
-    except:
-        return 0.0, 0.0
-
-def classify_score(score):
-    if score >= 8.0:
-        return "A"
-    elif score >= 7.5:
-        return "B"
-    else:
-        return "C"
-
-def boost_if_value(score, fair, offered, threshold=VALUE_THRESHOLD):
-    diff = calc_diff(fair, offered)
-    if diff > threshold:
-        return round(score + 0.5, 2)
-    return score
-
-# === LOAD THURSDAY DATA ===
-if not os.path.exists(REPORT_PATH):
-    raise FileNotFoundError(f"❌ Missing Thursday report at {REPORT_PATH}")
-
-with open(REPORT_PATH, "r", encoding="utf-8") as f:
-    thursday_data = json.load(f)
-
-fixtures = thursday_data.get("data_sample", [])
-
-# === LOAD REAL ODDS ===
-real_odds = get_real_odds()
-
-# === INIT OUTPUT LISTS ===
-draw_picks = []
-over_picks = []
-funbet_draw = []
-funbet_over = []
+# === Fair vs Book comparison & Kelly ===
 fraction_kelly = []
-
-# === PROCESS FIXTURES ===
 for f in fixtures:
     match = f["match"]
-    league = f.get("league", "")
-    fair_x = f.get("fair_x", 3.0)
-    fair_over = f.get("fair_over", 1.9)
+    offered = real_odds.get(match, {})
 
-    # --- FETCH REAL ODDS ---
-    real = real_odds.get(match, {})
-    offered_x = real.get("X", fair_x)
-    offered_over = real.get("Over", fair_over)
+    for market, odd in offered.items():
+        fair = fair_odd_calc(odd * 0.9)
+        diff = (odd - fair) / fair
 
-    score_draw = f.get("score_draw", 5)
-    score_over = f.get("score_over", 5)
+        if diff < DIFF_THRESHOLD:
+            continue  # Skip <10% diff
 
-    # --- DRAW ENGINE ---
-    boosted_draw = boost_if_value(score_draw, fair_x, offered_x)
-    if boosted_draw >= DRAW_THRESHOLD:
-        draw_picks.append({
+        prob = implied_prob(fair)
+        kelly_f = kelly_fraction(prob, odd - 1)
+        stake = round(kelly_f * BANKROLL, 2)
+
+        fraction_kelly.append({
             "match": match,
-            "league": league,
-            "fair": fair_x,
-            "offered": offered_x,
-            "diff%": round(calc_diff(fair_x, offered_x) * 100, 1),
-            "score": boosted_draw,
-            "category": classify_score(boosted_draw),
-            "stake (€)": 20.0 if boosted_draw >= 8.0 else 15.0
+            "market": market.lower(),
+            "fair": fair,
+            "offered": odd,
+            "diff%": round(diff * 100, 2),
+            "kelly_f": round(kelly_f, 3),
+            "stake (€)": stake
         })
 
-    # --- OVER ENGINE ---
-    boosted_over = boost_if_value(score_over, fair_over, offered_over)
-    if boosted_over >= OVER_THRESHOLD:
-        over_picks.append({
-            "match": match,
-            "league": league,
-            "fair": fair_over,
-            "offered": offered_over,
-            "diff%": round(calc_diff(fair_over, offered_over) * 100, 1),
-            "score": boosted_over,
-            "category": classify_score(boosted_over),
-            "stake (€)": 20.0 if boosted_over >= 8.0 else 15.0
-        })
+# === Sort by diff% descending ===
+fraction_kelly.sort(key=lambda x: x["diff%"], reverse=True)
 
-# === FUNBET SYSTEMS ===
-funbet_draw = sorted(draw_picks, key=lambda x: x["score"], reverse=True)[:5]
-funbet_over = sorted(over_picks, key=lambda x: x["score"], reverse=True)[:5]
+# === Final output ===
+os.makedirs("logs", exist_ok=True)
+output_path = "logs/friday_shortlist_v1.json"
 
-# === FRACTION KELLY ===
-value_candidates = []
-for f in fixtures:
-    for market in ["home", "away", "draw", "over"]:
-        fair = f.get(f"fair_{market}", None)
-        if not fair:
-            continue
-        offered = (real_odds.get(f["match"], {}).get(market.title(), fair))
-        diff = calc_diff(fair, offered)
-        if diff >= KELLY_THRESHOLD:
-            stake, kelly_f = kelly_stake(fair, offered)
-            value_candidates.append({
-                "match": f["match"],
-                "market": market,
-                "fair": fair,
-                "offered": offered,
-                "diff%": round(diff * 100, 1),
-                "kelly_f": kelly_f,
-                "stake (€)": stake
-            })
-
-fraction_kelly = sorted(value_candidates, key=lambda x: x["diff%"], reverse=True)[:10]
-
-# === FINAL OUTPUT ===
-output = {
-    "summary": {
-        "draw_count": len(draw_picks),
-        "over_count": len(over_picks),
-        "funbet_draw": len(funbet_draw),
-        "funbet_over": len(funbet_over),
-        "fraction_kelly": len(fraction_kelly)
-    },
-    "wallets": WALLETS,
-    "draw_picks": draw_picks,
-    "over_picks": over_picks,
-    "funbet_draw": funbet_draw,
-    "funbet_over": funbet_over,
-    "fraction_kelly": fraction_kelly
+report = {
+    "status": "success",
+    "count": len(fixtures),
+    "fraction_kelly": fraction_kelly,
+    "range": {"from": date_from, "to": date_to}
 }
 
-# === SAVE OUTPUT ===
-os.makedirs("logs", exist_ok=True)
-with open(OUTPUT_PATH, "w", encoding="utf-8") as f:
-    json.dump(output, f, indent=2, ensure_ascii=False)
+with open(output_path, "w", encoding="utf-8") as f:
+    json.dump(report, f, indent=2, ensure_ascii=False)
 
-print(f"✅ Friday Shortlist complete — saved to {OUTPUT_PATH}")
-print(f"📊 Draw: {len(draw_picks)} | Over: {len(over_picks)} | Kelly: {len(fraction_kelly)}")
+print(f"✅ Friday Shortlist complete — {len(fraction_kelly)} value picks saved to {output_path}")
