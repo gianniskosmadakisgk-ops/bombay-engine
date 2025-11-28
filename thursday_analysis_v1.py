@@ -1,7 +1,9 @@
 import os
 import json
 import requests
+import yaml
 from datetime import datetime, timedelta
+from pathlib import Path
 
 # === CONFIG ===
 FOOTBALL_API_KEY = os.getenv("FOOTBALL_API_KEY")
@@ -15,6 +17,22 @@ DAYS_FORWARD = 3
 REPORT_PATH = "logs/thursday_report_v1.json"
 
 os.makedirs("logs", exist_ok=True)
+
+# === Load Core Configuration ===
+core_path = Path(__file__).resolve().parent / "core"
+engines_path = Path(__file__).resolve().parent / "engines"
+
+try:
+    with open(core_path / "bombay_rules_v4.yaml", "r", encoding="utf-8") as f:
+        bombay_rules = yaml.safe_load(f)
+    print("✅ Loaded Bombay Rules (v4)")
+
+    with open(engines_path / "bookmaker_logic.yaml", "r", encoding="utf-8") as f:
+        bookmaker_logic = yaml.safe_load(f)
+    print("✅ Loaded Bookmaker Logic")
+
+except Exception as e:
+    print(f"❌ Error loading core configs: {e}")
 
 # === DATE RANGE ===
 today = datetime.utcnow()
@@ -58,7 +76,7 @@ for f in fixtures:
     away = teams["away"]["name"]
     match_label = f"{home} - {away}"
 
-    # Random fallback odds in case missing
+    # Default odds in case missing
     offered_draw = 3.2
     offered_over = 1.95
 
@@ -76,11 +94,11 @@ for f in fixtures:
                     if o["name"] == "Over 2.5":
                         offered_over = o["price"]
 
-    # Fair odds simulation (temporary placeholder)
+    # === Fair Odds Logic (temporary) ===
     fair_draw = round(offered_draw * 0.93, 2)
     fair_over = round(offered_over * 0.94, 2)
 
-    # Scoring simulation (can refine later)
+    # === Scoring simulation (temporary baseline) ===
     score_draw = round((offered_draw / fair_draw) * 7.5, 2)
     score_over = round((offered_over / fair_over) * 7.5, 2)
     kelly_value = round(((offered_draw - fair_draw) / fair_draw) * 100, 2)
