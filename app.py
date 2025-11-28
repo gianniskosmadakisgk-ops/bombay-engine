@@ -78,7 +78,7 @@ def chat_command():
         # Αν υπάρχει JSON report
         # -----------------------------------------------------------
         report_file = {
-            "thursday_analysis_v1.py": "logs/thursday_output.json",
+            "thursday_analysis_v1.py": "logs/thursday_report_v1.json",  # ✅ Διορθωμένο
             "friday_shortlist_v1.py": "logs/friday_shortlist_v1.json",
             "tuesday_recap.py": "logs/tuesday_recap_v1.json",
         }.get(script)
@@ -88,7 +88,18 @@ def chat_command():
             with open(report_file, "r", encoding="utf-8") as f:
                 report_data = json.load(f)
         else:
-            print("⚠️ No report file found after script run.")
+            # fallback -> ψάξε οποιοδήποτε JSON υπάρχει μέσα στο logs/
+            print("⚠️ No specific report file found, searching fallback logs/")
+            if os.path.exists("logs"):
+                for file in os.listdir("logs"):
+                    if file.endswith(".json"):
+                        path = os.path.join("logs", file)
+                        print(f"📄 Found fallback JSON: {path}")
+                        with open(path, "r", encoding="utf-8") as f:
+                            report_data = json.load(f)
+                        break
+            else:
+                print("⚠️ No logs/ directory found at all.")
 
         # -----------------------------------------------------------
         # Αποστολή αποτελέσματος στο chat
