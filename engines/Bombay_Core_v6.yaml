@@ -1,0 +1,155 @@
+# =======================================================
+# 🧠 Bombay Engine Core Configuration
+# Version: v6.0  (Giannis Edition)
+# Author: Giannis Kosmadakis & Agent Bombay
+# =======================================================
+
+engine_info:
+  name: Bombay Engine
+  version: 6.0
+  maintainer: Giannis Kosmadakis
+  description: >
+    Core blueprint for the Bombay analytical system.
+    Includes Draw Engine, Over Engine, Fair Odds logic, and operational schedule.
+    Used by the Render services and the Custom GPT (Agent Bombay).
+
+schedule:
+  thursday_analysis:
+    description: "Fetch and analyze fixtures for Fri–Mon from the core leagues."
+    trigger_command: "Run Thursday Analysis"
+  friday_shortlist:
+    description: "Filter top value bets (draws & overs) for the weekend."
+    trigger_command: "Run Friday Shortlist"
+  tuesday_recap:
+    description: "Weekly performance recap and statistics."
+    trigger_command: "Run Tuesday Recap"
+
+# =======================================================
+# ⚙️ DRAW ENGINE (ΙΣΟΠΑΛΙΕΣ)
+# =======================================================
+draw_engine:
+  leagues:
+    - Ligue 1
+    - Serie A
+    - La Liga
+    - Championship (England)
+    - Serie B
+    - Ligue 2
+    - Liga Portugal 2
+    - Swiss Super League
+  description: >
+    Designed for balanced leagues with moderate tempo and 27–32% draw rate.
+    Evaluates match equilibrium, motivation, and fatigue to estimate draw potential.
+
+  parameters:
+    H2H_Draw_Rate: 0.20
+    League_Draw_Rate: 0.15
+    Balance_Index_XG_Diff: 0.15
+    Recent_Draw_Form: 0.10
+    SPI_Difference: 0.10
+    Motivation_Index: 0.10
+    Fatigue_Index: 0.05
+    Weather_Effect: 0.05
+    Injury_Impact: 0.05
+    Fair_Odds_Calibration: 0.05
+
+  formula:
+    Score_Draw: "Σ(param * weight) * 10"
+
+  classification:
+    A: ">= 8.0 → Ισχυρό Draw"
+    B: "7.5–8.0 → Value Draw"
+    C: "< 7.5 → Αδύναμο Draw"
+
+# =======================================================
+# 🔥 OVER ENGINE (GOALS)
+# =======================================================
+over_engine:
+  leagues:
+    - Bundesliga
+    - Eredivisie
+    - Jupiler Pro League
+    - Superliga (Denmark)
+    - Allsvenskan
+    - Eliteserien
+    - Swiss Super League
+    - Liga Portugal 1
+  description: >
+    Targets high-tempo leagues with attacking patterns and avg goals > 2.6.
+    Evaluates tempo, conversion, and xG imbalance to project over 2.5 goal potential.
+
+  parameters:
+    Avg_Goals_Per_Match: 0.25
+    XG_Attack_Diff: 0.20
+    Conversion_Rate: 0.15
+    Defensive_Weakness: 0.15
+    Recent_Over_Form: 0.10
+    Fatigue_Index: 0.05
+    Motivation_Index: 0.05
+    Weather_Effect: 0.05
+  formula:
+    Score_Over: "Σ(param * weight) * 10"
+  classification:
+    A: ">= 8.0 → Strong Over"
+    B: "7.5–8.0 → Value Over"
+    C: "< 7.5 → Weak Over"
+
+# =======================================================
+# 🎯 FAIR ODDS ENGINE
+# =======================================================
+fair_odds_engine:
+  description: >
+    Calculates fair probabilities and bookmaker-style odds for 1/X/2/Over markets.
+    Based on AI-driven expected probabilities with 5–7% margin.
+  margin: 0.06
+  rounding_step: 0.05
+  logic:
+    - "fair_odd = 1 / probability"
+    - "bookmaker_odd = fair_odd * (1 - margin)"
+  example:
+    Draw_probability: 0.33
+    Fair_X: 3.03
+    Adjusted_X: 2.85
+
+# =======================================================
+# 📊 OUTPUT FORMAT
+# =======================================================
+output_format:
+  columns:
+    - League
+    - Match
+    - Fair_1
+    - Fair_X
+    - Fair_2
+    - Fair_Over
+    - Score_Draw
+    - Score_Over
+  example:
+    League: "Ligue 1"
+    Match: "Lyon - Nantes"
+    Fair_1: 2.00
+    Fair_X: 3.05
+    Fair_2: 3.85
+    Fair_Over: 1.85
+    Score_Draw: 8.1
+    Score_Over: 7.7
+
+# =======================================================
+# 🧩 SYSTEM INTEGRATION
+# =======================================================
+integration:
+  data_source: "API-Football"
+  required_env_keys:
+    - FOOTBALL_API_KEY
+    - ODDS_API_KEY
+    - CHAT_FORWARD_URL
+  data_range: "Friday to Monday (from Thursday run)"
+  sync_with_listener: true
+  listener_endpoint: "https://bombay-listener.onrender.com/listener"
+  render_services:
+    - bombay-engine
+    - bombay-listener
+
+# =======================================================
+# ✅ END OF CONFIG
+# =======================================================
