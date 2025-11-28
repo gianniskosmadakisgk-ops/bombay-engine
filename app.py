@@ -29,11 +29,12 @@ def send_to_chat(title, data):
     except Exception as e:
         print(f"⚠️ Chat forward error: {e}")
 
-    # secondary optional: also forward to local chat connector (this chat)
+    # Secondary optional: also forward to local chat connector (this chat)
     try:
         requests.post(LOCAL_CHAT_URL, json=payload, timeout=10)
     except Exception as e:
         print(f"💬 Local chat forward skipped ({e})")
+
 
 # === MAIN ROUTE: Handle chat commands ===
 @app.route("/chat_command", methods=["POST"])
@@ -125,6 +126,32 @@ def chat_command():
         send_to_chat("Error", {"error": str(e)})
         return jsonify({"error": str(e)}), 500
 
+
+# === Manual Run Routes ===
+@app.route("/run/thursday", methods=["GET"])
+def run_thursday():
+    try:
+        print("🚀 Manual trigger: Running Thursday Analysis...")
+        result = subprocess.run(
+            ["python3", "thursday_analysis_v1.py"],
+            cwd="/opt/render/project/src",
+            capture_output=True,
+            text=True
+        )
+        print("----- SCRIPT OUTPUT START -----")
+        print(result.stdout)
+        print("----- SCRIPT OUTPUT END -----")
+
+        if result.stderr:
+            print("⚠️ SCRIPT ERRORS:")
+            print(result.stderr)
+
+        return jsonify({"status": "ok", "message": "Thursday analysis executed."}), 200
+    except Exception as e:
+        print(f"❌ Manual run error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 # === Chat forward endpoint ===
 @app.route("/chat_forward", methods=["POST"])
 def chat_forward():
@@ -136,10 +163,12 @@ def chat_forward():
         print(f"⚠️ Error in chat_forward: {e}")
         return jsonify({"status": "error", "error": str(e)}), 500
 
+
 # === Healthcheck ===
 @app.route("/healthcheck", methods=["GET"])
 def healthcheck():
     return jsonify({"message": "Server running", "status": "ok"})
+
 
 # === Entry point ===
 if __name__ == "__main__":
