@@ -3,12 +3,27 @@ import subprocess
 import requests
 import json
 import os
+import sys
 
+# -----------------------------------------------------------
+# 🔧 Fix για το Render: κάνε τα print() να εμφανίζονται αμέσως στα logs
+# -----------------------------------------------------------
+try:
+    sys.stdout.reconfigure(line_buffering=True)
+except AttributeError:
+    sys.stdout = os.fdopen(sys.stdout.fileno(), 'w', buffering=1)
+
+# -----------------------------------------------------------
+# Flask App
+# -----------------------------------------------------------
 app = Flask(__name__)
 
 CHAT_FORWARD_URL = "https://bombay-engine.onrender.com/chat_forward"
 
 
+# -----------------------------------------------------------
+# Chat Command Endpoint
+# -----------------------------------------------------------
 @app.route("/chat_command", methods=["POST"])
 def chat_command():
     try:
@@ -37,7 +52,7 @@ def chat_command():
 
         print(f"🚀 Εκτέλεση εντολής: {label} ({script})")
 
-        # Εκτέλεση του script με περιβάλλον και logs
+        # Εκτέλεση του script με πλήρες περιβάλλον
         env = os.environ.copy()
         print("⚙️ Starting subprocess now...")
 
@@ -59,7 +74,9 @@ def chat_command():
             print("⚠️ SCRIPT ERRORS:")
             print(result.stderr)
 
-        # Αναζήτηση JSON report
+        # -----------------------------------------------------------
+        # Αν υπάρχει JSON report
+        # -----------------------------------------------------------
         report_file = {
             "thursday_analysis_v1.py": "logs/thursday_output.json",
             "friday_shortlist_v1.py": "logs/friday_shortlist_v1.json",
@@ -73,7 +90,9 @@ def chat_command():
         else:
             print("⚠️ No report file found after script run.")
 
+        # -----------------------------------------------------------
         # Αποστολή αποτελέσματος στο chat
+        # -----------------------------------------------------------
         message = {
             "message": f"✅ {label} ολοκληρώθηκε.",
             "output": result.stdout or "No console output",
@@ -96,6 +115,9 @@ def chat_command():
         return jsonify({"error": str(e)}), 500
 
 
+# -----------------------------------------------------------
+# Chat Forward Endpoint
+# -----------------------------------------------------------
 @app.route("/chat_forward", methods=["POST"])
 def chat_forward():
     try:
@@ -107,11 +129,17 @@ def chat_forward():
         return jsonify({"status": "error", "error": str(e)}), 500
 
 
+# -----------------------------------------------------------
+# Healthcheck
+# -----------------------------------------------------------
 @app.route("/healthcheck", methods=["GET"])
 def healthcheck():
     return jsonify({"message": "Server running", "status": "ok"})
 
 
+# -----------------------------------------------------------
+# Main Entry Point
+# -----------------------------------------------------------
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     print(f"🟢 Starting Bombay Engine Flask Server on port {port}...")
