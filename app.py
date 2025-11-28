@@ -16,7 +16,7 @@ app = Flask(__name__)
 
 # === ENVIRONMENT CONFIG ===
 CHAT_FORWARD_URL = os.getenv("CHAT_FORWARD_URL", "https://bombay-engine.onrender.com/chat_forward")
-LOCAL_CHAT_URL = os.getenv("LOCAL_CHAT_URL", "https://api.openai.com/v1/bombay/chat")  # placeholder για chat link
+LOCAL_CHAT_URL = os.getenv("LOCAL_CHAT_URL", "https://api.openai.com/v1/bombay/chat")  # placeholder
 
 # === Utility: Send structured data to chat ===
 def send_to_chat(title, data):
@@ -29,19 +29,16 @@ def send_to_chat(title, data):
     except Exception as e:
         print(f"⚠️ Chat forward error: {e}")
 
-    # Secondary optional: also forward to local chat connector (this chat)
     try:
         requests.post(LOCAL_CHAT_URL, json=payload, timeout=10)
     except Exception as e:
         print(f"💬 Local chat forward skipped ({e})")
-
 
 # === MAIN ROUTE: Handle chat commands ===
 @app.route("/chat_command", methods=["POST"])
 def chat_command():
     try:
         print("📩 Received /chat_command request")
-
         data = request.get_json(force=True)
         command = (data.get("command", "") or "").lower().strip()
         print(f"🧭 Command detected: {command}")
@@ -92,10 +89,7 @@ def chat_command():
 
         # === Handle Kelly picks safely ===
         kelly_data = report_data.get("fraction_kelly", {})
-        if isinstance(kelly_data, dict):
-            kelly_picks = kelly_data.get("picks", [])
-        else:
-            kelly_picks = []
+        kelly_picks = kelly_data.get("picks", []) if isinstance(kelly_data, dict) else []
 
         # === Compose summary ===
         summary = f"✅ {label} ολοκληρώθηκε επιτυχώς.\n"
@@ -109,7 +103,7 @@ def chat_command():
                     f"{pick.get('market','-').upper()} | "
                     f"Fair: {pick.get('fair','-')} | "
                     f"Offered: {pick.get('offered','-')} | "
-                    f"Diff: {pick.get('diff%','-')}% | "
+                    f"Diff: {pick.get('diff','-')} | "
                     f"Stake: €{pick.get('stake (€)','-')}"
                 )
         else:
@@ -126,14 +120,24 @@ def chat_command():
         send_to_chat("Error", {"error": str(e)})
         return jsonify({"error": str(e)}), 500
 
-
 # === Manual Run Routes ===
 @app.route("/run/thursday", methods=["GET"])
 def run_thursday():
+    return run_script("thursday_analysis_v1.py", "Thursday Analysis")
+
+@app.route("/run/friday", methods=["GET"])
+def run_friday():
+    return run_script("friday_shortlist_v1.py", "Friday Shortlist")
+
+@app.route("/run/tuesday", methods=["GET"])
+def run_tuesday():
+    return run_script("tuesday_recap.py", "Tuesday Recap")
+
+def run_script(script_name, label):
     try:
-        print("🚀 Manual trigger: Running Thursday Analysis...")
+        print(f"🚀 Manual trigger: Running {label}...")
         result = subprocess.run(
-            ["python3", "thursday_analysis_v1.py"],
+            ["python3", script_name],
             cwd="/opt/render/project/src",
             capture_output=True,
             text=True
@@ -146,11 +150,10 @@ def run_thursday():
             print("⚠️ SCRIPT ERRORS:")
             print(result.stderr)
 
-        return jsonify({"status": "ok", "message": "Thursday analysis executed."}), 200
+        return jsonify({"status": "ok", "message": f"{label} executed."}), 200
     except Exception as e:
         print(f"❌ Manual run error: {e}")
         return jsonify({"error": str(e)}), 500
-
 
 # === Chat forward endpoint ===
 @app.route("/chat_forward", methods=["POST"])
@@ -163,12 +166,10 @@ def chat_forward():
         print(f"⚠️ Error in chat_forward: {e}")
         return jsonify({"status": "error", "error": str(e)}), 500
 
-
 # === Healthcheck ===
 @app.route("/healthcheck", methods=["GET"])
 def healthcheck():
     return jsonify({"message": "Server running", "status": "ok"})
-
 
 # === Entry point ===
 if __name__ == "__main__":
