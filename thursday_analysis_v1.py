@@ -1,164 +1,118 @@
-import os
-import json
+from flask import Flask, request, jsonify
+import subprocess
 import requests
-from datetime import datetime
+import json
+import os
+
+app = Flask(__name__)
 
 # -----------------------------------------------------------
-# Ρυθμίσεις API
+# Chat Forward URL (όπου στέλνονται τα reports)
 # -----------------------------------------------------------
-API_URL = "https://v3.football.api-sports.io/fixtures"
-FOOTBALL_API_KEY = os.getenv("FOOTBALL_API_KEY")
+CHAT_FORWARD_URL = "https://bombay-engine.onrender.com/chat_forward"
 
-HEADERS = {
-    "x-apisports-key": FOOTBALL_API_KEY,
-    "x-rapidapi-host": "v3.football.api-sports.io"
-}
 
 # -----------------------------------------------------------
-# Λίγκες για Draw και Over Engines
+# Chat Command Handler
 # -----------------------------------------------------------
-DRAW_LEAGUES = [
-    "Ligue 1", "Serie A", "La Liga", "Championship", "Serie B",
-    "Ligue 2", "Liga Portugal 2", "Swiss Super League"
-]
+@app.route("/chat_command", methods=["POST"])
+def chat_command():
+    try:
+        data = request.get_json()
+        command = data.get("command", "").lower().strip()
 
-OVER_LEAGUES = [
-    "Bundesliga", "Eredivisie", "Jupiler Pro League", "Superliga",
-    "Allsvenskan", "Eliteserien", "Swiss Super League", "Liga Portugal 1"
-]
+        # Αναγνώριση εντολής
+        if "thursday" in command:
+            script = "thursday_analysis_v1.py"
+            label = "Thursday Analysis"
+        elif "friday" in command:
+            script = "friday_shortlist_v1.py"
+            label = "Friday Shortlist"
+        elif "tuesday" in command:
+            script = "tuesday_recap.py"
+            label = "Tuesday Recap"
+        else:
+            return jsonify({"error": "❓ Unknown command"}), 400
 
-# -----------------------------------------------------------
-# Συντελεστές για Draw & Over Score
-# -----------------------------------------------------------
-DRAW_WEIGHTS = {
-    "h2h_draw_rate": 0.20,
-    "league_draw_rate": 0.15,
-    "balance_index": 0.15,
-    "recent_form": 0.10,
-    "spi_diff": 0.10,
-    "motivation": 0.10,
-    "travel_fatigue": 0.05,
-    "weather": 0.05,
-    "injury": 0.05,
-    "fair_odds": 0.05
-}
+        print(f"🚀 Running {label} using script: {script}")
 
-OVER_WEIGHTS = {
-    "avg_xg_total": 0.25,
-    "league_over_rate": 0.15,
-    "form_over_rate": 0.10,
-    "attack_strength": 0.10,
-    "defense_weakness": 0.10,
-    "weather": 0.05,
-    "spi_diff": 0.05,
-    "motivation": 0.05,
-    "injury": 0.05,
-    "fair_odds": 0.10
-}
+        # Εκτέλεση του script
+        result = subprocess.run(
+            ["python3", script],
+            capture_output=True, text=True
+        )
 
-# -----------------------------------------------------------
-# Υπολογισμός Scores
-# -----------------------------------------------------------
-def weighted_score(params, weights):
-    return round(sum(params[k] * w for k, w in weights.items()) * 10, 1)
+        # -----------------------------------------------------------
+        # Διαβάζει το παραγόμενο JSON report (αν υπάρχει)
+        # -----------------------------------------------------------
+        report_file = None
+        if "thursday" in script:
+            report_file = "thursday_report_v1.json"
+        elif "friday" in script:
+            report_file = "friday_shortlist_v1.json"
+        elif "tuesday" in script:
+            report_file = "tuesday_recap_v1.json"
 
-def classify_draw(score):
-    if score >= 8.0:
-        return "A (Ισχυρό Draw)"
-    elif score >= 7.5:
-        return "B (Value Draw)"
-    else:
-        return "C (Αδύναμο)"
+        report_data = None
+        if report_file and os.path.exists(report_file):
+            try:
+                with open(report_file, "r", encoding="utf-8") as f:
+                    report_data = json.load(f)
+            except Exception as e:
+                report_data = {"error": f"⚠️ Error reading report file: {str(e)}"}
+        else:
+            report_data = {"info": "⚠️ No report file found."}
 
-def classify_over(score):
-    if score >= 8.0:
-        return "A (Value Over)"
-    elif score >= 7.5:
-        return "B (Playable)"
-    else:
-        return "C (Weak)"
+        # -----------------------------------------------------------
+        # Προετοιμασία δεδομένων για αποστολή στο Chat
+        # -----------------------------------------------------------
+        message = {
+            "message": f"✅ {label} executed successfully.",
+            "output": result.stdout or "No console output",
+            "data": report_data
+        }
 
-# -----------------------------------------------------------
-# Λήψη δεδομένων από API
-# -----------------------------------------------------------
-print("📡 Fetching next 50 fixtures globally...")
-params = {"next": 50, "timezone": "Europe/London"}
+        # -----------------------------------------------------------
+        # Αποστολή στο Chat Forward endpoint
+        # -----------------------------------------------------------
+        response = requests.post(CHAT_FORWARD_URL, json=message, timeout=20)
+        print(f"📤 Report sent to chat, status: {response.status_code}")
 
-try:
-    response = requests.get(API_URL, headers=HEADERS, params=params, timeout=30)
-    data = response.json()
+        return jsonify({
+            "response": f"{label} executed",
+            "status": "ok",
+            "http_status": response.status_code
+        })
 
-    fixtures = data.get("response", [])
-    if not fixtures:
-        print("⚠️ Δεν βρέθηκαν αγώνες.")
-        exit()
+    except Exception as e:
+        print(f"⚠️ Error executing command: {e}")
+        return jsonify({"error": str(e)}), 500
 
-    print(f"✅ Fixtures fetched: {len(fixtures)}")
-
-except Exception as e:
-    print(f"❌ Error fetching fixtures: {e}")
-    exit()
 
 # -----------------------------------------------------------
-# Ανάλυση Fixtures
+# Chat Forward Endpoint (δέχεται reports)
 # -----------------------------------------------------------
-print("🧠 Running full Thursday Analysis (Bombay Engine v6.0)...")
+@app.route("/chat_forward", methods=["POST"])
+def chat_forward():
+    try:
+        data = request.get_json()
+        print("💬 Incoming message to chat:", data.get("message", "No message"))
+        return jsonify({"status": "received", "message": data.get("message")}), 200
+    except Exception as e:
+        print(f"⚠️ Error in chat_forward: {e}")
+        return jsonify({"status": "error", "error": str(e)}), 500
 
-analyzed = []
-
-for m in fixtures:
-    league = m["league"]["name"]
-    if league not in DRAW_LEAGUES and league not in OVER_LEAGUES:
-        continue
-
-    teams = f"{m['teams']['home']['name']} vs {m['teams']['away']['name']}"
-    fair_1 = round(abs(hash(teams + '1')) % 200 / 100 + 1.6, 2)
-    fair_x = round(abs(hash(teams + 'x')) % 160 / 100 + 2.6, 2)
-    fair_2 = round(abs(hash(teams + '2')) % 180 / 100 + 1.8, 2)
-    fair_over = round(abs(hash(teams + 'over')) % 70 / 100 + 1.7, 2)
-
-    draw_params = {k: abs(hash(k + teams)) % 10 / 10 for k in DRAW_WEIGHTS}
-    over_params = {k: abs(hash(k + teams)) % 10 / 10 for k in OVER_WEIGHTS}
-
-    score_draw = weighted_score(draw_params, DRAW_WEIGHTS)
-    score_over = weighted_score(over_params, OVER_WEIGHTS)
-
-    match_info = {
-        "league": league,
-        "teams": teams,
-        "date": m["fixture"]["date"],
-        "fair_1": fair_1,
-        "fair_x": fair_x,
-        "fair_2": fair_2,
-        "fair_over": fair_over,
-        "score_draw": score_draw,
-        "score_over": score_over,
-        "cat_draw": classify_draw(score_draw),
-        "cat_over": classify_over(score_over)
-    }
-
-    analyzed.append(match_info)
 
 # -----------------------------------------------------------
-# Αποθήκευση και αποστολή
+# Healthcheck (έλεγχος λειτουργίας)
 # -----------------------------------------------------------
-output_file = "thursday_report_v1.json"
-with open(output_file, "w", encoding="utf-8") as f:
-    json.dump({"count": len(analyzed), "matches": analyzed}, f, ensure_ascii=False, indent=2)
+@app.route("/healthcheck", methods=["GET"])
+def healthcheck():
+    return jsonify({"message": "Server running", "status": "ok"})
 
-print(f"✅ Thursday Analysis completed — {len(analyzed)} matches saved.")
 
-try:
-    chat_message = {
-        "message": f"📊 Thursday Report completed: {len(analyzed)} matches analyzed.",
-        "data": analyzed
-    }
-    response = requests.post(
-        "https://bombay-engine.onrender.com/chat_forward",
-        json=chat_message,
-        timeout=15
-    )
-    print(f"📤 Report sent to chat, status: {response.status_code}")
-
-except Exception as e:
-    print(f"⚠️ Error sending to chat: {e}")
+# -----------------------------------------------------------
+# Main (εκκίνηση Flask server)
+# -----------------------------------------------------------
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=10000)
