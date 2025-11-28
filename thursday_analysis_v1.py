@@ -2,28 +2,29 @@ import os
 import requests
 from datetime import datetime, timedelta
 import json
+import random
 
-# === Config ===
+# === CONFIG ===
 FOOTBALL_API_KEY = os.getenv("FOOTBALL_API_KEY")
 API_URL = "https://v3.football.api-sports.io/fixtures"
 HEADERS = {"x-apisports-key": FOOTBALL_API_KEY}
 
-# === Multi-league setup ===
+# === LEAGUES ===
 LEAGUES = [
-    39,   # Premier League
-    61,   # Ligue 1
-    140,  # La Liga
-    135,  # Serie A
-    41,   # Championship
-    71,   # Serie B
-    62,   # Ligue 2
-    94,   # Liga Portugal 2
-    197,  # Swiss Super League
-    88,   # Eredivisie
-    144   # Jupiler Pro League
+    39,  # Premier League
+    61,  # Ligue 1
+    140, # La Liga
+    135, # Serie A
+    41,  # Championship
+    71,  # Serie B
+    62,  # Ligue 2
+    94,  # Liga Portugal 2
+    197, # Swiss Super League
+    88,  # Eredivisie
+    144  # Jupiler Pro League
 ]
 
-# === Date range: Fri–Mon ===
+# === DATE RANGE (Fri–Mon) ===
 today = datetime.utcnow()
 days_ahead = (4 - today.weekday()) % 7  # Friday
 friday = today + timedelta(days=days_ahead)
@@ -31,82 +32,118 @@ monday = friday + timedelta(days=3)
 date_from, date_to = friday.strftime("%Y-%m-%d"), monday.strftime("%Y-%m-%d")
 
 print(f"📅 Fetching fixtures from {date_from} to {date_to}")
-print(f"🔑 Using API key: {'SET' if FOOTBALL_API_KEY else 'MISSING'}")
+print(f"🔑 Using API key: {FOOTBALL_API_KEY[:5]}***")
 
-# === Utility functions ===
-def fair_odd_calc(fixture, outcome):
-    if outcome == "draw":
-        base = 3.00
-    elif outcome == "home":
-        base = 2.00
-    else:
-        base = 3.50
-    return round(base, 2)
+# === ENGINE HELPERS ===
+def draw_engine(fixture):
+    """Υπολογισμός score πιθανότητας ισοπαλίας (0–10)"""
+    base = 4.0
 
-def score_draw_calc(f):
-    score = 5 + (1 - abs(1.4 - 1.3)) + 0.8
+    # Dummy historical & form data (placeholder μέχρι να συνδεθεί DB)
+    league_draw_rate = random.uniform(25, 35)
+    h2h_draws = random.uniform(0, 40)
+    avg_xg_diff = random.uniform(0.1, 0.6)
+    form_delta = random.uniform(0, 1)
+    weather_bad = random.choice([0, 0.5])
+    motivation = random.choice([0, 1.0])
+    offered_vs_fair = random.choice([0, 0.5])  # +0.5 boost if offered > fair +10%
+
+    score = (
+        base
+        + (league_draw_rate - 25) * 0.05
+        + (h2h_draws / 20)
+        + (1 - avg_xg_diff) * 2
+        + (1 - form_delta)
+        + weather_bad
+        + motivation
+        + offered_vs_fair
+    )
+
     return round(min(score, 10), 2)
 
-def score_over_calc(f):
-    score = 5 + ((2.8 - 2.5) + 0.3)
+
+def over_engine(fixture):
+    """Υπολογισμός score πιθανότητας Over 2.5 (0–10)"""
+    base = 4.5
+
+    avg_xg_total = random.uniform(2.3, 3.2)
+    avg_goals_last5 = random.uniform(2.2, 3.5)
+    league_over_rate = random.uniform(45, 70)
+    h2h_over_rate = random.uniform(40, 75)
+    weather_good = random.choice([0, 0.3])
+    team_form = random.choice([0, 0.5])
+    offered_vs_fair = random.choice([0, 0.5])
+
+    score = (
+        base
+        + (avg_xg_total - 2.5) * 3
+        + (avg_goals_last5 - 2.5)
+        + (league_over_rate - 50) * 0.05
+        + (h2h_over_rate - 50) * 0.04
+        + weather_good
+        + team_form
+        + offered_vs_fair
+    )
+
     return round(min(score, 10), 2)
 
-def classify_fixture(f):
-    return "balanced"
 
-# === Pull fixtures (με αναλυτικά logs ανά λίγκα) ===
+# === FETCH FIXTURES ===
 fixtures = []
 for league_id in LEAGUES:
     params = {"league": league_id, "season": 2025, "from": date_from, "to": date_to}
-
-    print(f"\n⚽ Checking league {league_id} → {params}")
     try:
         res = requests.get(API_URL, headers=HEADERS, params=params, timeout=10)
-        print(f"📡 Response status for league {league_id}: {res.status_code}")
         data = res.json()
+        if data and data.get("response"):
+            print(f"✅ Found {len(data['response'])} fixtures for league {league_id}")
+            for f in data["response"]:
+                fixture_info = {
+                    "match": f["teams"]["home"]["name"] + " - " + f["teams"]["away"]["name"],
+                    "league": f["league"]["name"],
+                    "country": f["league"]["country"],
+                }
 
-        # Αν υπάρχει API error
-        if "errors" in data and data["errors"]:
-            print(f"🚫 API error for league {league_id}: {data['errors']}")
-            continue
+                # Calculate engine scores
+                fixture_info["score_draw"] = draw_engine(f)
+                fixture_info["score_over"] = over_engine(f)
 
-        # Αν είναι άδειο ή μη έγκυρο response
-        if not data.get("response"):
-            print(f"⚠️ Empty or invalid response for league {league_id}: {data}")
-            continue
+                # Fair odds (placeholders)
+                fixture_info["fair_1"] = 2.00
+                fixture_info["fair_x"] = 3.10
+                fixture_info["fair_2"] = 3.50
+                fixture_info["fair_over"] = 1.90
 
-        # Αν όλα πάνε καλά
-        print(f"✅ Found {len(data['response'])} fixtures for league {league_id}")
-
-        for f in data["response"]:
-            fixtures.append({
-                "match": f["teams"]["home"]["name"] + " - " + f["teams"]["away"]["name"],
-                "league": f["league"]["name"],
-                "country": f["league"]["country"],
-                "fair_1": fair_odd_calc(f, "home"),
-                "fair_x": fair_odd_calc(f, "draw"),
-                "fair_2": fair_odd_calc(f, "away"),
-                "fair_over": fair_odd_calc(f, "over"),
-                "score_draw": score_draw_calc(f),
-                "score_over": score_over_calc(f),
-                "category": classify_fixture(f)
-            })
-
+                fixtures.append(fixture_info)
+        else:
+            print(f"⚠️ No fixtures found for league {league_id}")
     except Exception as e:
-        print(f"💥 Exception on league {league_id}: {e}")
+        print(f"⚠️ Error fetching league {league_id}: {e}")
 
-# === Save output ===
+
+# === FILTER RESULTS ===
+draw_candidates = [f for f in fixtures if f["score_draw"] >= 7.0]
+over_candidates = [f for f in fixtures if f["score_over"] >= 7.0]
+
+summary = {
+    "total_fixtures": len(fixtures),
+    "draw_candidates": len(draw_candidates),
+    "over_candidates": len(over_candidates),
+}
+
+# === OUTPUT JSON ===
+output = {
+    "timestamp": datetime.utcnow().isoformat(),
+    "range": {"from": date_from, "to": date_to},
+    "summary": summary,
+    "draw_candidates": draw_candidates,
+    "over_candidates": over_candidates,
+}
+
 os.makedirs("logs", exist_ok=True)
 report_path = os.path.join("logs", "thursday_report_v1.json")
-
-output = {
-    "status": "success",
-    "count": len(fixtures),
-    "range": {"from": date_from, "to": date_to},
-    "data_sample": fixtures[:10] if fixtures else [],
-}
 
 with open(report_path, "w", encoding="utf-8") as f:
     json.dump(output, f, indent=2, ensure_ascii=False)
 
-print(f"\n✅ Thursday Analysis complete — saved {len(fixtures)} fixtures to {report_path}")
+print(f"✅ Thursday Analysis complete — saved {len(fixtures)} fixtures to {report_path}")
