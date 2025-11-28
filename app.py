@@ -1,4 +1,5 @@
 from flask import Flask, request, jsonify
+import subprocess
 import requests
 import json
 import os
@@ -26,26 +27,44 @@ def chat_command():
             return jsonify({"error": "❓ Unknown command"}), 400
 
         print(f"🚀 Εκτέλεση εντολής: {label} ({script})")
-        print("📂 Current directory:", os.getcwd())
-        print("📁 Files here:", os.listdir())
 
-        # Εκτέλεση script μέσα στο ίδιο process
-        exec(open(script).read(), globals())
+        # Εκτέλεση script με περιβάλλον
+        env = os.environ.copy()
+        result = subprocess.run(
+            ["python3", script],
+            cwd="/opt/render/project/src",     # σωστό path
+            env=env,                           # περνάει API keys
+            capture_output=True, text=True
+        )
 
-        report_path = f"logs/{label.lower().replace(' ', '_')}_v1.json"
+        print("----- SCRIPT OUTPUT START -----")
+        print(result.stdout)
+        print("----- SCRIPT OUTPUT END -----")
+        if result.stderr:
+            print("⚠️ SCRIPT ERRORS:")
+            print(result.stderr)
+
+        # Αν υπάρχει JSON report
+        report_file = {
+            "thursday_analysis_v1.py": "logs/thursday_output.json",
+            "friday_shortlist_v1.py": "logs/friday_shortlist_v1.json",
+            "tuesday_recap.py": "logs/tuesday_recap_v1.json",
+        }.get(script)
+
         report_data = {}
-        if os.path.exists(report_path):
-            with open(report_path, "r", encoding="utf-8") as f:
+        if report_file and os.path.exists(report_file):
+            with open(report_file, "r", encoding="utf-8") as f:
                 report_data = json.load(f)
 
-        print("📊 JSON Report Preview:")
-        print(json.dumps(report_data, indent=2, ensure_ascii=False))
-
+        # Στέλνει στο chat
         message = {
             "message": f"✅ {label} ολοκληρώθηκε.",
+            "output": result.stdout or "No console output",
             "data": report_data or {"info": "No data"},
         }
-        requests.post(CHAT_FORWARD_URL, json=message, timeout=15)
+
+        response = requests.post(CHAT_FORWARD_URL, json=message, timeout=15)
+        print(f"📤 Report sent to chat, status: {response.status_code}")
 
         return jsonify({"response": f"{label} executed", "status": "ok"})
 
@@ -67,5 +86,6 @@ def healthcheck():
 
 
 if __name__ == "__main__":
-    print("🟢 Starting Bombay Engine Flask Server...")
-    app.run(host="0.0.0.0", port=10000)
+    port = int(os.environ.get("PORT", 10000))
+    print(f"🟢 Starting Bombay Engine Flask Server on port {port}...")
+    app.run(host="0.0.0.0", port=port, use_reloader=False)
