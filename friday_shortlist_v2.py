@@ -47,13 +47,17 @@ DRAW_MIN_ODDS = 2.70
 OVER_MIN_SCORE = 7.5
 OVER_MIN_FAIR = 1.70
 
-KELLY_VALUE_THRESHOLD = 0.15   # +15%
-KELLY_FRACTION = 0.40          # παίζουμε 40% του full Kelly
+# Kelly rules (οι επιλογές που συμφωνήσαμε)
+KELLY_VALUE_THRESHOLD = 0.15       # +15% value vs fair
+KELLY_FRACTION = 0.40              # παίζουμε 40% του full Kelly
+KELLY_MAX_SINGLE_FRACTION = 0.30   # max 30% του Kelly wallet σε ΕΝΑ σημείο
+KELLY_MAX_TOTAL_FRACTION = 0.30    # max 30% του Kelly wallet συνολικά
+KELLY_MIN_PROB = 0.25              # τουλάχιστον 25% implied prob (fair <= 4.0)
 
 FUNBET_DRAW_STAKE_PER_COL = 3.0
 FUNBET_OVER_STAKE_PER_COL = 4.0
 
-# Λίγκες σύμφωνα με το blueprint (για το φίλτρο του engine)
+# Λίγκες για Draw Engine
 DRAW_LEAGUES = {
     "Ligue 1",
     "Serie A",
@@ -61,10 +65,11 @@ DRAW_LEAGUES = {
     "Championship",
     "Serie B",
     "Ligue 2",
-    "Liga Portugal 2",   # ΔΕΝ έχει odds στο TheOddsAPI → μόνο fair-based singles
+    "Liga Portugal 2",
     "Swiss Super League",
 }
 
+# Λίγκες για Over Engine
 OVER_LEAGUES = {
     "Bundesliga",
     "Eredivisie",
@@ -76,60 +81,17 @@ OVER_LEAGUES = {
     "Liga Portugal 1",
 }
 
-# league name (API-Football) -> TheOddsAPI sport_key
-# Τα sport_key είναι ακριβώς όπως στο /sports που μας έστειλες.
+# league name -> TheOddsAPI sport_key
+# (μόνο όσες λίγκες υποστηρίζει το TheOddsAPI – οι υπόλοιπες
+#  θα δουλεύουν μόνο με fair odds και χωρίς Kelly)
 LEAGUE_TO_SPORT = {
-    # Αγγλία
     "Premier League": "soccer_epl",
-    "EPL": "soccer_epl",
-    "Championship": "soccer_efl_champ",
-    "League 1": "soccer_england_league1",
-    "League 2": "soccer_england_league2",
-    "FA Cup": "soccer_fa_cup",
-
-    # Ισπανία
     "La Liga": "soccer_spain_la_liga",
-    "La Liga 2": "soccer_spain_segunda_division",
-
-    # Ιταλία
     "Serie A": "soccer_italy_serie_a",
-    "Serie B": "soccer_italy_serie_b",
-
-    # Γερμανία
     "Bundesliga": "soccer_germany_bundesliga",
-    "Bundesliga 2": "soccer_germany_bundesliga2",
-    "3. Liga": "soccer_germany_liga3",
-
-    # Γαλλία
-    "Ligue 1": "soccer_france_ligue_one",
-    "Ligue 2": "soccer_france_ligue_two",
-
-    # Πορτογαλία
-    "Primeira Liga": "soccer_portugal_primeira_liga",
-    "Liga Portugal 1": "soccer_portugal_primeira_liga",
-    # Liga Portugal 2 ΔΕΝ υπάρχει στο Odds API → δεν μπαίνει εδώ
-
-    # Ολλανδία
-    "Eredivisie": "soccer_netherlands_eredivisie",
-
-    # Βέλγιο
-    "Jupiler Pro League": "soccer_belgium_first_div",
-
-    # Δανία
-    "Superliga": "soccer_denmark_superliga",
-
-    # Σουηδία
-    "Allsvenskan": "soccer_sweden_allsvenskan",
-
-    # Νορβηγία
-    "Eliteserien": "soccer_norway_eliteserien",
-
-    # Ελβετία
-    "Swiss Super League": "soccer_switzerland_superleague",
-
-    # Ελλάδα (για Kelly / μελλοντικά)
-    "Super League": "soccer_greece_super_league",
+    "Ligue 1": "soccer_france_ligue_one",  # όπως ακριβώς στο /sports
 }
+
 
 # ------------------------------------------------------
 # Helper logging
@@ -205,7 +167,7 @@ def normalize_team(name: str) -> str:
 
 def build_odds_index(fixtures):
     """
-    Χτυπάει TheOddsAPI μόνο για τα leagues που έχουμε mapping
+    Χτυπάει TheOddsAPI μόνο για τα leagues που χρειαζόμαστε
     και χτίζει index:
         (norm_home, norm_away) -> {
             "odds_home": price,
@@ -285,7 +247,7 @@ def build_odds_index(fixtures):
 
 
 # ------------------------------------------------------
-# Pick generators
+# Kelly helpers
 # ------------------------------------------------------
 def flat_stake(score: float) -> int:
     """
@@ -300,10 +262,67 @@ def flat_stake(score: float) -> int:
     return 0
 
 
+def kelly_candidate(match_label, league, market_label, fair, offered):
+    """
+    Υπολογίζει Kelly για ένα (match, market).
+    Επιστρέφει dict ή None αν δεν περνάει τα φίλτρα μας.
+    """
+    if not fair or not offered:
+        return None
+
+    fair = float(fair)
+    offered = float(offered)
+
+    # Min probability 25%  → fair <= 4.0
+    p_implied = 1.0 / fair
+    if p_implied < KELLY_MIN_PROB:
+        return None
+
+    # Value threshold +15%
+    diff = (offered - fair) / fair
+    if diff < KELLY_VALUE_THRESHOLD:
+        return None
+
+    b = offered - 1.0
+    if b <= 0:
+        return None
+
+    q = 1.0 - p_implied
+    k_fraction_full = (b * p_implied - q) / b
+    if k_fraction_full <= 0:
+        return None
+
+    # Παίζουμε μόνο 40% του full Kelly
+    k_fraction_used = k_fraction_full * KELLY_FRACTION
+
+    # Max 30% του Kelly wallet σε ένα pick
+    stake_raw = KELLY_WALLET * k_fraction_used
+    stake_capped = min(stake_raw, KELLY_WALLET * KELLY_MAX_SINGLE_FRACTION)
+
+    stake = round(stake_capped, 2)
+    if stake <= 0:
+        return None
+
+    return {
+        "match": match_label,
+        "league": league,
+        "market": market_label,
+        "fair": round(fair, 2),
+        "offered": round(offered, 2),
+        "diff": f"{diff:+.0%}",
+        "kelly%": f"{KELLY_FRACTION*100:.0f}%",
+        "stake (€)": stake,
+        "p_implied": round(p_implied, 3),
+    }
+
+
+# ------------------------------------------------------
+# Pick generators
+# ------------------------------------------------------
 def generate_picks(fixtures, odds_index):
     draw_singles = []
     over_singles = []
-    kelly_picks = []
+    kelly_candidates_all = []
 
     matched_count = 0
 
@@ -320,7 +339,6 @@ def generate_picks(fixtures, odds_index):
         try:
             home_name, away_name = [x.strip() for x in match_label.split("-")]
         except ValueError:
-            # περίεργο format αγώνα
             continue
 
         home_norm = normalize_team(home_name)
@@ -349,7 +367,6 @@ def generate_picks(fixtures, odds_index):
                 value_raw = diff_x
                 odds_source = "market"
             else:
-                # Fallback: παίζουμε με fair_x σαν "εκτιμώμενη" απόδοση
                 market_odds_x = float(fair_x)
                 diff_label = "n/a"
                 value_raw = 0.0
@@ -405,52 +422,53 @@ def generate_picks(fixtures, odds_index):
                     })
 
         # --------------------------------------------------
-        # KELLY (1 / X / 2 / Over 2.5) – ΜΟΝΟ με πραγματικές αποδόσεις
+        # KELLY (1 / X / 2 / Over 2.5)
         # --------------------------------------------------
-        def maybe_add_kelly(market_label, fair, offered):
-            if not fair or not offered:
-                return
-            fair = float(fair)
-            offered = float(offered)
-            diff = (offered - fair) / fair
-            if diff < KELLY_VALUE_THRESHOLD:
-                return
+        per_match_candidates = []
 
-            p = 1.0 / fair
-            b = offered - 1.0
-            q = 1.0 - p
-            if b <= 0:
-                return
-            k_fraction = (b * p - q) / b
-            if k_fraction <= 0:
-                return
-
-            stake = round(KELLY_WALLET * k_fraction * KELLY_FRACTION, 2)
-            if stake <= 0:
-                return
-
-            kelly_picks.append({
-                "match": match_label,
-                "league": league,
-                "market": market_label,
-                "fair": round(fair, 2),
-                "offered": round(offered, 2),
-                "diff": f"{diff:+.0%}",
-                "kelly%": f"{KELLY_FRACTION*100:.0f}%",
-                "stake (€)": stake,
-            })
-
-        # Kelly μόνο όταν έχουμε ΠΡΑΓΜΑΤΙΚΑ odds:
         if odds_home and fair_1:
-            maybe_add_kelly("Home", fair_1, odds_home)
+            c = kelly_candidate(match_label, league, "Home", fair_1, odds_home)
+            if c:
+                per_match_candidates.append(c)
         if odds_x and fair_x:
-            maybe_add_kelly("Draw", fair_x, odds_x)
+            c = kelly_candidate(match_label, league, "Draw", fair_x, odds_x)
+            if c:
+                per_match_candidates.append(c)
         if odds_away and fair_2:
-            maybe_add_kelly("Away", fair_2, odds_away)
+            c = kelly_candidate(match_label, league, "Away", fair_2, odds_away)
+            if c:
+                per_match_candidates.append(c)
         if odds_over and fair_over:
-            maybe_add_kelly("Over 2.5", fair_over, odds_over)
+            c = kelly_candidate(match_label, league, "Over 2.5", fair_over, odds_over)
+            if c:
+                per_match_candidates.append(c)
 
-    # Limit top 10 βάσει score + value
+        # Κρατάμε μόνο ΕΝΑ Kelly market ανά αγώνα: αυτό με το μεγαλύτερο stake
+        if per_match_candidates:
+            best = max(per_match_candidates, key=lambda x: x["stake (€)"])
+            kelly_candidates_all.append(best)
+
+    # --- Kelly: Limit σε top 10 & συνολικό ρίσκο 30% του Kelly wallet ---
+    kelly_sorted = sorted(
+        kelly_candidates_all,
+        key=lambda x: x["stake (€)"],
+        reverse=True,
+    )
+
+    kelly_picks = []
+    total_budget = KELLY_WALLET * KELLY_MAX_TOTAL_FRACTION
+    used = 0.0
+
+    for pick in kelly_sorted:
+        stake = pick["stake (€)"]
+        if used + stake > total_budget:
+            continue
+        kelly_picks.append(pick)
+        used += stake
+        if len(kelly_picks) >= 10:
+            break
+
+    # Singles → top 10 με βάση score + value
     draw_singles = sorted(
         draw_singles,
         key=lambda x: (x["score"], x["value_raw"]),
@@ -460,12 +478,6 @@ def generate_picks(fixtures, odds_index):
     over_singles = sorted(
         over_singles,
         key=lambda x: (x["score"], x["value_raw"]),
-        reverse=True
-    )[:10]
-
-    kelly_picks = sorted(
-        kelly_picks,
-        key=lambda x: x["stake (€)"],
         reverse=True
     )[:10]
 
@@ -609,6 +621,7 @@ def main():
             "draw_singles": len(draw_singles),
             "over_singles": len(over_singles),
             "kelly_picks": len(kelly_picks),
+            "kelly_total_risk": sum(p["stake (€)"] for p in kelly_picks),
             "funbet_draw_cols": funbet_draw.get("columns", 0),
             "funbet_over_cols": funbet_over.get("columns", 0),
         },
