@@ -99,6 +99,10 @@ def api_get(path: str, params: dict) -> list:
 
     if res.status_code != 200:
         log(f"⚠️ API error {res.status_code} on {path} with params {params}")
+        try:
+            log(f"⚠️ Body: {res.text[:300]}")
+        except Exception:
+            pass
         return []
 
     try:
@@ -107,7 +111,22 @@ def api_get(path: str, params: dict) -> list:
         log(f"⚠️ JSON decode error on {path}: {e}")
         return []
 
-    return data.get("response", [])
+    # Αν το API έχει errors πεδία, τα γράφουμε στα logs
+    errors = data.get("errors") or data.get("error")
+    if errors:
+        log(f"⚠️ API errors on {path}: {errors}")
+
+    response = data.get("response", [])
+
+    # Ειδικά για /teams/statistics κάνουμε έξτρα log όταν είναι άδειο
+    if path == "/teams/statistics" and not response:
+        log(f"⚠️ Empty team statistics response for params: {params}")
+        try:
+            log(f"⚠️ Raw body snippet: {json.dumps(data)[:300]}")
+        except Exception:
+            pass
+
+    return response
 
 
 def fetch_fixtures(date_from: str, date_to: str, season: str) -> list:
@@ -331,6 +350,12 @@ def main():
 
     log(f"✅ Thursday analysis complete — {len(processed)} fixtures analyzed.")
     log(f"📝 Report saved at {REPORT_PATH}")
+
+    # Sample output για να το βλέπεις στα logs (μια μικρή προεπισκόπηση)
+    if processed:
+        sample = processed[:3]
+        log("📌 Sample fixtures from report:")
+        log(json.dumps(sample, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":
