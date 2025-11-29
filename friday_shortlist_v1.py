@@ -1,569 +1,471 @@
 import os
 import json
-from datetime import datetime
+import time
+from datetime import datetime, timedelta
 from pathlib import Path
-import itertools
-import re
 
 import requests
+import yaml
 
 # ======================================================
-#  FRIDAY SHORTLIST v1  (Giannis Edition)
+#  THURSDAY ANALYSIS v1  (Giannis Edition)  — CACHED
 #
-#  - Διαβάζει το Thursday report (fair odds + scores)
-#  - Τραβάει ΠΡΑΓΜΑΤΙΚΕΣ αποδόσεις από TheOddsAPI
-#  - Φτιάχνει:
-#       * Draw singles
-#       * Over singles
-#       * FunBet Draw system
-#       * FunBet Over system
-#       * Kelly value bets (1 / X / 2 / Over)
-#       * Bankroll summary
-#  - Σώζει: logs/friday_shortlist_v1.json
+#  - Παίρνει fixtures & team stats από API-Football
+#  - ΔΕΝ χρησιμοποιεί bookmaker odds
+#  - Υπολογίζει:
+#       fair_1, fair_x, fair_2, fair_over
+#       score_draw, score_over
+#  - Χρησιμοποιεί τοπικό cache για /teams/statistics
+#    ώστε να μην σκάει σε rate limits.
+#  - Σώζει: logs/thursday_report_v1.json
 # ======================================================
 
-THURSDAY_REPORT_PATH = "logs/thursday_report_v1.json"
-FRIDAY_REPORT_PATH = "logs/friday_shortlist_v1.json"
+FOOTBALL_API_KEY = os.getenv("FOOTBALL_API_KEY")
+FOOTBALL_BASE_URL = "https://v3.football.api-sports.io"
 
-ODDS_API_KEY = os.getenv("ODDS_API_KEY")
-ODDS_BASE_URL = "https://api.the-odds-api.com/v4/sports"
+# ------------------------------------------------------
+# ΛΙΓΚΕΣ ΠΟΥ ΠΑΡΑΚΟΛΟΥΘΕΙ Ο BOMBAY
+#
+# ΣΗΜΑΝΤΙΚΟ:
+#  - Βάλε εδώ τα ΠΡΑΓΜΑΤΙΚΑ league IDs του API-Football.
+#  - Έχω βάλει placeholders για όσες δεν ξέρω σίγουρα.
+# ------------------------------------------------------
 
-os.makedirs("logs", exist_ok=True)
-
-# ---------------------- BANKROLLS ----------------------
-DRAW_WALLET = 400
-OVER_WALLET = 300
-FANBET_DRAW_WALLET = 100
-FANBET_OVER_WALLET = 100
-KELLY_WALLET = 300
-
-# ---------------------- THRESHOLDS ---------------------
-DRAW_MIN_SCORE = 7.5
-DRAW_MIN_ODDS = 2.70
-
-OVER_MIN_SCORE = 7.5
-OVER_MIN_FAIR = 1.70
-
-KELLY_VALUE_THRESHOLD = 0.15   # +15%
-KELLY_FRACTION = 0.40
-
-FUNBET_DRAW_STAKE_PER_COL = 3.0
-FUNBET_OVER_STAKE_PER_COL = 4.0
-
-# ---------------------- LEAGUES ------------------------
-# Λίγκες για Draw Engine
-DRAW_LEAGUES = {
+# Draw Engine leagues (ονόματα – για reference)
+DRAW_LEAGUE_NAMES = [
     "Ligue 1",
     "Serie A",
     "La Liga",
     "Championship (England)",
-    "Championship",
     "Serie B",
     "Ligue 2",
     "Liga Portugal 2",
     "Swiss Super League",
-}
+]
 
-# Λίγκες για Over Engine
-OVER_LEAGUES = {
+# Over Engine leagues (ονόματα – για reference)
+OVER_LEAGUE_NAMES = [
     "Bundesliga",
     "Eredivisie",
     "Jupiler Pro League",
-    "Superliga",             # Denmark
-    "Superliga (Denmark)",
+    "Superliga",
     "Allsvenskan",
     "Eliteserien",
     "Swiss Super League",
     "Liga Portugal 1",
-}
+]
 
-# league name -> TheOddsAPI sport_key
-LEAGUE_TO_SPORT = {
-    # Big 5
-    "Premier League": "soccer_epl",
-    "La Liga": "soccer_spain_la_liga",
-    "Serie A": "soccer_italy_serie_a",
-    "Bundesliga": "soccer_germany_bundesliga",
-    "Ligue 1": "soccer_france_ligue_1",
+# ΕΔΩ είναι τα IDs που χρησιμοποιεί το script στο API:
+# Μόλις βάλεις τα σωστά νούμερα, είμαστε κομπλέ.
+LEAGUES = [
+    39,      # Premier League (England)       – Χρήσιμο για Kelly / γενική εικόνα
+    140,     # La Liga                        – Draw engine
+    135,     # Serie A                        – Draw engine
+    78,      # Bundesliga                     – Over engine
+    61,      # Ligue 1                        – Draw + Over shared
 
-    # Extra draw leagues (όταν προστεθούν στο Thursday)
-    "Championship": "soccer_england_championship",
-    "Championship (England)": "soccer_england_championship",
-    "Serie B": "soccer_italy_serie_b",
-    "Ligue 2": "soccer_france_ligue_2",
-    "Liga Portugal 2": "soccer_portugal_liga_2",
+    # ---- Draw extra leagues ----
+    40,      # Championship (England)         – Draw engine (ΠΟΛΥ πιθανό είναι 40 στο API-Football)
+    136,     # Serie B                        – Draw engine (συχνά 136, τσέκαρέ το)
+    62,      # Ligue 2                        – Draw engine (συχνά 62, τσέκαρέ το)
+    999201,  # Liga Portugal 2                – TODO: βάλε σωστό ID
+    999202,  # Swiss Super League             – TODO: αν δεν είναι ήδη άλλο ID παραπάνω
 
-    # Extra over leagues
-    "Eredivisie": "soccer_netherlands_eredivisie",
-    "Jupiler Pro League": "soccer_belgium_first_div",
-    "Superliga": "soccer_denmark_superliga",
-    "Superliga (Denmark)": "soccer_denmark_superliga",
-    "Allsvenskan": "soccer_sweden_allsvenskan",
-    "Eliteserien": "soccer_norway_eliteserien",
-    "Liga Portugal 1": "soccer_portugal_primeira_liga",
-    "Swiss Super League": "soccer_switzerland_superleague",
-}
+    # ---- Over extra leagues ----
+    88,      # Eredivisie                     – Over engine (συχνά 88)
+    94,      # Jupiler Pro League             – Over engine (συχνά 94)
+    999203,  # Superliga (Denmark)            – TODO: βάλε σωστό ID
+    113,     # Allsvenskan                    – Over engine (συχνά 113)
+    103,     # Eliteserien                    – Over engine (συχνά 103)
+    999204,  # Liga Portugal 1                – TODO: βάλε σωστό ID
+]
+
+# Από την ημέρα που τρέχει → επόμενες 4 μέρες (συμπερ. σήμερα)
+DAYS_FORWARD = 4
+REPORT_PATH = "logs/thursday_report_v1.json"
+
+# Cache αρχείο για team statistics
+CACHE_FILE = "logs/team_stats_cache_v1.json"
+
+os.makedirs("logs", exist_ok=True)
+
 
 # ------------------------------------------------------
-# Helper logging
+# Helper: logging
 # ------------------------------------------------------
 def log(msg: str):
     print(msg, flush=True)
 
 
 # ------------------------------------------------------
-# Load Thursday data
+# Φόρτωμα core YAML (για sanity check)
 # ------------------------------------------------------
-def load_thursday_fixtures():
-    if not os.path.exists(THURSDAY_REPORT_PATH):
-        raise FileNotFoundError(f"Thursday report not found: {THURSDAY_REPORT_PATH}")
-
-    with open(THURSDAY_REPORT_PATH, "r", encoding="utf-8") as f:
-        data = json.load(f)
-
-    fixtures = data.get("fixtures", [])
-    log(f"Loaded {len(fixtures)} fixtures from Thursday report.")
-    return fixtures
-
-
-# ------------------------------------------------------
-# Odds API helpers
-# ------------------------------------------------------
-def api_get_odds(sport_key: str):
-    """
-    Φέρνει odds για συγκεκριμένο sport_key από TheOddsAPI.
-    """
-    if not ODDS_API_KEY:
-        log("⚠️ ODDS_API_KEY not set, returning empty odds.")
-        return []
-
-    params = {
-        "apiKey": ODDS_API_KEY,
-        "regions": "eu",
-        "markets": "h2h,totals",
-        "oddsFormat": "decimal",
-    }
-    url = f"{ODDS_BASE_URL}/{sport_key}/odds"
-
+def load_core_configs():
     try:
-        res = requests.get(url, params=params, timeout=20)
+        root = Path(__file__).resolve().parent
+        core_path = root / "core" / "bombay_rules_v4.yaml"
+        engine_core_path = root / "engines" / "Bombay_Core_v6.yaml"
+        bookmaker_path = root / "engines" / "bookmaker_logic.yaml"
+
+        if core_path.exists():
+            with open(core_path, "r", encoding="utf-8") as f:
+                yaml.safe_load(f)
+            log("✅ Loaded bombay_rules_v4.yaml")
+
+        if engine_core_path.exists():
+            with open(engine_core_path, "r", encoding="utf-8") as f:
+                yaml.safe_load(f)
+            log("✅ Loaded Bombay_Core_v6.yaml")
+
+        if bookmaker_path.exists():
+            with open(bookmaker_path, "r", encoding="utf-8") as f:
+                yaml.safe_load(f)
+            log("✅ Loaded bookmaker_logic.yaml")
+
     except Exception as e:
-        log(f"⚠️ Error requesting odds for {sport_key}: {e}")
+        log(f"⚠️ Skipped loading core configs: {e}")
+
+
+# ------------------------------------------------------
+# Season helper
+# ------------------------------------------------------
+def get_current_season(day: datetime) -> str:
+    """
+    API-Football χρησιμοποιεί ως season το έτος έναρξης της σεζόν.
+    Π.χ. σεζόν 2025-26 → season = 2025.
+
+    Λογική:
+    - Ιανουάριος–Ιούνιος  → season = previous year
+    - Ιούλιος–Δεκέμβριος → season = current year
+    """
+    if day.month >= 7:
+        year = day.year
+    else:
+        year = day.year - 1
+    return str(year)
+
+
+# ------------------------------------------------------
+# Cache helpers
+# ------------------------------------------------------
+def load_stats_cache() -> dict:
+    if not os.path.exists(CACHE_FILE):
+        log("ℹ️ No existing team stats cache, starting fresh.")
+        return {}
+    try:
+        with open(CACHE_FILE, "r", encoding="utf-8") as f:
+            cache = json.load(f)
+        log(
+            f"ℹ️ Loaded team stats cache from {CACHE_FILE} "
+            f"({len(cache)} entries)"
+        )
+        return cache
+    except Exception as e:
+        log(f"⚠️ Failed to load cache {CACHE_FILE}: {e}")
+        return {}
+
+
+def save_stats_cache(cache: dict):
+    try:
+        with open(CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(cache, f, ensure_ascii=False)
+        log(f"💾 Team stats cache saved ({len(cache)} entries) → {CACHE_FILE}")
+    except Exception as e:
+        log(f"⚠️ Failed to save cache {CACHE_FILE}: {e}")
+
+
+# Global in-memory cache (γεμίζει από το αρχείο στην αρχή)
+_team_stats_cache = {}
+
+
+def cache_key(league_id: int, team_id: int, season: str) -> str:
+    return f"{season}:{league_id}:{team_id}"
+
+
+# ------------------------------------------------------
+# API-Football helpers
+# ------------------------------------------------------
+def api_get(path: str, params: dict) -> list:
+    headers = {"x-apisports-key": FOOTBALL_API_KEY}
+    url = f"{FOOTBALL_BASE_URL}{path}"
+    try:
+        res = requests.get(url, headers=headers, params=params, timeout=20)
+    except Exception as e:
+        log(f"⚠️ Request error on {path}: {e}")
         return []
 
     if res.status_code != 200:
-        log(f"⚠️ Odds API error {res.status_code} for {sport_key}: {res.text[:200]}")
+        log(f"⚠️ API error {res.status_code} on {path} with params {params}")
+        try:
+            log(f"⚠️ Body: {res.text[:300]}")
+        except Exception:
+            pass
         return []
 
     try:
-        return res.json()
+        data = res.json()
     except Exception as e:
-        log(f"⚠️ JSON decode error for {sport_key}: {e}")
+        log(f"⚠️ JSON decode error on {path}: {e}")
         return []
 
+    # Αν το API έχει errors πεδία, τα γράφουμε στα logs
+    errors = data.get("errors") or data.get("error")
+    if errors:
+        log(f"⚠️ API errors on {path}: {errors}")
 
-def normalize_team(name: str) -> str:
-    """
-    Απλοποιημένο normalizer για να ταιριάζουμε ονόματα ομάδων
-    μεταξύ API-Football και TheOddsAPI.
-    """
-    if not name:
-        return ""
-    s = name.lower()
-    # πετάμε κλασικά suffix (fc, cf, ac κλπ)
-    s = re.sub(r"\b(fc|cf|afc|cfc|ac|sc|bk)\b", "", s)
-    # αφαιρούμε σημεία στίξης / διπλά κενά
-    s = re.sub(r"[^a-z0-9]+", " ", s)
-    s = re.sub(r"\s+", " ", s)
-    return s.strip()
+    response = data.get("response", [])
 
-
-def build_odds_index(fixtures):
-    """
-    Χτυπάει TheOddsAPI μόνο για τα leagues που χρειαζόμαστε
-    και χτίζει index:
-        (norm_home, norm_away) -> {
-            "odds_home", "odds_draw", "odds_away", "odds_over_2_5"
-        }
-    """
-    leagues_used = sorted(
-        {f["league"] for f in fixtures if f.get("league") in LEAGUE_TO_SPORT}
-    )
-    log(f"Leagues in Thursday report (with odds support): {leagues_used}")
-
-    odds_index = {}
-    total_events = 0
-
-    for league_name in leagues_used:
-        sport_key = LEAGUE_TO_SPORT[league_name]
-        events = api_get_odds(sport_key)
-        log(f"Fetched {len(events)} odds events for {league_name} ({sport_key})")
-        total_events += len(events)
-
-        for ev in events:
-            home_raw = ev.get("home_team", "")
-            away_raw = ev.get("away_team", "")
-            home = normalize_team(home_raw)
-            away = normalize_team(away_raw)
-            if not home or not away:
-                continue
-
-            best_home = None
-            best_draw = None
-            best_away = None
-            best_over = None
-
-            for b in ev.get("bookmakers", []):
-                for m in b.get("markets", []):
-                    key = m.get("key")
-
-                    # 1X2
-                    if key == "h2h":
-                        for o in m.get("outcomes", []):
-                            name_raw = o.get("name", "")
-                            name_norm = normalize_team(name_raw)
-                            price = float(o.get("price", 0) or 0)
-                            if price <= 0:
-                                continue
-
-                            if name_norm == home:
-                                if best_home is None or price > best_home:
-                                    best_home = price
-                            elif name_norm == away:
-                                if best_away is None or price > best_away:
-                                    best_away = price
-                            elif name_raw.lower() == "draw":
-                                if best_draw is None or price > best_draw:
-                                    best_draw = price
-
-                    # Over 2.5
-                    elif key == "totals":
-                        for o in m.get("outcomes", []):
-                            name = o.get("name", "").lower()
-                            price = float(o.get("price", 0) or 0)
-                            if price <= 0:
-                                continue
-                            if "over" in name and "2.5" in name:
-                                if best_over is None or price > best_over:
-                                    best_over = price
-
-            odds_index[(home, away)] = {
-                "odds_home": best_home,
-                "odds_draw": best_draw,
-                "odds_away": best_away,
-                "odds_over_2_5": best_over,
-            }
-
-    log(
-        f"Built odds index for {len(odds_index)} (home, away) pairs. "
-        f"Total events fetched: {total_events}"
-    )
-    return odds_index
-
-
-# ------------------------------------------------------
-# Pick generators
-# ------------------------------------------------------
-def flat_stake(score: float) -> int:
-    if score >= 8.0:
-        return 20
-    elif score >= 7.5:
-        return 15
-    return 0
-
-
-def generate_picks(fixtures, odds_index):
-    draw_singles = []
-    over_singles = []
-    kelly_picks = []
-
-    matched_count = 0
-
-    for f in fixtures:
-        league = f.get("league", "")
-        match_label = f.get("match", "")
-        fair_1 = f.get("fair_1")
-        fair_x = f.get("fair_x")
-        fair_2 = f.get("fair_2")
-        fair_over = f.get("fair_over")
-        score_draw = f.get("score_draw", 0.0)
-        score_over = f.get("score_over", 0.0)
-
+    # Ειδικά για /teams/statistics κάνουμε έξτρα log όταν είναι άδειο
+    if path == "/teams/statistics" and not response:
+        log(f"⚠️ Empty team statistics response for params: {params}")
         try:
-            home_name, away_name = [x.strip() for x in match_label.split("-")]
-        except ValueError:
-            # περίεργο format αγώνα
-            continue
+            log(f"⚠️ Raw body snippet: {json.dumps(data)[:300]}")
+        except Exception:
+            pass
 
-        home_norm = normalize_team(home_name)
-        away_norm = normalize_team(away_name)
-
-        odds = odds_index.get((home_norm, away_norm)) or odds_index.get(
-            (away_norm, home_norm)
-        )
-        if odds:
-            matched_count += 1
-
-        odds_home = odds.get("odds_home") if odds else None
-        odds_x = odds.get("odds_draw") if odds else None
-        odds_away = odds.get("odds_away") if odds else None
-        odds_over = odds.get("odds_over_2_5") if odds else None
-
-        # -------- DRAW SINGLES (μόνο από draw leagues) --------
-        if (
-            league in DRAW_LEAGUES
-            and fair_x
-            and odds_x
-            and odds_x >= DRAW_MIN_ODDS
-            and score_draw >= DRAW_MIN_SCORE
-        ):
-            diff_x = (odds_x - fair_x) / fair_x
-            stake = flat_stake(score_draw)
-            if stake > 0:
-                draw_singles.append(
-                    {
-                        "match": match_label,
-                        "league": league,
-                        "odds": round(odds_x, 2),
-                        "fair": round(fair_x, 2),
-                        "diff": f"{diff_x:+.0%}",
-                        "score": round(score_draw, 2),
-                        "stake": stake,
-                        "wallet": "Draw",
-                    }
-                )
-
-        # -------- OVER SINGLES (μόνο από over leagues) --------
-        if (
-            league in OVER_LEAGUES
-            and fair_over
-            and odds_over
-            and fair_over >= OVER_MIN_FAIR
-            and score_over >= OVER_MIN_SCORE
-        ):
-            diff_over = (odds_over - fair_over) / fair_over
-            stake = flat_stake(score_over)
-            if stake > 0:
-                over_singles.append(
-                    {
-                        "match": match_label,
-                        "league": league,
-                        "odds": round(odds_over, 2),
-                        "fair": round(fair_over, 2),
-                        "diff": f"{diff_over:+.0%}",
-                        "score": round(score_over, 2),
-                        "stake": stake,
-                        "wallet": "Over",
-                    }
-                )
-
-        # -------- KELLY (1 / X / 2 / OVER) --------
-        def maybe_add_kelly(market_label, fair, offered):
-            if not fair or not offered:
-                return
-            diff = (offered - fair) / fair
-            if diff < KELLY_VALUE_THRESHOLD:
-                return
-
-            p = 1.0 / fair
-            b = offered - 1.0
-            q = 1.0 - p
-            k_fraction = (b * p - q) / b
-            if k_fraction <= 0:
-                return
-            stake = round(KELLY_WALLET * k_fraction * KELLY_FRACTION, 2)
-            if stake <= 0:
-                return
-
-            kelly_picks.append(
-                {
-                    "match": match_label,
-                    "league": league,
-                    "market": market_label,
-                    "fair": round(fair, 2),
-                    "offered": round(offered, 2),
-                    "diff": f"{diff:+.0%}",
-                    "kelly%": f"{KELLY_FRACTION*100:.0f}%",
-                    "stake (€)": stake,
-                }
-            )
-
-        # Kelly σε ΟΛΕΣ τις λίγκες όπου υπάρχουν odds
-        if fair_1 and odds_home:
-            maybe_add_kelly("Home", fair_1, odds_home)
-        if fair_x and odds_x:
-            maybe_add_kelly("Draw", fair_x, odds_x)
-        if fair_2 and odds_away:
-            maybe_add_kelly("Away", fair_2, odds_away)
-        if fair_over and odds_over:
-            maybe_add_kelly("Over 2.5", fair_over, odds_over)
-
-    # Top 10 ανά κατηγορία
-    draw_singles = sorted(
-        draw_singles, key=lambda x: x["score"], reverse=True
-    )[:10]
-
-    over_singles = sorted(
-        over_singles, key=lambda x: x["score"], reverse=True
-    )[:10]
-
-    kelly_picks = sorted(
-        kelly_picks, key=lambda x: x["stake (€)"], reverse=True
-    )[:10]
-
-    log(
-        f"Matched odds for {matched_count} / {len(fixtures)} fixtures. "
-        f"Draw singles: {len(draw_singles)}, Over singles: {len(over_singles)}, "
-        f"Kelly picks: {len(kelly_picks)}"
-    )
-
-    return draw_singles, over_singles, kelly_picks
+    return response
 
 
-# ------------------------------------------------------
-# FunBet systems
-# ------------------------------------------------------
-def build_funbet_draw(draw_singles):
+def fetch_fixtures(date_from: str, date_to: str, season: str) -> list:
+    fixtures = []
+    for league_id in LEAGUES:
+        params = {
+            "league": league_id,
+            "season": season,
+            "from": date_from,
+            "to": date_to,
+        }
+        resp = api_get("/fixtures", params)
+        log(f"✅ Fixtures: league {league_id} → {len(resp)} matches")
+        fixtures.extend(resp)
+    return fixtures
+
+
+def fetch_team_stats(league_id: int, team_id: int, season: str) -> dict:
     """
-    Παίρνει τις καλύτερες ισοπαλίες και φτιάχνει σύστημα 3-4-5 ή 4-5-6.
+    - Πρώτα κοιτάμε local cache (μνήμη & JSON).
+    - Αν δεν υπάρχει, κάνουμε API call με μικρό delay
+      για να μη σκάσουμε στο per-minute limit.
     """
-    sorted_draws = sorted(draw_singles, key=lambda x: x["score"], reverse=True)
-    picks = sorted_draws[:6]  # max 6
+    key = cache_key(league_id, team_id, season)
 
-    n = len(picks)
-    system = None
-    columns = 0
+    if key in _team_stats_cache:
+        return _team_stats_cache[key]
 
-    if n >= 6:
-        sizes = [4, 5, 6]
-        system = "4-5-6"
-    elif n == 5:
-        sizes = [3, 4, 5]
-        system = "3-4-5"
-    else:
-        sizes = []
+    # Μικρό delay ΜΟΝΟ όταν χτυπάμε API
+    time.sleep(0.5)
 
-    if sizes:
-        for r in sizes:
-            for _ in itertools.combinations(range(n), r):
-                columns += 1
-
-    total_stake = columns * FUNBET_DRAW_STAKE_PER_COL
-
-    return {
-        "picks": picks,
-        "system": system,
-        "columns": columns,
-        "stake_per_column": FUNBET_DRAW_STAKE_PER_COL,
-        "total_stake": total_stake,
+    params = {
+        "league": league_id,
+        "season": season,
+        "team": team_id,
     }
+    resp = api_get("/teams/statistics", params)
+    if not resp:
+        _team_stats_cache[key] = {}
+        return {}
+
+    stats = resp[0] if isinstance(resp, list) else resp
+    _team_stats_cache[key] = stats
+    return stats
 
 
-def build_funbet_over(over_singles):
+# ------------------------------------------------------
+#  Fair odds & score helpers
+# ------------------------------------------------------
+def clamp(x, low, high):
+    return max(low, min(high, x))
+
+
+def compute_probabilities_and_scores(home_stats: dict, away_stats: dict):
     """
-    Σύστημα 2-from-X για τα καλύτερα Over.
+    Απλοποιημένο μοντέλο fair πιθανότητας:
+    - χρησιμοποιεί avg goals for/against
+    - εκτιμά p_home, p_draw, p_away, p_over
+    - επιστρέφει fair odds + scores (0–10)
     """
-    sorted_overs = sorted(over_singles, key=lambda x: x["score"], reverse=True)
-    picks = sorted_overs[:6]  # μέχρι 6
 
-    n = len(picks)
-    if n < 3:
-        columns = 0
+    try:
+        gf_home = float(home_stats["goals"]["for"]["average"]["total"])
+        ga_home = float(home_stats["goals"]["against"]["average"]["total"])
+        gf_away = float(away_stats["goals"]["for"]["average"]["total"])
+        ga_away = float(away_stats["goals"]["against"]["average"]["total"])
+    except Exception:
+        # fallback σε ουδέτερα values
+        gf_home = 1.4
+        ga_home = 1.1
+        gf_away = 1.2
+        ga_away = 1.3
+
+    # Ratings (attack - defence)
+    rating_home = gf_home - ga_home
+    rating_away = gf_away - ga_away
+    diff = rating_home - rating_away  # home - away
+
+    # --- Draw probability ---
+    base_draw = 0.26
+    balance_factor = clamp(1.0 - abs(diff), 0.0, 1.0)  # ισορροπία
+    p_draw = base_draw + 0.06 * balance_factor          # ~0.26–0.32
+
+    # --- Home / Away probability ---
+    import math
+
+    if diff >= 0:
+        r = 1 / (1 + math.exp(-diff))
     else:
-        columns = 0
-        for _ in itertools.combinations(range(n), 2):
-            columns += 1
+        r = 1 - (1 / (1 + math.exp(diff)))
 
-    total_stake = columns * FUNBET_OVER_STAKE_PER_COL
+    remaining = max(0.0, 1.0 - p_draw)
+    p_home = remaining * r
+    p_away = remaining * (1.0 - r)
 
-    return {
-        "picks": picks,
-        "system": f"2-from-{n}" if n >= 3 else None,
-        "columns": columns,
-        "stake_per_column": FUNBET_OVER_STAKE_PER_COL,
-        "total_stake": total_stake,
-    }
+    # normalize
+    total = p_home + p_draw + p_away
+    if total > 0:
+        p_home /= total
+        p_draw /= total
+        p_away /= total
 
+    # --- Over 2.5 probability ---
+    total_goals_level = gf_home + gf_away
+    if total_goals_level <= 2.2:
+        p_over = 0.48
+    elif total_goals_level <= 2.5:
+        p_over = 0.55
+    elif total_goals_level <= 2.8:
+        p_over = 0.62
+    else:
+        p_over = 0.68
 
-# ------------------------------------------------------
-# Bankroll summary
-# ------------------------------------------------------
-def bankroll_summary(draw_singles, over_singles, funbet_draw, funbet_over, kelly_picks):
-    draw_spent = sum(p["stake"] for p in draw_singles)
-    over_spent = sum(p["stake"] for p in over_singles)
-    funbet_draw_spent = funbet_draw.get("total_stake", 0) or 0
-    funbet_over_spent = funbet_over.get("total_stake", 0) or 0
-    kelly_spent = sum(p["stake (€)"] for p in kelly_picks)
+    # --- Fair odds (χωρίς γκανιότα) ---
+    def fair_from_prob(p):
+        p = clamp(p, 0.05, 0.90)
+        return round(1.0 / p, 2)
 
-    return [
-        {
-            "Wallet": "Draw Singles",
-            "Before": f"{DRAW_WALLET}€",
-            "After": f"{DRAW_WALLET - draw_spent:.2f}€",
-            "Open Bets": f"{draw_spent:.2f}€",
-        },
-        {
-            "Wallet": "Over Singles",
-            "Before": f"{OVER_WALLET}€",
-            "After": f"{OVER_WALLET - over_spent:.2f}€",
-            "Open Bets": f"{over_spent:.2f}€",
-        },
-        {
-            "Wallet": "FanBet Draw",
-            "Before": f"{FANBET_DRAW_WALLET}€",
-            "After": f"{FANBET_DRAW_WALLET - funbet_draw_spent:.2f}€",
-            "Open Bets": f"{funbet_draw_spent:.2f}€",
-        },
-        {
-            "Wallet": "FunBet Over",
-            "Before": f"{FANBET_OVER_WALLET}€",
-            "After": f"{FANBET_OVER_WALLET - funbet_over_spent:.2f}€",
-            "Open Bets": f"{funbet_over_spent:.2f}€",
-        },
-        {
-            "Wallet": "Kelly",
-            "Before": f"{KELLY_WALLET}€",
-            "After": f"{KELLY_WALLET - kelly_spent:.2f}€",
-            "Open Bets": f"{kelly_spent:.2f}€",
-        },
-    ]
+    fair_1 = fair_from_prob(p_home)
+    fair_x = fair_from_prob(p_draw)
+    fair_2 = fair_from_prob(p_away)
+    fair_over = fair_from_prob(p_over)
+
+    # --- Scores (0–10) ---
+    score_draw_raw = 5.0 + (p_draw - 0.22) / 0.12 * 4.0  # ~6–10
+    score_draw = round(clamp(score_draw_raw, 0.0, 10.0), 2)
+
+    score_over_raw = 5.5 + (p_over - 0.50) / 0.18 * 4.0  # ~6–10
+    score_over = round(clamp(score_over_raw, 0.0, 10.0), 2)
+
+    return fair_1, fair_x, fair_2, fair_over, score_draw, score_over
 
 
 # ------------------------------------------------------
 # MAIN
 # ------------------------------------------------------
 def main():
-    log("🎯 Running Friday Shortlist (v1)...")
+    global _team_stats_cache
 
-    fixtures = load_thursday_fixtures()
-    odds_index = build_odds_index(fixtures)
+    if not FOOTBALL_API_KEY:
+        raise RuntimeError("FOOTBALL_API_KEY is not set in environment.")
 
-    draw_singles, over_singles, kelly_picks = generate_picks(fixtures, odds_index)
-    funbet_draw = build_funbet_draw(draw_singles)
-    funbet_over = build_funbet_over(over_singles)
-    banks = bankroll_summary(draw_singles, over_singles, funbet_draw, funbet_over, kelly_picks)
+    load_core_configs()
 
-    report = {
-        "timestamp": datetime.utcnow().isoformat(),
-        "draw_singles": draw_singles,
-        "over_singles": over_singles,
-        "funbet_draw": funbet_draw,
-        "funbet_over": funbet_over,
-        "fraction_kelly": {"picks": kelly_picks},
-        "bankroll_status": banks,
+    # Φόρτωμα cache στην μνήμη
+    _team_stats_cache = load_stats_cache()
+
+    # 1) Primary window με βάση το server time
+    today = datetime.utcnow()
+    season_primary = get_current_season(today)
+    date_from = today.strftime("%Y-%m-%d")
+    date_to = (today + timedelta(days=DAYS_FORWARD)).strftime("%Y-%m-%d")
+
+    log(f"📅 Primary window: {date_from} to {date_to} (season {season_primary})")
+    fixtures_raw = fetch_fixtures(date_from, date_to, season_primary)
+
+    # 2) Αν δεν βρούμε fixtures, κάνουμε fallback ένα έτος πίσω
+    if not fixtures_raw:
+        fallback_day = today - timedelta(days=365)
+        season_fallback = get_current_season(fallback_day)
+        date_from = fallback_day.strftime("%Y-%m-%d")
+        date_to = (fallback_day + timedelta(days=DAYS_FORWARD)).strftime("%Y-%m-%d")
+        log(
+            f"⚠️ No fixtures in primary window. "
+            f"Falling back to {date_from} to {date_to} (season {season_fallback})"
+        )
+        fixtures_raw = fetch_fixtures(date_from, date_to, season_fallback)
+        season_used = season_fallback
+    else:
+        season_used = season_primary
+
+    processed = []
+
+    for f in fixtures_raw:
+        try:
+            league_name = f["league"]["name"]
+            league_id = int(f["league"]["id"])
+            home_team = f["teams"]["home"]["name"]
+            away_team = f["teams"]["away"]["name"]
+            home_id = int(f["teams"]["home"]["id"])
+            away_id = int(f["teams"]["away"]["id"])
+
+            match_label = f"{home_team} - {away_team}"
+
+            # Fetch team statistics (cached + API)
+            home_stats = fetch_team_stats(league_id, home_id, season_used)
+            away_stats = fetch_team_stats(league_id, away_id, season_used)
+
+            if not home_stats or not away_stats:
+                log(f"⚠️ Missing stats for {match_label}, skipping.")
+                continue
+
+            (
+                fair_1,
+                fair_x,
+                fair_2,
+                fair_over,
+                score_draw,
+                score_over,
+            ) = compute_probabilities_and_scores(home_stats, away_stats)
+
+            processed.append(
+                {
+                    "league": league_name,
+                    "match": match_label,
+                    "fair_1": fair_1,
+                    "fair_x": fair_x,
+                    "fair_2": fair_2,
+                    "fair_over": fair_over,
+                    "score_draw": score_draw,
+                    "score_over": score_over,
+                }
+            )
+
+        except Exception as e:
+            log(f"⚠️ Error processing fixture: {e}")
+
+    output = {
+        "generated_at": datetime.utcnow().isoformat(),
+        "source_window": {
+            "date_from": date_from,
+            "date_to": date_to,
+            "season": season_used,
+        },
+        "fixtures_analyzed": len(processed),
+        "fixtures": processed,
     }
 
-    with open(FRIDAY_REPORT_PATH, "w", encoding="utf-8") as f:
-        json.dump(report, f, ensure_ascii=False, indent=2)
+    with open(REPORT_PATH, "w", encoding="utf-8") as f:
+        json.dump(output, f, indent=2, ensure_ascii=False)
 
-    log(f"✅ Friday shortlist report saved: {FRIDAY_REPORT_PATH}")
-    log(
-        f"Summary → Draw singles: {len(draw_singles)}, "
-        f"Over singles: {len(over_singles)}, "
-        f"Kelly picks: {len(kelly_picks)}, "
-        f"FunBet Draw cols: {funbet_draw.get('columns', 0)}, "
-        f"FunBet Over cols: {funbet_over.get('columns', 0)}"
-    )
+    # Αποθήκευση cache στο τέλος
+    save_stats_cache(_team_stats_cache)
+
+    log(f"✅ Thursday analysis complete — {len(processed)} fixtures analyzed.")
+    log(f"📝 Report saved at {REPORT_PATH}")
+
+    # Sample output για να το βλέπεις στα logs (μια μικρή προεπισκόπηση)
+    if processed:
+        sample = processed[:3]
+        log("📌 Sample fixtures from report:")
+        log(json.dumps(sample, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":
