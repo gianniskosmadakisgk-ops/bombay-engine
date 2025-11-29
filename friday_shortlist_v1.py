@@ -137,9 +137,14 @@ def build_odds_index(fixtures):
     """
     Χτυπάει TheOddsAPI μόνο για τα leagues που χρειαζόμαστε
     και χτίζει index:
-        (norm_home, norm_away) -> { "draw": price, "over_2_5": price }
+        (norm_home, norm_away) ->
+          {
+            "odds_home":      price,
+            "odds_draw":      price,
+            "odds_away":      price,
+            "odds_over_2_5":  price,
+          }
     """
-    # leagues που εμφανίζονται στα fixtures και έχουμε mapping σε sport_key
     leagues_used = sorted({f["league"] for f in fixtures if f.get("league") in LEAGUE_TO_SPORT})
     log(f"Leagues in Thursday report (with odds support): {leagues_used}")
 
@@ -153,12 +158,16 @@ def build_odds_index(fixtures):
         total_events += len(events)
 
         for ev in events:
-            home = normalize_team(ev.get("home_team", ""))
-            away = normalize_team(ev.get("away_team", ""))
+            home_raw = ev.get("home_team", "")
+            away_raw = ev.get("away_team", "")
+            home = normalize_team(home_raw)
+            away = normalize_team(away_raw)
             if not home or not away:
                 continue
 
+            best_home = None
             best_draw = None
+            best_away = None
             best_over = None
 
             for b in ev.get("bookmakers", []):
@@ -166,23 +175,43 @@ def build_odds_index(fixtures):
                     key = m.get("key")
                     if key == "h2h":
                         for o in m.get("outcomes", []):
-                            if o.get("name", "").lower() == "draw":
-                                price = float(o.get("price", 0))
-                                if price > 0:
-                                    if best_draw is None or price > best_draw:
-                                        best_draw = price
+                            name_raw = o.get("name", "")
+                            name_norm = normalize_team(name_raw)
+                            try:
+                                price = float(o.get("price", 0) or 0)
+                            except Exception:
+                                continue
+                            if price <= 0:
+                                continue
+
+                            # home / away / draw
+                            if name_norm == home:
+                                if best_home is None or price > best_home:
+                                    best_home = price
+                            elif name_norm == away:
+                                if best_away is None or price > best_away:
+                                    best_away = price
+                            elif name_raw.strip().lower() == "draw":
+                                if best_draw is None or price > best_draw:
+                                    best_draw = price
 
                     elif key == "totals":
                         for o in m.get("outcomes", []):
                             name = o.get("name", "").lower()
                             if "over" in name and "2.5" in name:
-                                price = float(o.get("price", 0))
-                                if price > 0:
-                                    if best_over is None or price > best_over:
-                                        best_over = price
+                                try:
+                                    price = float(o.get("price", 0) or 0)
+                                except Exception:
+                                    continue
+                                if price <= 0:
+                                    continue
+                                if best_over is None or price > best_over:
+                                    best_over = price
 
             odds_index[(home, away)] = {
+                "odds_home": best_home,
                 "odds_draw": best_draw,
+                "odds_away": best_away,
                 "odds_over_2_5": best_over,
             }
 
@@ -231,7 +260,9 @@ def generate_picks(fixtures, odds_index):
         if odds:
             matched_count += 1
 
+        odds_home = odds.get("odds_home") if odds else None
         odds_x = odds.get("odds_draw") if odds else None
+        odds_away = odds.get("odds_away") if odds else None
         odds_over = odds.get("odds_over_2_5") if odds else None
 
         # -------- DRAW SINGLES --------
@@ -294,15 +325,15 @@ def generate_picks(fixtures, odds_index):
                 "stake (€)": stake,
             })
 
-        # Kelly για 1 / X / 2 / Over (αν έχουμε odds — εδώ έχουμε μόνο draw & over από odds API)
+        # Home / Draw / Away / Over 2.5
+        if fair_1 and odds_home:
+            maybe_add_kelly("Home", fair_1, odds_home)
         if fair_x and odds_x:
             maybe_add_kelly("Draw", fair_x, odds_x)
+        if fair_2 and odds_away:
+            maybe_add_kelly("Away", fair_2, odds_away)
         if fair_over and odds_over:
             maybe_add_kelly("Over 2.5", fair_over, odds_over)
-
-        # Σημείωση: Αν αργότερα προσθέσουμε odds για 1 & 2, απλά θα καλέσουμε:
-        # maybe_add_kelly("Home", fair_1, odds_home)
-        # maybe_add_kelly("Away", fair_2, odds_away)
 
     # Top 10 Kelly
     kelly_picks = sorted(
@@ -324,7 +355,6 @@ def build_funbet_draw(draw_singles):
     """
     Παίρνει τις καλύτερες ισοπαλίες και φτιάχνει σύστημα 3-4-5 ή 4-5-6.
     """
-    # Κρατάμε τις καλύτερες ανά score
     sorted_draws = sorted(draw_singles, key=lambda x: x["score"], reverse=True)
     picks = sorted_draws[:6]  # max 6
 
@@ -333,11 +363,9 @@ def build_funbet_draw(draw_singles):
     columns = 0
 
     if n >= 6:
-        # 4-5-6 πάνω σε 6 picks
         sizes = [4, 5, 6]
         system = "4-5-6"
     elif n == 5:
-        # 3-4-5 πάνω σε 5 picks
         sizes = [3, 4, 5]
         system = "3-4-5"
     else:
@@ -370,7 +398,6 @@ def build_funbet_over(over_singles):
     if n < 3:
         columns = 0
     else:
-        # όλες οι δυάδες
         columns = 0
         for _ in itertools.combinations(range(n), 2):
             columns += 1
