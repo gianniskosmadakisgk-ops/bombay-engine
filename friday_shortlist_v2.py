@@ -22,11 +22,17 @@ import requests
 #  - Fallback:
 #       * Αν δεν βρεθούν odds για έναν αγώνα, τα singles
 #         μπορούν να βγουν με fair_odd (χωρίς Kelly)
-#  - Σώζει: logs/friday_shortlist_v2.json
+#  - Ιστορικό:
+#       * Κάθε Friday run προσθέτει ένα snapshot στο
+#         logs/bets_history_v2.json, μαζί με week_id.
+#  - Σώζει:
+#       * logs/friday_shortlist_v2.json
+#       * logs/bets_history_v2.json
 # ======================================================
 
 THURSDAY_REPORT_PATH = "logs/thursday_report_v1.json"
 FRIDAY_REPORT_PATH = "logs/friday_shortlist_v2.json"
+HISTORY_PATH = "logs/bets_history_v2.json"
 
 ODDS_API_KEY = os.getenv("ODDS_API_KEY")
 ODDS_BASE_URL = "https://api.the-odds-api.com/v4/sports"
@@ -47,10 +53,8 @@ DRAW_MIN_ODDS = 2.70
 OVER_MIN_SCORE = 7.5
 OVER_MIN_FAIR = 1.70
 
-# Kelly config
-KELLY_VALUE_THRESHOLD = 0.15     # +15% value vs fair
-KELLY_FRACTION = 0.40            # παίζουμε 40% του full Kelly
-KELLY_MIN_PROB = 0.25            # min probability 25% (1/fair >= 0.25)
+KELLY_VALUE_THRESHOLD = 0.15   # +15%
+KELLY_FRACTION = 0.40          # παίζουμε 40% του full Kelly
 
 FUNBET_DRAW_STAKE_PER_COL = 3.0
 FUNBET_OVER_STAKE_PER_COL = 4.0
@@ -87,7 +91,8 @@ LEAGUE_TO_SPORT = {
     "Serie A": "soccer_italy_serie_a",
     "Bundesliga": "soccer_germany_bundesliga",
     "Ligue 1": "soccer_france_ligue_one",
-    # εδώ προσθέτεις κι άλλες λίγκες αν τις ανοίξουμε αργότερα
+    # Αν προσθέσεις κι άλλες λίγκες που καλύπτει το TheOddsAPI,
+    # τις βάζεις εδώ.
 }
 
 # ------------------------------------------------------
@@ -301,9 +306,6 @@ def generate_picks(fixtures, odds_index):
         # --------------------------------------------------
         if league in DRAW_LEAGUES and fair_x and score_draw >= DRAW_MIN_SCORE:
 
-            # Αν υπάρχουν πραγματικά odds → τα χρησιμοποιούμε
-            # Αλλιώς fallback: χρησιμοποιούμε fair_x σαν "εκτιμώμενη" απόδοση,
-            # χωρίς value diff και χωρίς Kelly.
             if odds_x:
                 market_odds_x = float(odds_x)
                 diff_x = (market_odds_x - fair_x) / fair_x
@@ -328,7 +330,7 @@ def generate_picks(fixtures, odds_index):
                         "value_raw": round(value_raw, 4),
                         "score": round(score_draw, 2),
                         "stake": stake,
-                        "wallet": "Draw",
+                        "wallet": "Draw Singles",
                         "odds_source": odds_source,
                     })
 
@@ -361,82 +363,57 @@ def generate_picks(fixtures, odds_index):
                         "value_raw": round(value_raw, 4),
                         "score": round(score_over, 2),
                         "stake": stake,
-                        "wallet": "Over",
+                        "wallet": "Over Singles",
                         "odds_source": odds_source,
                     })
 
         # --------------------------------------------------
-        # KELLY (1 / X / 2 / Over 2.5)
-        #   - υποψήφιες: Home, Draw, Away, Over2.5
-        #   - threshold value: +15%
-        #   - min probability: 25%
-        #   - μόνο 1 αγορά ανά ματς (παίρνουμε την καλύτερη)
+        # KELLY (1 / X / 2 / Over 2.5) – ΜΟΝΟ με πραγματικές αποδόσεις
         # --------------------------------------------------
-        kelly_candidates = []
-
-        def eval_kelly(market_label, fair, offered):
+        def maybe_add_kelly(market_label, fair, offered):
             if not fair or not offered:
                 return
-            fair_f = float(fair)
-            offered_f = float(offered)
-            if fair_f <= 0 or offered_f <= 1.0:
-                return
-
-            # πιθανότητα
-            p = 1.0 / fair_f
-            if p < KELLY_MIN_PROB:
-                return
-
-            diff = (offered_f - fair_f) / fair_f
+            fair = float(fair)
+            offered = float(offered)
+            diff = (offered - fair) / fair
             if diff < KELLY_VALUE_THRESHOLD:
                 return
 
-            b = offered_f - 1.0
+            p = 1.0 / fair
+            b = offered - 1.0
             q = 1.0 - p
             if b <= 0:
                 return
-
-            k_fraction_full = (b * p - q) / b
-            if k_fraction_full <= 0:
+            k_fraction = (b * p - q) / b
+            if k_fraction <= 0:
                 return
 
-            k_fraction_play = k_fraction_full * KELLY_FRACTION
-            if k_fraction_play <= 0:
-                return
-
-            stake = round(KELLY_WALLET * k_fraction_play, 2)
+            stake = round(KELLY_WALLET * k_fraction * KELLY_FRACTION, 2)
             if stake <= 0:
                 return
 
-            kelly_candidates.append({
+            kelly_picks.append({
                 "match": match_label,
                 "league": league,
                 "market": market_label,
-                "fair": round(fair_f, 2),
-                "offered": round(offered_f, 2),
+                "fair": round(fair, 2),
+                "offered": round(offered, 2),
                 "diff": f"{diff:+.0%}",
-                "prob": round(p, 3),
-                "kelly_full": round(k_fraction_full, 3),
-                "kelly_play": f"{KELLY_FRACTION*100:.0f}%",
+                "kelly%": f"{KELLY_FRACTION*100:.0f}%",
                 "stake (€)": stake,
             })
 
-        # δοκιμάζουμε όλες τις αγορές που έχουν real odds
+        # Kelly μόνο όταν έχουμε πραγματικά odds:
         if odds_home and fair_1:
-            eval_kelly("Home", fair_1, odds_home)
+            maybe_add_kelly("Home", fair_1, odds_home)
         if odds_x and fair_x:
-            eval_kelly("Draw", fair_x, odds_x)
+            maybe_add_kelly("Draw", fair_x, odds_x)
         if odds_away and fair_2:
-            eval_kelly("Away", fair_2, odds_away)
+            maybe_add_kelly("Away", fair_2, odds_away)
         if odds_over and fair_over:
-            eval_kelly("Over 2.5", fair_over, odds_over)
+            maybe_add_kelly("Over 2.5", fair_over, odds_over)
 
-        # μόνο ένα Kelly bet ανά ματς: κρατάμε αυτό με το μεγαλύτερο stake
-        if kelly_candidates:
-            best_pick = max(kelly_candidates, key=lambda x: x["stake (€)"])
-            kelly_picks.append(best_pick)
-
-    # Limit top 10
+    # Limit top 10 βάσει score + value
     draw_singles = sorted(
         draw_singles,
         key=lambda x: (x["score"], x["value_raw"]),
@@ -455,7 +432,7 @@ def generate_picks(fixtures, odds_index):
         reverse=True
     )[:10]
 
-    log(f"Matched odds for {matched_count} / {len(fixtures)} fixtures.")
+    log(f"Matched odds for {len(draw_singles) + len(over_singles)} picks.")
     log(
         f"Draw singles: {len(draw_singles)}, "
         f"Over singles: {len(over_singles)}, "
@@ -575,6 +552,61 @@ def bankroll_summary(draw_singles, over_singles, funbet_draw, funbet_over, kelly
 
 
 # ------------------------------------------------------
+# History helpers
+# ------------------------------------------------------
+def load_history():
+    if not os.path.exists(HISTORY_PATH):
+        log("ℹ️ No existing bets history, starting fresh.")
+        return []
+
+    try:
+        with open(HISTORY_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, list):
+            log(f"ℹ️ Loaded bets history with {len(data)} weeks.")
+            return data
+        else:
+            log("⚠️ Bets history file not a list, resetting to empty.")
+            return []
+    except Exception as e:
+        log(f"⚠️ Failed to load bets history: {e}")
+        return []
+
+
+def save_history(history):
+    try:
+        with open(HISTORY_PATH, "w", encoding="utf-8") as f:
+            json.dump(history, f, ensure_ascii=False, indent=2)
+        log(f"💾 Bets history saved → {HISTORY_PATH} ({len(history)} weeks).")
+    except Exception as e:
+        log(f"⚠️ Failed to save bets history: {e}")
+
+
+def append_to_history(report):
+    """
+    Προσθέτει ένα weekly snapshot στο bets_history_v2.json.
+    Κάθε entry περιλαμβάνει:
+      - week_id (ISO year-week)
+      - timestamp
+      - full Friday report data
+    """
+    history = load_history()
+
+    # Υπολογισμός ISO week (π.χ. "2025-W48")
+    today = datetime.utcnow().date()
+    year, week_num, _ = today.isocalendar()
+    week_id = f"{year}-W{week_num:02d}"
+
+    report_with_meta = dict(report)
+    report_with_meta["week_id"] = week_id
+
+    history.append(report_with_meta)
+    save_history(history)
+
+    log(f"📚 Appended Friday snapshot to history for {week_id}.")
+
+
+# ------------------------------------------------------
 # MAIN
 # ------------------------------------------------------
 def main():
@@ -606,10 +638,14 @@ def main():
         "bankroll_status": banks,
     }
 
+    # Σώζουμε το Friday report (όπως πριν)
     with open(FRIDAY_REPORT_PATH, "w", encoding="utf-8") as f:
         json.dump(report, f, ensure_ascii=False, indent=2)
-
     log(f"✅ Friday shortlist report saved: {FRIDAY_REPORT_PATH}")
+
+    # ΝΕΟ: προσθέτουμε snapshot στο bets_history_v2.json
+    append_to_history(report)
+
     log(
         f"Summary → Draw singles: {len(draw_singles)}, "
         f"Over singles: {len(over_singles)}, "
