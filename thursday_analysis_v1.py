@@ -69,7 +69,7 @@ def load_core_configs():
 # ------------------------------------------------------
 # Season helper
 # ------------------------------------------------------
-def get_current_season(today: datetime) -> str:
+def get_current_season(day: datetime) -> str:
     """
     API-Football χρησιμοποιεί ως season το έτος έναρξης της σεζόν.
     Π.χ. σεζόν 2025-26 → season = 2025.
@@ -78,10 +78,10 @@ def get_current_season(today: datetime) -> str:
     - Ιανουάριος–Ιούνιος  → season = previous year
     - Ιούλιος–Δεκέμβριος → season = current year
     """
-    if today.month >= 7:
-        year = today.year
+    if day.month >= 7:
+        year = day.year
     else:
-        year = today.year - 1
+        year = day.year - 1
     return str(year)
 
 
@@ -245,15 +245,30 @@ def main():
 
     load_core_configs()
 
+    # 1) Primary window με βάση το server time
     today = datetime.utcnow()
-    season = get_current_season(today)
-
+    season_primary = get_current_season(today)
     date_from = today.strftime("%Y-%m-%d")
     date_to = (today + timedelta(days=DAYS_FORWARD)).strftime("%Y-%m-%d")
 
-    log(f"📅 Fetching fixtures from {date_from} to {date_to} (season {season})")
+    log(f"📅 Primary window: {date_from} to {date_to} (season {season_primary})")
+    fixtures_raw = fetch_fixtures(date_from, date_to, season_primary)
 
-    fixtures_raw = fetch_fixtures(date_from, date_to, season)
+    # 2) Αν δεν βρούμε fixtures, κάνουμε fallback ένα έτος πίσω
+    if not fixtures_raw:
+        fallback_day = today - timedelta(days=365)
+        season_fallback = get_current_season(fallback_day)
+        date_from = fallback_day.strftime("%Y-%m-%d")
+        date_to = (fallback_day + timedelta(days=DAYS_FORWARD)).strftime("%Y-%m-%d")
+        log(
+            f"⚠️ No fixtures in primary window. "
+            f"Falling back to {date_from} to {date_to} (season {season_fallback})"
+        )
+        fixtures_raw = fetch_fixtures(date_from, date_to, season_fallback)
+        season_used = season_fallback
+    else:
+        season_used = season_primary
+
     processed = []
 
     for f in fixtures_raw:
@@ -268,8 +283,8 @@ def main():
             match_label = f"{home_team} - {away_team}"
 
             # Fetch team statistics (cached)
-            home_stats = fetch_team_stats(league_id, home_id, season)
-            away_stats = fetch_team_stats(league_id, away_id, season)
+            home_stats = fetch_team_stats(league_id, home_id, season_used)
+            away_stats = fetch_team_stats(league_id, away_id, season_used)
 
             if not home_stats or not away_stats:
                 log(f"⚠️ Missing stats for {match_label}, skipping.")
@@ -302,6 +317,11 @@ def main():
 
     output = {
         "generated_at": datetime.utcnow().isoformat(),
+        "source_window": {
+            "date_from": date_from,
+            "date_to": date_to,
+            "season": season_used,
+        },
         "fixtures_analyzed": len(processed),
         "fixtures": processed,
     }
