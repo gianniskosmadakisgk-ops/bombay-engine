@@ -17,7 +17,7 @@ import requests
 #       * Over singles
 #       * FunBet Draw system
 #       * FunBet Over system
-#       * Kelly value bets (1 / X / 2 / Over)
+#       * Kelly value bets (X & Over 2.5 προς το παρόν)
 #       * Bankroll summary
 #  - Σώζει: logs/friday_shortlist_v1.json
 # ======================================================
@@ -50,14 +50,15 @@ KELLY_FRACTION = 0.40
 FUNBET_DRAW_STAKE_PER_COL = 3.0
 FUNBET_OVER_STAKE_PER_COL = 4.0
 
-# league name -> TheOddsAPI sport_key
+# league name (από Thursday report) -> TheOddsAPI sport_key
 LEAGUE_TO_SPORT = {
     "Premier League": "soccer_epl",
     "La Liga": "soccer_spain_la_liga",
     "Serie A": "soccer_italy_serie_a",
     "Bundesliga": "soccer_germany_bundesliga",
-    "Ligue 1": "soccer_france_ligue_1",
+    "Ligue 1": "soccer_france_ligue1",  # <-- FIXED (χωρίς extra underscore)
 }
+
 
 # ------------------------------------------------------
 # Helper logging
@@ -125,9 +126,7 @@ def normalize_team(name: str) -> str:
     if not name:
         return ""
     s = name.lower()
-    # πετάμε κλασικά suffix (fc, cf, ac κλπ)
     s = re.sub(r"\b(fc|cf|afc|cfc|ac|sc|bk)\b", "", s)
-    # αφαιρούμε σημεία στίξης / διπλά κενά
     s = re.sub(r"[^a-z0-9]+", " ", s)
     s = re.sub(r"\s+", " ", s)
     return s.strip()
@@ -137,13 +136,7 @@ def build_odds_index(fixtures):
     """
     Χτυπάει TheOddsAPI μόνο για τα leagues που χρειαζόμαστε
     και χτίζει index:
-        (norm_home, norm_away) ->
-          {
-            "odds_home":      price,
-            "odds_draw":      price,
-            "odds_away":      price,
-            "odds_over_2_5":  price,
-          }
+        (norm_home, norm_away) -> { "draw": price, "over_2_5": price }
     """
     leagues_used = sorted({f["league"] for f in fixtures if f.get("league") in LEAGUE_TO_SPORT})
     log(f"Leagues in Thursday report (with odds support): {leagues_used}")
@@ -158,60 +151,35 @@ def build_odds_index(fixtures):
         total_events += len(events)
 
         for ev in events:
-            home_raw = ev.get("home_team", "")
-            away_raw = ev.get("away_team", "")
-            home = normalize_team(home_raw)
-            away = normalize_team(away_raw)
+            home = normalize_team(ev.get("home_team", ""))
+            away = normalize_team(ev.get("away_team", ""))
             if not home or not away:
                 continue
 
-            best_home = None
             best_draw = None
-            best_away = None
             best_over = None
 
             for b in ev.get("bookmakers", []):
                 for m in b.get("markets", []):
                     key = m.get("key")
+
                     if key == "h2h":
                         for o in m.get("outcomes", []):
-                            name_raw = o.get("name", "")
-                            name_norm = normalize_team(name_raw)
-                            try:
-                                price = float(o.get("price", 0) or 0)
-                            except Exception:
-                                continue
-                            if price <= 0:
-                                continue
-
-                            # home / away / draw
-                            if name_norm == home:
-                                if best_home is None or price > best_home:
-                                    best_home = price
-                            elif name_norm == away:
-                                if best_away is None or price > best_away:
-                                    best_away = price
-                            elif name_raw.strip().lower() == "draw":
-                                if best_draw is None or price > best_draw:
+                            if o.get("name", "").lower() == "draw":
+                                price = float(o.get("price", 0))
+                                if price > 0 and (best_draw is None or price > best_draw):
                                     best_draw = price
 
                     elif key == "totals":
                         for o in m.get("outcomes", []):
                             name = o.get("name", "").lower()
                             if "over" in name and "2.5" in name:
-                                try:
-                                    price = float(o.get("price", 0) or 0)
-                                except Exception:
-                                    continue
-                                if price <= 0:
-                                    continue
-                                if best_over is None or price > best_over:
+                                price = float(o.get("price", 0))
+                                if price > 0 and (best_over is None or price > best_over):
                                     best_over = price
 
             odds_index[(home, away)] = {
-                "odds_home": best_home,
                 "odds_draw": best_draw,
-                "odds_away": best_away,
                 "odds_over_2_5": best_over,
             }
 
@@ -250,7 +218,6 @@ def generate_picks(fixtures, odds_index):
         try:
             home_name, away_name = [x.strip() for x in match_label.split("-")]
         except ValueError:
-            # περίεργο format αγώνα
             continue
 
         home_norm = normalize_team(home_name)
@@ -260,9 +227,7 @@ def generate_picks(fixtures, odds_index):
         if odds:
             matched_count += 1
 
-        odds_home = odds.get("odds_home") if odds else None
         odds_x = odds.get("odds_draw") if odds else None
-        odds_away = odds.get("odds_away") if odds else None
         odds_over = odds.get("odds_over_2_5") if odds else None
 
         # -------- DRAW SINGLES --------
@@ -297,7 +262,7 @@ def generate_picks(fixtures, odds_index):
                     "wallet": "Over",
                 })
 
-        # -------- KELLY (1 / X / 2 / OVER) --------
+        # -------- KELLY (Draw & Over 2.5) --------
         def maybe_add_kelly(market_label, fair, offered):
             if not fair or not offered:
                 return
@@ -311,6 +276,7 @@ def generate_picks(fixtures, odds_index):
             k_fraction = (b * p - q) / b
             if k_fraction <= 0:
                 return
+
             stake = round(KELLY_WALLET * k_fraction * KELLY_FRACTION, 2)
             if stake <= 0:
                 return
@@ -321,17 +287,12 @@ def generate_picks(fixtures, odds_index):
                 "fair": round(fair, 2),
                 "offered": round(offered, 2),
                 "diff": f"{diff:+.0%}",
-                "kelly%": f"{KELLY_FRACTION*100:.0f}%",
+                "kelly%": f"{KELLY_FRACTION * 100:.0f}%",
                 "stake (€)": stake,
             })
 
-        # Home / Draw / Away / Over 2.5
-        if fair_1 and odds_home:
-            maybe_add_kelly("Home", fair_1, odds_home)
         if fair_x and odds_x:
             maybe_add_kelly("Draw", fair_x, odds_x)
-        if fair_2 and odds_away:
-            maybe_add_kelly("Away", fair_2, odds_away)
         if fair_over and odds_over:
             maybe_add_kelly("Over 2.5", fair_over, odds_over)
 
