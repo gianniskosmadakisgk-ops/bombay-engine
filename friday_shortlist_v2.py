@@ -84,7 +84,8 @@ LEAGUE_TO_SPORT = {
     "La Liga": "soccer_spain_la_liga",
     "Serie A": "soccer_italy_serie_a",
     "Bundesliga": "soccer_germany_bundesliga",
-    "Ligue 1": "soccer_france_ligue1",  # ΣΩΣΤΟ KEY (χωρίς underscore)
+    # 👉 ΔΙΟΡΘΩΜΕΝΟ: σωστό sport_key με underscore
+    "Ligue 1": "soccer_france_ligue_1",
     # Αν προσθέσεις κι άλλες λίγκες που καλύπτει το TheOddsAPI,
     # τις βάζεις εδώ.
 }
@@ -278,7 +279,6 @@ def generate_picks(fixtures, odds_index):
         try:
             home_name, away_name = [x.strip() for x in match_label.split("-")]
         except ValueError:
-            # περίεργο format αγώνα
             continue
 
         home_norm = normalize_team(home_name)
@@ -295,14 +295,9 @@ def generate_picks(fixtures, odds_index):
         odds_away = odds.get("odds_away")
         odds_over = odds.get("odds_over_2_5")
 
-        # --------------------------------------------------
-        # DRAW SINGLES  (μόνο σε draw_leagues)
-        # --------------------------------------------------
+        # ---------------- DRAW SINGLES ----------------
         if league in DRAW_LEAGUES and fair_x and score_draw >= DRAW_MIN_SCORE:
 
-            # Αν υπάρχουν πραγματικά odds → τα χρησιμοποιούμε
-            # Αλλιώς fallback: χρησιμοποιούμε fair_x σαν "εκτιμώμενη" απόδοση,
-            # χωρίς value diff και χωρίς Kelly.
             if odds_x:
                 market_odds_x = float(odds_x)
                 diff_x = (market_odds_x - fair_x) / fair_x
@@ -331,9 +326,7 @@ def generate_picks(fixtures, odds_index):
                         "odds_source": odds_source,
                     })
 
-        # --------------------------------------------------
-        # OVER SINGLES  (μόνο σε over_leagues)
-        # --------------------------------------------------
+        # ---------------- OVER SINGLES ----------------
         if league in OVER_LEAGUES and fair_over and score_over >= OVER_MIN_SCORE:
 
             if odds_over:
@@ -364,9 +357,7 @@ def generate_picks(fixtures, odds_index):
                         "odds_source": odds_source,
                     })
 
-        # --------------------------------------------------
-        # KELLY (1 / X / 2 / Over 2.5) – ΜΟΝΟ με πραγματικές αποδόσεις
-        # --------------------------------------------------
+        # ---------------- KELLY (1 / X / 2 / Over 2.5) ----------------
         def maybe_add_kelly(market_label, fair, offered):
             if not fair or not offered:
                 return
@@ -400,7 +391,6 @@ def generate_picks(fixtures, odds_index):
                 "stake (€)": stake,
             })
 
-        # Kelly μόνο όταν έχουμε πραγματικά odds:
         if odds_home and fair_1:
             maybe_add_kelly("Home", fair_1, odds_home)
         if odds_x and fair_x:
@@ -410,7 +400,7 @@ def generate_picks(fixtures, odds_index):
         if odds_over and fair_over:
             maybe_add_kelly("Over 2.5", fair_over, odds_over)
 
-    # Limit top 10 βάσει score + value
+    # Top 10
     draw_singles = sorted(
         draw_singles,
         key=lambda x: (x["score"], x["value_raw"]),
@@ -443,11 +433,8 @@ def generate_picks(fixtures, odds_index):
 # FunBet systems
 # ------------------------------------------------------
 def build_funbet_draw(draw_singles):
-    """
-    Παίρνει τις καλύτερες ισοπαλίες και φτιάχνει σύστημα 3-4-5 ή 4-5-6.
-    """
     sorted_draws = sorted(draw_singles, key=lambda x: x["score"], reverse=True)
-    picks = sorted_draws[:6]  # max 6
+    picks = sorted_draws[:6]
 
     n = len(picks)
     system = None
@@ -479,11 +466,8 @@ def build_funbet_draw(draw_singles):
 
 
 def build_funbet_over(over_singles):
-    """
-    Σύστημα 2-from-X για τα καλύτερα Over.
-    """
     sorted_overs = sorted(over_singles, key=lambda x: x["score"], reverse=True)
-    picks = sorted_overs[:6]  # μέχρι 6
+    picks = sorted_overs[:6]
 
     n = len(picks)
     if n < 3:
