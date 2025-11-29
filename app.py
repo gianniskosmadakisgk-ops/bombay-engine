@@ -15,8 +15,14 @@ except AttributeError:
 app = Flask(__name__)
 
 # === ENVIRONMENT CONFIG ===
-CHAT_FORWARD_URL = os.getenv("CHAT_FORWARD_URL", "https://bombay-engine.onrender.com/chat_forward")
-LOCAL_CHAT_URL = os.getenv("LOCAL_CHAT_URL", "https://api.openai.com/v1/bombay/chat")  # placeholder
+CHAT_FORWARD_URL = os.getenv(
+    "CHAT_FORWARD_URL",
+    "https://bombay-engine.onrender.com/chat_forward"
+)
+LOCAL_CHAT_URL = os.getenv(
+    "LOCAL_CHAT_URL",
+    "https://api.openai.com/v1/bombay/chat"  # placeholder
+)
 
 # === Utility: Send structured data to chat ===
 def send_to_chat(title, data):
@@ -48,10 +54,13 @@ def chat_command():
             script = "thursday_analysis_v1.py"
             label = "Thursday Analysis"
             report_file = "logs/thursday_report_v1.json"
+
         elif "friday" in command:
-            script = "friday_shortlist_v1.py"
+            # 👉 Χρησιμοποιούμε το V2 script για τη shortlist
+            script = "friday_shortlist_v2.py"
             label = "Friday Shortlist"
             report_file = "logs/friday_shortlist_v1.json"
+
         elif "tuesday" in command:
             script = "tuesday_recap.py"
             label = "Tuesday Recap"
@@ -80,7 +89,6 @@ def chat_command():
             print(result.stderr)
 
         # === Load JSON output ===
-        report_data = {}
         if os.path.exists(report_file):
             with open(report_file, "r", encoding="utf-8") as f:
                 report_data = json.load(f)
@@ -127,7 +135,8 @@ def run_thursday():
 
 @app.route("/run/friday", methods=["GET"])
 def run_friday():
-    return run_script("friday_shortlist_v1.py", "Friday Shortlist")
+    # 👉 Manual trigger επίσης τρέχει το V2
+    return run_script("friday_shortlist_v2.py", "Friday Shortlist")
 
 @app.route("/run/tuesday", methods=["GET"])
 def run_tuesday():
