@@ -7,11 +7,13 @@ import requests
 import yaml
 
 # ======================================================
-#  THURSDAY ANALYSIS v1
+#  THURSDAY ANALYSIS v1  (Giannis Edition)
+#
 #  - Παίρνει fixtures & team stats από API-Football
-#  - Υπολογίζει fair_1, fair_x, fair_2, fair_over
-#  - Υπολογίζει score_draw & score_over (0–10)
 #  - ΔΕΝ χρησιμοποιεί bookmaker odds
+#  - Υπολογίζει:
+#       fair_1, fair_x, fair_2, fair_over
+#       score_draw, score_over
 #  - Σώζει: logs/thursday_report_v1.json
 # ======================================================
 
@@ -20,23 +22,23 @@ FOOTBALL_BASE_URL = "https://v3.football.api-sports.io"
 
 # Κύριες λίγκες – μπορείς να αλλάξεις / επεκτείνεις
 LEAGUES = [39, 140, 135, 78, 61]  # EPL, LaLiga, Serie A, Bundesliga, Ligue 1
-SEASON = os.getenv("FOOTBALL_SEASON", "2024")
 
-# Από Πέμπτη → καλύπτουμε Παρασκευή–Δευτέρα
+# Από την ημέρα που τρέχει → επόμενες 4 μέρες (συμπερ. σήμερα)
 DAYS_FORWARD = 4
 REPORT_PATH = "logs/thursday_report_v1.json"
 
 os.makedirs("logs", exist_ok=True)
 
+
 # ------------------------------------------------------
-# Helper: safe logging
+# Helper: logging
 # ------------------------------------------------------
 def log(msg: str):
     print(msg, flush=True)
 
 
 # ------------------------------------------------------
-# Φόρτωμα core YAML (προαιρετικό, για να ξέρουμε ότι όλα είναι ΟΚ)
+# Φόρτωμα core YAML (για sanity check)
 # ------------------------------------------------------
 def load_core_configs():
     try:
@@ -65,25 +67,55 @@ def load_core_configs():
 
 
 # ------------------------------------------------------
+# Season helper
+# ------------------------------------------------------
+def get_current_season(today: datetime) -> str:
+    """
+    API-Football χρησιμοποιεί ως season το έτος έναρξης της σεζόν.
+    Π.χ. σεζόν 2025-26 → season = 2025.
+
+    Λογική:
+    - Ιανουάριος–Ιούνιος  → season = previous year
+    - Ιούλιος–Δεκέμβριος → season = current year
+    """
+    if today.month >= 7:
+        year = today.year
+    else:
+        year = today.year - 1
+    return str(year)
+
+
+# ------------------------------------------------------
 # API-Football helpers
 # ------------------------------------------------------
-def api_get(path: str, params: dict) -> dict:
+def api_get(path: str, params: dict) -> list:
     headers = {"x-apisports-key": FOOTBALL_API_KEY}
     url = f"{FOOTBALL_BASE_URL}{path}"
-    res = requests.get(url, headers=headers, params=params, timeout=15)
+    try:
+        res = requests.get(url, headers=headers, params=params, timeout=20)
+    except Exception as e:
+        log(f"⚠️ Request error on {path}: {e}")
+        return []
+
     if res.status_code != 200:
         log(f"⚠️ API error {res.status_code} on {path} with params {params}")
-        return {}
-    data = res.json()
+        return []
+
+    try:
+        data = res.json()
+    except Exception as e:
+        log(f"⚠️ JSON decode error on {path}: {e}")
+        return []
+
     return data.get("response", [])
 
 
-def fetch_fixtures(date_from: str, date_to: str):
+def fetch_fixtures(date_from: str, date_to: str, season: str) -> list:
     fixtures = []
     for league_id in LEAGUES:
         params = {
             "league": league_id,
-            "season": SEASON,
+            "season": season,
             "from": date_from,
             "to": date_to,
         }
@@ -93,18 +125,18 @@ def fetch_fixtures(date_from: str, date_to: str):
     return fixtures
 
 
-# Cache για team statistics ώστε να μην βαράμε 100 φορές το ίδιο endpoint
+# Cache για team statistics ώστε να μην χτυπάμε συνέχεια το ίδιο endpoint
 _team_stats_cache = {}
 
 
-def fetch_team_stats(league_id: int, team_id: int) -> dict:
-    key = (league_id, team_id)
+def fetch_team_stats(league_id: int, team_id: int, season: str) -> dict:
+    key = (league_id, team_id, season)
     if key in _team_stats_cache:
         return _team_stats_cache[key]
 
     params = {
         "league": league_id,
-        "season": SEASON,
+        "season": season,
         "team": team_id,
     }
     resp = api_get("/teams/statistics", params)
@@ -118,37 +150,27 @@ def fetch_team_stats(league_id: int, team_id: int) -> dict:
 
 
 # ------------------------------------------------------
-#  Βοηθητικές συναρτήσεις για fair odds & scores
+#  Fair odds & score helpers
 # ------------------------------------------------------
 def clamp(x, low, high):
     return max(low, min(high, x))
 
 
-def compute_probabilities_and_scores(league_id, home_stats, away_stats):
+def compute_probabilities_and_scores(home_stats: dict, away_stats: dict):
     """
-    Πολύ απλοποιημένο AI-style μοντέλο:
-    - Υπολογίζει rating για κάθε ομάδα από avg goals for/against.
-    - Από το rating diff βγάζει πιθανότητες 1/X/2.
-    - Από το total goals level βγάζει πιθανότητα over 2.5.
-    - Μετά τα μετατρέπει σε fair odds + scores.
+    Απλοποιημένο μοντέλο fair πιθανότητας:
+    - χρησιμοποιεί avg goals for/against
+    - εκτιμά p_home, p_draw, p_away, p_over
+    - επιστρέφει fair odds + scores (0–10)
     """
 
     try:
-        # Goals for/against averages
-        gf_home = float(
-            home_stats["goals"]["for"]["average"]["total"]
-        )
-        ga_home = float(
-            home_stats["goals"]["against"]["average"]["total"]
-        )
-        gf_away = float(
-            away_stats["goals"]["for"]["average"]["total"]
-        )
-        ga_away = float(
-            away_stats["goals"]["against"]["average"]["total"]
-        )
+        gf_home = float(home_stats["goals"]["for"]["average"]["total"])
+        ga_home = float(home_stats["goals"]["against"]["average"]["total"])
+        gf_away = float(away_stats["goals"]["for"]["average"]["total"])
+        ga_away = float(away_stats["goals"]["against"]["average"]["total"])
     except Exception:
-        # Αν δεν έχουμε πλήρη στατιστικά, βάζουμε default ουδέτερα values
+        # fallback σε ουδέτερα values
         gf_home = 1.4
         ga_home = 1.1
         gf_away = 1.2
@@ -160,13 +182,11 @@ def compute_probabilities_and_scores(league_id, home_stats, away_stats):
     diff = rating_home - rating_away  # home - away
 
     # --- Draw probability ---
-    # Base draw rate για ισορροπημένες λίγκες ~ 0.26
     base_draw = 0.26
-    balance_factor = clamp(1.0 - abs(diff), 0.0, 1.0)  # 0 → unbalanced, 1 → πολύ ισορροπημένο
-    p_draw = base_draw + 0.06 * balance_factor          # 0.26–0.32
+    balance_factor = clamp(1.0 - abs(diff), 0.0, 1.0)  # ισορροπία
+    p_draw = base_draw + 0.06 * balance_factor          # ~0.26–0.32
 
     # --- Home / Away probability ---
-    # Διαμοιράζουμε το υπόλοιπο (1 - p_draw) με logistic βάση το diff
     import math
 
     if diff >= 0:
@@ -178,7 +198,7 @@ def compute_probabilities_and_scores(league_id, home_stats, away_stats):
     p_home = remaining * r
     p_away = remaining * (1.0 - r)
 
-    # Normalize just in case
+    # normalize
     total = p_home + p_draw + p_away
     if total > 0:
         p_home /= total
@@ -187,7 +207,6 @@ def compute_probabilities_and_scores(league_id, home_stats, away_stats):
 
     # --- Over 2.5 probability ---
     total_goals_level = gf_home + gf_away
-    # απλό mapping από goal level σε πιθανότητα over
     if total_goals_level <= 2.2:
         p_over = 0.48
     elif total_goals_level <= 2.5:
@@ -208,12 +227,10 @@ def compute_probabilities_and_scores(league_id, home_stats, away_stats):
     fair_over = fair_from_prob(p_over)
 
     # --- Scores (0–10) ---
-    # Draw score: όσο πιο μεγάλο p_draw και όσο πιο μικρή διαφορά, τόσο πιο ψηλά.
-    score_draw_raw = 5.0 + (p_draw - 0.22) / 0.12 * 4.0  # περίπου 6–10
+    score_draw_raw = 5.0 + (p_draw - 0.22) / 0.12 * 4.0  # ~6–10
     score_draw = round(clamp(score_draw_raw, 0.0, 10.0), 2)
 
-    # Over score: όσο πιο μεγάλο p_over τόσο πιο ψηλά.
-    score_over_raw = 5.5 + (p_over - 0.50) / 0.18 * 4.0  # περίπου 6–10
+    score_over_raw = 5.5 + (p_over - 0.50) / 0.18 * 4.0  # ~6–10
     score_over = round(clamp(score_over_raw, 0.0, 10.0), 2)
 
     return fair_1, fair_x, fair_2, fair_over, score_draw, score_over
@@ -229,12 +246,14 @@ def main():
     load_core_configs()
 
     today = datetime.utcnow()
+    season = get_current_season(today)
+
     date_from = today.strftime("%Y-%m-%d")
     date_to = (today + timedelta(days=DAYS_FORWARD)).strftime("%Y-%m-%d")
 
-    log(f"📅 Fetching fixtures from {date_from} to {date_to} (season {SEASON})")
+    log(f"📅 Fetching fixtures from {date_from} to {date_to} (season {season})")
 
-    fixtures_raw = fetch_fixtures(date_from, date_to)
+    fixtures_raw = fetch_fixtures(date_from, date_to, season)
     processed = []
 
     for f in fixtures_raw:
@@ -249,16 +268,21 @@ def main():
             match_label = f"{home_team} - {away_team}"
 
             # Fetch team statistics (cached)
-            home_stats = fetch_team_stats(league_id, home_id)
-            away_stats = fetch_team_stats(league_id, away_id)
+            home_stats = fetch_team_stats(league_id, home_id, season)
+            away_stats = fetch_team_stats(league_id, away_id, season)
 
             if not home_stats or not away_stats:
                 log(f"⚠️ Missing stats for {match_label}, skipping.")
                 continue
 
-            fair_1, fair_x, fair_2, fair_over, score_draw, score_over = (
-                compute_probabilities_and_scores(league_id, home_stats, away_stats)
-            )
+            (
+                fair_1,
+                fair_x,
+                fair_2,
+                fair_over,
+                score_draw,
+                score_over,
+            ) = compute_probabilities_and_scores(home_stats, away_stats)
 
             processed.append(
                 {
