@@ -1,5 +1,6 @@
 import os
 import json
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -7,13 +8,15 @@ import requests
 import yaml
 
 # ======================================================
-#  THURSDAY ANALYSIS v1  (Giannis Edition)
+#  THURSDAY ANALYSIS v1  (Giannis Edition)  — CACHED
 #
 #  - Παίρνει fixtures & team stats από API-Football
 #  - ΔΕΝ χρησιμοποιεί bookmaker odds
 #  - Υπολογίζει:
 #       fair_1, fair_x, fair_2, fair_over
 #       score_draw, score_over
+#  - Χρησιμοποιεί τοπικό cache για /teams/statistics
+#    ώστε να μην σκάει σε rate limits.
 #  - Σώζει: logs/thursday_report_v1.json
 # ======================================================
 
@@ -26,6 +29,9 @@ LEAGUES = [39, 140, 135, 78, 61]  # EPL, LaLiga, Serie A, Bundesliga, Ligue 1
 # Από την ημέρα που τρέχει → επόμενες 4 μέρες (συμπερ. σήμερα)
 DAYS_FORWARD = 4
 REPORT_PATH = "logs/thursday_report_v1.json"
+
+# Cache αρχείο για team statistics
+CACHE_FILE = "logs/team_stats_cache_v1.json"
 
 os.makedirs("logs", exist_ok=True)
 
@@ -83,6 +89,41 @@ def get_current_season(day: datetime) -> str:
     else:
         year = day.year - 1
     return str(year)
+
+
+# ------------------------------------------------------
+# Cache helpers
+# ------------------------------------------------------
+def load_stats_cache() -> dict:
+    if not os.path.exists(CACHE_FILE):
+        log("ℹ️ No existing team stats cache, starting fresh.")
+        return {}
+    try:
+        with open(CACHE_FILE, "r", encoding="utf-8") as f:
+            cache = json.load(f)
+        log(f"ℹ️ Loaded team stats cache from {CACHE_FILE} "
+            f"({len(cache)} entries)")
+        return cache
+    except Exception as e:
+        log(f"⚠️ Failed to load cache {CACHE_FILE}: {e}")
+        return {}
+
+
+def save_stats_cache(cache: dict):
+    try:
+        with open(CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(cache, f, ensure_ascii=False)
+        log(f"💾 Team stats cache saved ({len(cache)} entries) → {CACHE_FILE}")
+    except Exception as e:
+        log(f"⚠️ Failed to save cache {CACHE_FILE}: {e}")
+
+
+# Global in-memory cache (γεμίζει από το αρχείο στην αρχή)
+_team_stats_cache = {}
+
+
+def cache_key(league_id: int, team_id: int, season: str) -> str:
+    return f"{season}:{league_id}:{team_id}"
 
 
 # ------------------------------------------------------
@@ -144,14 +185,19 @@ def fetch_fixtures(date_from: str, date_to: str, season: str) -> list:
     return fixtures
 
 
-# Cache για team statistics ώστε να μην χτυπάμε συνέχεια το ίδιο endpoint
-_team_stats_cache = {}
-
-
 def fetch_team_stats(league_id: int, team_id: int, season: str) -> dict:
-    key = (league_id, team_id, season)
+    """
+    - Πρώτα κοιτάμε local cache (μνήμη & JSON).
+    - Αν δεν υπάρχει, κάνουμε API call με μικρό delay
+      για να μη σκάσουμε στο per-minute limit.
+    """
+    key = cache_key(league_id, team_id, season)
+
     if key in _team_stats_cache:
         return _team_stats_cache[key]
+
+    # Μικρό delay ΜΟΝΟ όταν χτυπάμε API
+    time.sleep(0.5)
 
     params = {
         "league": league_id,
@@ -259,10 +305,15 @@ def compute_probabilities_and_scores(home_stats: dict, away_stats: dict):
 # MAIN
 # ------------------------------------------------------
 def main():
+    global _team_stats_cache
+
     if not FOOTBALL_API_KEY:
         raise RuntimeError("FOOTBALL_API_KEY is not set in environment.")
 
     load_core_configs()
+
+    # Φόρτωμα cache στην μνήμη
+    _team_stats_cache = load_stats_cache()
 
     # 1) Primary window με βάση το server time
     today = datetime.utcnow()
@@ -301,7 +352,7 @@ def main():
 
             match_label = f"{home_team} - {away_team}"
 
-            # Fetch team statistics (cached)
+            # Fetch team statistics (cached + API)
             home_stats = fetch_team_stats(league_id, home_id, season_used)
             away_stats = fetch_team_stats(league_id, away_id, season_used)
 
@@ -347,6 +398,9 @@ def main():
 
     with open(REPORT_PATH, "w", encoding="utf-8") as f:
         json.dump(output, f, indent=2, ensure_ascii=False)
+
+    # Αποθήκευση cache στο τέλος
+    save_stats_cache(_team_stats_cache)
 
     log(f"✅ Thursday analysis complete — {len(processed)} fixtures analyzed.")
     log(f"📝 Report saved at {REPORT_PATH}")
