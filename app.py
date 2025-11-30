@@ -12,7 +12,8 @@ def run_script(script_name):
         print(f"=== Running script: {script_name} ===", flush=True)
 
         result = subprocess.run(
-            ["python3", f"src/{script_name}"],
+            ["python3", script_name],
+            cwd="/opt/render/project/src",
             capture_output=True,
             text=True
         )
