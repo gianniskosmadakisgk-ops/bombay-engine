@@ -1,17 +1,32 @@
 import os
 import json
 from datetime import datetime
-import requests
+from pathlib import Path
 import itertools
 import re
 
+import requests
+
 # ======================================================
-#  FRIDAY SHORTLIST v2  (Production)
+#  FRIDAY SHORTLIST v2  (Giannis Edition)
+#
+#  - Διαβάζει το Thursday report (fair odds + scores)
+#  - Τραβάει ΠΡΑΓΜΑΤΙΚΕΣ αποδόσεις από TheOddsAPI
+#  - Φτιάχνει:
+#       * Draw singles
+#       * Over singles
+#       * FunBet Draw system
+#       * FunBet Over system
+#       * Kelly value bets (1 / X / 2 / Over 2.5)
+#       * Bankroll summary
+#  - Fallback:
+#       * Αν δεν βρεθούν odds για έναν αγώνα, τα singles
+#         μπορούν να βγουν με fair_odd (χωρίς Kelly)
+#  - Σώζει: logs/friday_shortlist_v2.json
 # ======================================================
 
 THURSDAY_REPORT_PATH = "logs/thursday_report_v1.json"
 FRIDAY_REPORT_PATH = "logs/friday_shortlist_v2.json"
-HISTORY_PATH = "logs/bets_history_v2.json"
 
 ODDS_API_KEY = os.getenv("ODDS_API_KEY")
 ODDS_BASE_URL = "https://api.the-odds-api.com/v4/sports"
@@ -23,42 +38,100 @@ DRAW_WALLET = 400
 OVER_WALLET = 300
 FANBET_DRAW_WALLET = 100
 FANBET_OVER_WALLET = 100
-KELLY_WALLET = 300
+KELLY_WALLET = 300.0     # αρχικό Kelly κεφάλαιο
 
 # ---------------------- THRESHOLDS ---------------------
 DRAW_MIN_SCORE = 7.5
 DRAW_MIN_ODDS = 2.70
+
 OVER_MIN_SCORE = 7.5
 OVER_MIN_FAIR = 1.70
 
-KELLY_VALUE_THRESHOLD = 0.15
-KELLY_FRACTION = 0.40
+# Kelly rules
+KELLY_VALUE_THRESHOLD = 0.15     # +15% min edge
+KELLY_FRACTION = 0.40            # 40% του πλήρους Kelly
+KELLY_MIN_PROB = 0.25            # min probability 25%
+KELLY_MAX_EXPOSURE_PCT = 0.20    # 20% του αρχικού bank → max 60€
 
-FUNBET_DRAW_STAKE_PER_COL = 3.0
+FUNBET_DRAW_STAKE_PER_COL = 2.0
 FUNBET_OVER_STAKE_PER_COL = 4.0
 
+# Λίγκες σύμφωνα με το blueprint
 DRAW_LEAGUES = {
-    "Ligue 1", "Serie A", "La Liga", "Championship",
-    "Serie B", "Ligue 2", "Swiss Super League"
+    "Ligue 1",
+    "Serie A",
+    "La Liga",
+    "Championship",
+    "Serie B",
+    "Ligue 2",
+    "Liga Portugal 2",
+    "Swiss Super League",
 }
 
 OVER_LEAGUES = {
-    "Bundesliga", "Eredivisie", "Jupiler Pro League",
-    "Superliga", "Allsvenskan", "Eliteserien",
-    "Swiss Super League", "Liga Portugal 1"
+    "Bundesliga",
+    "Eredivisie",
+    "Jupiler Pro League",
+    "Superliga",
+    "Allsvenskan",
+    "Eliteserien",
+    "Swiss Super League",
+    "Liga Portugal 1",
 }
 
-# league name -> sport_key
+# league name -> TheOddsAPI sport_key
+# (μόνο όσες λίγκες υποστηρίζει το TheOddsAPI – οι υπόλοιπες
+#  θα δουλεύουν μόνο με fair odds και χωρίς Kelly)
 LEAGUE_TO_SPORT = {
+    # Αγγλία
     "Premier League": "soccer_epl",
+    "Championship": "soccer_efl_champ",
+
+    # Ισπανία
     "La Liga": "soccer_spain_la_liga",
+    "La Liga 2": "soccer_spain_segunda_division",
+
+    # Ιταλία
     "Serie A": "soccer_italy_serie_a",
+    "Serie B": "soccer_italy_serie_b",
+
+    # Γερμανία
     "Bundesliga": "soccer_germany_bundesliga",
+    "Bundesliga 2": "soccer_germany_bundesliga2",
+
+    # Γαλλία
     "Ligue 1": "soccer_france_ligue_one",
+    "Ligue 2": "soccer_france_ligue_two",
+
+    # Πορτογαλία
+    "Liga Portugal 1": "soccer_portugal_primeira_liga",
+    # Liga Portugal 2 δεν υπάρχει στο TheOddsAPI → fair only
+
+    # Ελβετία
+    "Swiss Super League": "soccer_switzerland_superleague",
+
+    # Ολλανδία
+    "Eredivisie": "soccer_netherlands_eredivisie",
+
+    # Βέλγιο
+    "Jupiler Pro League": "soccer_belgium_first_div",
+
+    # Δανία
+    "Superliga": "soccer_denmark_superliga",
+
+    # Σουηδία
+    "Allsvenskan": "soccer_sweden_allsvenskan",
+
+    # Νορβηγία
+    "Eliteserien": "soccer_norway_eliteserien",
 }
 
+# ------------------------------------------------------
+# Helper logging
+# ------------------------------------------------------
 def log(msg: str):
     print(msg, flush=True)
+
 
 # ------------------------------------------------------
 # Load Thursday data
@@ -69,15 +142,21 @@ def load_thursday_fixtures():
 
     with open(THURSDAY_REPORT_PATH, "r", encoding="utf-8") as f:
         data = json.load(f)
-    log(f"Loaded {len(data.get('fixtures', []))} fixtures from Thursday report.")
-    return data.get("fixtures", [])
+
+    fixtures = data.get("fixtures", [])
+    log(f"Loaded {len(fixtures)} fixtures from Thursday report.")
+    return fixtures
+
 
 # ------------------------------------------------------
-# Odds API
+# Odds API helpers
 # ------------------------------------------------------
 def api_get_odds(sport_key: str):
+    """
+    Φέρνει odds για συγκεκριμένο sport_key από TheOddsAPI.
+    """
     if not ODDS_API_KEY:
-        log("⚠️ No ODDS_API_KEY set — cannot fetch odds.")
+        log("⚠️ ODDS_API_KEY not set, returning empty odds.")
         return []
 
     params = {
@@ -86,71 +165,105 @@ def api_get_odds(sport_key: str):
         "markets": "h2h,totals",
         "oddsFormat": "decimal",
     }
-
     url = f"{ODDS_BASE_URL}/{sport_key}/odds"
 
     try:
-        res = requests.get(url, params=params, timeout=20)
+        res = requests.get(url, params=params, timeout=25)
     except Exception as e:
-        log(f"⚠️ Request error for {sport_key}: {e}")
+        log(f"⚠️ Error requesting odds for {sport_key}: {e}")
         return []
 
     if res.status_code != 200:
-        log(f"⚠️ Odds API {res.status_code} for {sport_key}: {res.text[:150]}")
+        log(f"⚠️ Odds API error {res.status_code} for {sport_key}: {res.text[:200]}")
         return []
 
-    return res.json()
+    try:
+        return res.json()
+    except Exception as e:
+        log(f"⚠️ JSON decode error for {sport_key}: {e}")
+        return []
+
 
 def normalize_team(name: str) -> str:
+    """
+    Απλοποιημένο normalizer για να ταιριάζουμε ονόματα ομάδων
+    μεταξύ API-Football και TheOddsAPI.
+    """
     if not name:
         return ""
     s = name.lower()
-    s = re.sub(r"\b(fc|afc|cf|sc|bk|ac)\b", "", s)
+    s = re.sub(r"\b(fc|cf|afc|cfc|ac|sc|bk)\b", "", s)
     s = re.sub(r"[^a-z0-9]+", " ", s)
+    s = re.sub(r"\s+", " ", s)
     return s.strip()
 
-def build_odds_index(fixtures):
-    leagues_used = sorted({f["league"] for f in fixtures if f["league"] in LEAGUE_TO_SPORT})
 
-    log(f"Leagues with odds support: {leagues_used}")
+def build_odds_index(fixtures):
+    """
+    Χτυπάει TheOddsAPI μόνο για τα leagues που χρειαζόμαστε
+    και χτίζει index:
+        (norm_home, norm_away) -> {
+            "odds_home": price,
+            "odds_draw": price,
+            "odds_away": price,
+            "odds_over_2_5": price
+        }
+    """
+    leagues_used = sorted({f["league"] for f in fixtures if f.get("league") in LEAGUE_TO_SPORT})
+    log(f"Leagues in Thursday report (with odds support): {leagues_used}")
 
     odds_index = {}
     total_events = 0
 
-    for league in leagues_used:
-        sport_key = LEAGUE_TO_SPORT[league]
+    for league_name in leagues_used:
+        sport_key = LEAGUE_TO_SPORT[league_name]
         events = api_get_odds(sport_key)
-        log(f"Fetched {len(events)} odds events for {league} ({sport_key})")
+        log(f"Fetched {len(events)} odds events for {league_name} ({sport_key})")
         total_events += len(events)
 
         for ev in events:
-            home = normalize_team(ev.get("home_team", ""))
-            away = normalize_team(ev.get("away_team", ""))
+            home_raw = ev.get("home_team", "")
+            away_raw = ev.get("away_team", "")
+            home = normalize_team(home_raw)
+            away = normalize_team(away_raw)
+            if not home or not away:
+                continue
 
-            best_home = best_away = best_draw = best_over = None
+            best_home = None
+            best_away = None
+            best_draw = None
+            best_over = None
 
             for b in ev.get("bookmakers", []):
                 for m in b.get("markets", []):
-                    if m["key"] == "h2h":
-                        for o in m["outcomes"]:
-                            price = float(o.get("price") or 0)
+                    key = m.get("key")
+                    if key == "h2h":
+                        for o in m.get("outcomes", []):
+                            name = o.get("name", "")
+                            name_norm = normalize_team(name)
+                            price = float(o.get("price", 0) or 0)
                             if price <= 0:
                                 continue
 
-                            name = normalize_team(o["name"])
-                            if name == home:
-                                best_home = max(best_home or 0, price)
-                            elif name == away:
-                                best_away = max(best_away or 0, price)
-                            elif o["name"].lower() == "draw":
-                                best_draw = max(best_draw or 0, price)
+                            if name_norm == home:
+                                if best_home is None or price > best_home:
+                                    best_home = price
+                            elif name_norm == away:
+                                if best_away is None or price > best_away:
+                                    best_away = price
+                            elif name.lower() == "draw":
+                                if best_draw is None or price > best_draw:
+                                    best_draw = price
 
-                    elif m["key"] == "totals":
-                        for o in m["outcomes"]:
-                            name = o["name"].lower()
-                            price = float(o.get("price") or 0)
+                    elif key == "totals":
+                        for o in m.get("outcomes", []):
+                            name = o.get("name", "").lower()
+                            price = float(o.get("price", 0) or 0)
+                            if price <= 0:
+                                continue
                             if "over" in name and "2.5" in name:
-                                best_over = max(best_over or 0, price)
+                                if best_over is None or price > best_over:
+                                    best_over = price
 
             odds_index[(home, away)] = {
                 "odds_home": best_home,
@@ -159,44 +272,58 @@ def build_odds_index(fixtures):
                 "odds_over_2_5": best_over,
             }
 
-    log(f"Built odds index for {len(odds_index)} matches. Total events: {total_events}")
+    log(
+        f"Built odds index for {len(odds_index)} (home, away) pairs. "
+        f"Total events fetched: {total_events}"
+    )
     return odds_index
 
+
 # ------------------------------------------------------
-# Pick Generators
+# Pick generators
 # ------------------------------------------------------
-def flat_stake(score):
+def flat_stake(score: float) -> int:
+    """
+    8.5+ → 20€
+    7.5–8.49 → 15€
+    κάτω από 7.5 → skip
+    """
     if score >= 8.5:
         return 20
-    if score >= 7.5:
+    elif score >= 7.5:
         return 15
     return 0
+
 
 def generate_picks(fixtures, odds_index):
     draw_singles = []
     over_singles = []
-    kelly_picks = []
-    matched = 0
+    kelly_candidates = []
+
+    matched_count = 0
 
     for f in fixtures:
-        league = f["league"]
-        match = f["match"]
+        league = f.get("league", "")
+        match_label = f.get("match", "")
+        fair_1 = f.get("fair_1")
+        fair_x = f.get("fair_x")
+        fair_2 = f.get("fair_2")
+        fair_over = f.get("fair_over")
+        score_draw = float(f.get("score_draw", 0.0) or 0.0)
+        score_over = float(f.get("score_over", 0.0) or 0.0)
 
-        fair_1 = f["fair_1"]
-        fair_x = f["fair_x"]
-        fair_2 = f["fair_2"]
-        fair_over = f["fair_over"]
+        try:
+            home_name, away_name = [x.strip() for x in match_label.split("-")]
+        except ValueError:
+            # περίεργο format αγώνα
+            continue
 
-        score_draw = float(f["score_draw"])
-        score_over = float(f["score_over"])
-
-        home_name, away_name = [x.strip() for x in match.split("-")]
         home_norm = normalize_team(home_name)
         away_norm = normalize_team(away_name)
 
         odds = odds_index.get((home_norm, away_norm)) or odds_index.get((away_norm, home_norm))
         if odds:
-            matched += 1
+            matched_count += 1
         else:
             odds = {}
 
@@ -205,97 +332,182 @@ def generate_picks(fixtures, odds_index):
         odds_away = odds.get("odds_away")
         odds_over = odds.get("odds_over_2_5")
 
-        # DRAW singles
+        # --------------------------------------------------
+        # DRAW SINGLES  (μόνο σε draw_leagues)
+        # --------------------------------------------------
         if league in DRAW_LEAGUES and fair_x and score_draw >= DRAW_MIN_SCORE:
-            source = "market" if odds_x else "model"
-            offered = odds_x or fair_x
-            diff = (offered - fair_x) / fair_x if odds_x else 0
-            if offered >= DRAW_MIN_ODDS:
+
+            # Αν υπάρχουν πραγματικά odds → τα χρησιμοποιούμε
+            # Αλλιώς fallback: χρησιμοποιούμε fair_x σαν "εκτιμώμενη" απόδοση,
+            # χωρίς value diff και χωρίς Kelly.
+            if odds_x:
+                market_odds_x = float(odds_x)
+                diff_x = (market_odds_x - fair_x) / fair_x
+                diff_label = f"{diff_x:+.0%}"
+                value_raw = diff_x
+                odds_source = "market"
+            else:
+                market_odds_x = float(fair_x)
+                diff_label = "n/a"
+                value_raw = 0.0
+                odds_source = "model"
+
+            if market_odds_x >= DRAW_MIN_ODDS:
                 stake = flat_stake(score_draw)
-                if stake:
+                if stake > 0:
                     draw_singles.append({
-                        "match": match,
+                        "match": match_label,
                         "league": league,
-                        "odds": round(offered, 2),
-                        "fair": fair_x,
-                        "score": score_draw,
+                        "odds": round(market_odds_x, 2),
+                        "fair": round(fair_x, 2),
+                        "diff": diff_label,
+                        "value_raw": round(value_raw, 4),
+                        "score": round(score_draw, 2),
                         "stake": stake,
-                        "value_raw": diff,
-                        "odds_source": source,
+                        "wallet": "Draw",
+                        "odds_source": odds_source,
                     })
 
-        # OVER singles
+        # --------------------------------------------------
+        # OVER SINGLES  (μόνο σε over_leagues)
+        # --------------------------------------------------
         if league in OVER_LEAGUES and fair_over and score_over >= OVER_MIN_SCORE:
-            source = "market" if odds_over else "model"
-            offered = odds_over or fair_over
-            diff = (offered - fair_over) / fair_over if odds_over else 0
+
+            if odds_over:
+                market_odds_over = float(odds_over)
+                diff_over = (market_odds_over - fair_over) / fair_over
+                diff_label = f"{diff_over:+.0%}"
+                value_raw = diff_over
+                odds_source = "market"
+            else:
+                market_odds_over = float(fair_over)
+                diff_label = "n/a"
+                value_raw = 0.0
+                odds_source = "model"
+
             if fair_over >= OVER_MIN_FAIR:
                 stake = flat_stake(score_over)
-                if stake:
+                if stake > 0:
                     over_singles.append({
-                        "match": match,
+                        "match": match_label,
                         "league": league,
-                        "odds": round(offered, 2),
-                        "fair": fair_over,
-                        "score": score_over,
+                        "odds": round(market_odds_over, 2),
+                        "fair": round(fair_over, 2),
+                        "diff": diff_label,
+                        "value_raw": round(value_raw, 4),
+                        "score": round(score_over, 2),
                         "stake": stake,
-                        "value_raw": diff,
-                        "odds_source": source,
+                        "wallet": "Over",
+                        "odds_source": odds_source,
                     })
 
-        # ----------------------------------------
-        # KELLY
-        # ----------------------------------------
-        def add_kelly(label, fair, offered):
+        # --------------------------------------------------
+        # KELLY CANDIDATES (1 / X / 2 / Over 2.5)
+        # --------------------------------------------------
+        def add_kelly_candidate(market_label, fair, offered):
             if not fair or not offered:
                 return
+
+            fair = float(fair)
+            offered = float(offered)
+            if fair <= 1.01 or offered <= 1.01:
+                return
+
+            # probability από fair odds
+            p = 1.0 / fair
+            if p < KELLY_MIN_PROB:
+                return
+
             diff = (offered - fair) / fair
             if diff < KELLY_VALUE_THRESHOLD:
                 return
 
-            p = 1.0 / fair
+            b = offered - 1.0
             q = 1.0 - p
-            b = offered - 1
-            k = (b * p - q) / b
-            if k <= 0:
+            if b <= 0:
                 return
 
-            stake = round(KELLY_WALLET * k * KELLY_FRACTION, 2)
-            if stake <= 0:
+            full_kelly_fraction = (b * p - q) / b
+            if full_kelly_fraction <= 0:
                 return
 
-            kelly_picks.append({
-                "match": match,
+            raw_stake = full_kelly_fraction * KELLY_FRACTION * KELLY_WALLET
+            if raw_stake <= 0:
+                return
+
+            kelly_candidates.append({
+                "match": match_label,
                 "league": league,
-                "market": label,
+                "market": market_label,
                 "fair": fair,
                 "offered": offered,
-                "diff": f"{diff:+.0%}",
-                "stake (€)": stake,
+                "edge": diff,
+                "prob": p,
+                "stake_raw": raw_stake,
             })
 
-        if odds_home:
-            add_kelly("Home", fair_1, odds_home)
-        if odds_x:
-            add_kelly("Draw", fair_x, odds_x)
-        if odds_away:
-            add_kelly("Away", fair_2, odds_away)
-        if odds_over:
-            add_kelly("Over 2.5", fair_over, odds_over)
+        # Kelly μόνο όταν έχουμε πραγματικά odds:
+        if odds_home and fair_1:
+            add_kelly_candidate("Home", fair_1, odds_home)
+        if odds_x and fair_x:
+            add_kelly_candidate("Draw", fair_x, odds_x)
+        if odds_away and fair_2:
+            add_kelly_candidate("Away", fair_2, odds_away)
+        if odds_over and fair_over:
+            add_kelly_candidate("Over 2.5", fair_over, odds_over)
 
-    draw_singles = sorted(draw_singles, key=lambda x: (x["score"], x["value_raw"]), reverse=True)[:10]
-    over_singles = sorted(over_singles, key=lambda x: (x["score"], x["value_raw"]), reverse=True)[:10]
-    kelly_picks = sorted(kelly_picks, key=lambda x: x["stake (€)"], reverse=True)[:10]
+    # Limit top 10 Kelly βάσει raw stake, μετά κάνουμε scale για το 20% exposure
+    kelly_candidates = sorted(
+        kelly_candidates,
+        key=lambda x: x["stake_raw"],
+        reverse=True
+    )[:10]
 
-    log(f"Matched odds: {matched}/{len(fixtures)}")
+    total_raw = sum(p["stake_raw"] for p in kelly_candidates)
+    max_exposure = KELLY_WALLET * KELLY_MAX_EXPOSURE_PCT  # π.χ. 60€
+
+    if total_raw > 0 and total_raw > max_exposure:
+        scale = max_exposure / total_raw
+    else:
+        scale = 1.0
+
+    kelly_picks = []
+    for c in kelly_candidates:
+        stake_final = round(c["stake_raw"] * scale, 2)
+        kelly_picks.append({
+            "match": c["match"],
+            "league": c["league"],
+            "market": c["market"],
+            "fair": round(c["fair"], 2),
+            "offered": round(c["offered"], 2),
+            "diff": f"{c['edge']:+.0%}",
+            "kelly%": f"{KELLY_FRACTION * 100:.0f}%",
+            "stake (€)": stake_final,
+        })
+
+    log(f"Matched odds for {matched_count} / {len(fixtures)} fixtures.")
+    log(
+        f"Draw singles: {len(draw_singles)}, "
+        f"Over singles: {len(over_singles)}, "
+        f"Kelly picks: {len(kelly_picks)}"
+    )
+
     return draw_singles, over_singles, kelly_picks
 
+
 # ------------------------------------------------------
-# Funbet systems
+# FunBet systems
 # ------------------------------------------------------
-def build_funbet_draw(draws):
-    picks = sorted(draws, key=lambda x: x["score"], reverse=True)[:6]
+def build_funbet_draw(draw_singles):
+    """
+    Παίρνει τις καλύτερες ισοπαλίες και φτιάχνει σύστημα 3-4-5 ή 4-5-6.
+    """
+    sorted_draws = sorted(draw_singles, key=lambda x: x["score"], reverse=True)
+    picks = sorted_draws[:6]  # max 6
+
     n = len(picks)
+    system = None
+    columns = 0
 
     if n >= 6:
         sizes = [4, 5, 6]
@@ -304,79 +516,93 @@ def build_funbet_draw(draws):
         sizes = [3, 4, 5]
         system = "3-4-5"
     else:
-        return {"picks": picks, "system": None, "columns": 0, "total_stake": 0}
+        sizes = []
 
-    cols = sum(1 for r in sizes for _ in itertools.combinations(range(n), r))
-    total = cols * FUNBET_DRAW_STAKE_PER_COL
+    if sizes:
+        for r in sizes:
+            for _ in itertools.combinations(range(n), r):
+                columns += 1
+
+    total_stake = columns * FUNBET_DRAW_STAKE_PER_COL
 
     return {
         "picks": picks,
         "system": system,
-        "columns": cols,
-        "total_stake": total,
+        "columns": columns,
+        "stake_per_column": FUNBET_DRAW_STAKE_PER_COL,
+        "total_stake": total_stake,
     }
 
-def build_funbet_over(overs):
-    picks = sorted(overs, key=lambda x: x["score"], reverse=True)[:6]
+
+def build_funbet_over(over_singles):
+    """
+    Σύστημα 2-from-X για τα καλύτερα Over.
+    """
+    sorted_overs = sorted(over_singles, key=lambda x: x["score"], reverse=True)
+    picks = sorted_overs[:6]  # μέχρι 6
+
     n = len(picks)
     if n < 3:
-        return {"picks": picks, "system": None, "columns": 0, "total_stake": 0}
+        columns = 0
+    else:
+        columns = 0
+        for _ in itertools.combinations(range(n), 2):
+            columns += 1
 
-    cols = sum(1 for _ in itertools.combinations(range(n), 2))
-    total = cols * FUNBET_OVER_STAKE_PER_COL
+    total_stake = columns * FUNBET_OVER_STAKE_PER_COL
 
     return {
         "picks": picks,
-        "system": f"2-from-{n}",
-        "columns": cols,
-        "total_stake": total,
+        "system": f"2-from-{n}" if n >= 3 else None,
+        "columns": columns,
+        "stake_per_column": FUNBET_OVER_STAKE_PER_COL,
+        "total_stake": total_stake,
     }
 
+
 # ------------------------------------------------------
-# Bankroll Summary
+# Bankroll summary
 # ------------------------------------------------------
-def bankroll_summary(draw_s, over_s, fbd, fbo, kelly):
-    draw_spent = sum(x["stake"] for x in draw_s)
-    over_spent = sum(x["stake"] for x in over_s)
-    fb_draw_spent = fbd.get("total_stake", 0)
-    fb_over_spent = fbo.get("total_stake", 0)
-    kelly_spent = sum(x["stake (€)"] for x in kelly)
+def bankroll_summary(draw_singles, over_singles, funbet_draw, funbet_over, kelly_picks):
+    draw_spent = sum(p["stake"] for p in draw_singles)
+    over_spent = sum(p["stake"] for p in over_singles)
+    funbet_draw_spent = funbet_draw.get("total_stake", 0) or 0
+    funbet_over_spent = funbet_over.get("total_stake", 0) or 0
+    kelly_spent = sum(p["stake (€)"] for p in kelly_picks)
 
     return [
-        {"wallet": "Draw Singles", "spent": draw_spent, "after": DRAW_WALLET - draw_spent},
-        {"wallet": "Over Singles", "spent": over_spent, "after": OVER_WALLET - over_spent},
-        {"wallet": "FunBet Draw", "spent": fb_draw_spent, "after": FANBET_DRAW_WALLET - fb_draw_spent},
-        {"wallet": "FunBet Over", "spent": fb_over_spent, "after": FANBET_OVER_WALLET - fb_over_spent},
-        {"wallet": "Kelly", "spent": kelly_spent, "after": KELLY_WALLET - kelly_spent},
+        {
+            "Wallet": "Draw Singles",
+            "Before": f"{DRAW_WALLET}€",
+            "After": f"{DRAW_WALLET - draw_spent:.2f}€",
+            "Open Bets": f"{draw_spent:.2f}€",
+        },
+        {
+            "Wallet": "Over Singles",
+            "Before": f"{OVER_WALLET}€",
+            "After": f"{OVER_WALLET - over_spent:.2f}€",
+            "Open Bets": f"{over_spent:.2f}€",
+        },
+        {
+            "Wallet": "FanBet Draw",
+            "Before": f"{FANBET_DRAW_WALLET}€",
+            "After": f"{FANBET_DRAW_WALLET - funbet_draw_spent:.2f}€",
+            "Open Bets": f"{funbet_draw_spent:.2f}€",
+        },
+        {
+            "Wallet": "FunBet Over",
+            "Before": f"{FANBET_OVER_WALLET}€",
+            "After": f"{FANBET_OVER_WALLET - funbet_over_spent:.2f}€",
+            "Open Bets": f"{funbet_over_spent:.2f}€",
+        },
+        {
+            "Wallet": "Kelly",
+            "Before": f"{KELLY_WALLET:.0f}€",
+            "After": f"{KELLY_WALLET - kelly_spent:.2f}€",
+            "Open Bets": f"{kelly_spent:.2f}€",
+        },
     ]
 
-# ------------------------------------------------------
-# History Logging
-# ------------------------------------------------------
-def append_week_to_history(draw_s, over_s, fbd, fbo, kelly):
-    if not os.path.exists(HISTORY_PATH):
-        log("🟢 No existing history → creating fresh file.")
-        hist = []
-    else:
-        with open(HISTORY_PATH, "r", encoding="utf-8") as f:
-            hist = json.load(f)
-
-    week = f"{datetime.utcnow().date()}"
-
-    hist.append({
-        "week": week,
-        "draw_singles": draw_s,
-        "over_singles": over_s,
-        "funbet_draw": fbd,
-        "funbet_over": fbo,
-        "kelly": kelly,
-        "generated_at": datetime.utcnow().isoformat(),
-    })
-
-    with open(HISTORY_PATH, "w", encoding="utf-8") as f:
-        json.dump(hist, f, indent=2, ensure_ascii=False)
-
-    log(f"🟢 Appended Friday snapshot to history ({week}).")
 
 # ------------------------------------------------------
 # MAIN
@@ -386,30 +612,41 @@ def main():
 
     fixtures = load_thursday_fixtures()
     odds_index = build_odds_index(fixtures)
-    draw_s, over_s, kelly = generate_picks(fixtures, odds_index)
 
-    fbd = build_funbet_draw(draw_s)
-    fbo = build_funbet_over(over_s)
-    banks = bankroll_summary(draw_s, over_s, fbd, fbo, kelly)
+    draw_singles, over_singles, kelly_picks = generate_picks(fixtures, odds_index)
+    funbet_draw = build_funbet_draw(draw_singles)
+    funbet_over = build_funbet_over(over_singles)
+    banks = bankroll_summary(draw_singles, over_singles, funbet_draw, funbet_over, kelly_picks)
 
     report = {
         "timestamp": datetime.utcnow().isoformat(),
-        "draw_singles": draw_s,
-        "over_singles": over_s,
-        "funbet_draw": fbd,
-        "funbet_over": fbo,
-        "kelly": kelly,
-        "bankroll": banks,
+        "meta": {
+            "fixtures_total": len(fixtures),
+            "draw_singles": len(draw_singles),
+            "over_singles": len(over_singles),
+            "kelly_picks": len(kelly_picks),
+            "funbet_draw_cols": funbet_draw.get("columns", 0),
+            "funbet_over_cols": funbet_over.get("columns", 0),
+        },
+        "draw_singles": draw_singles,
+        "over_singles": over_singles,
+        "funbet_draw": funbet_draw,
+        "funbet_over": funbet_over,
+        "kelly": {"picks": kelly_picks},
+        "bankroll_status": banks,
     }
 
     with open(FRIDAY_REPORT_PATH, "w", encoding="utf-8") as f:
-        json.dump(report, f, indent=2, ensure_ascii=False)
+        json.dump(report, f, ensure_ascii=False, indent=2)
 
-    log(f"🟢 Friday shortlist saved → {FRIDAY_REPORT_PATH}")
-
-    append_week_to_history(draw_s, over_s, fbd, fbo, kelly)
-
-    log(f"Summary → Draw: {len(draw_s)}, Over: {len(over_s)}, Kelly: {len(kelly)}, FB Draw Cols: {fbd.get('columns', 0)}, FB Over Cols: {fbo.get('columns', 0)}")
+    log(f"✅ Friday shortlist report saved: {FRIDAY_REPORT_PATH}")
+    log(
+        f"Summary → Draw singles: {len(draw_singles)}, "
+        f"Over singles: {len(over_singles)}, "
+        f"Kelly picks: {len(kelly_picks)}, "
+        f"FunBet Draw cols: {funbet_draw.get('columns', 0)}, "
+        f"FunBet Over cols: {funbet_over.get('columns', 0)}"
+    )
 
 
 if __name__ == "__main__":
