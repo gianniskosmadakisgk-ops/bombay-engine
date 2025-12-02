@@ -1,27 +1,23 @@
 import os
 import json
 from datetime import datetime
-from pathlib import Path
 import itertools
 import re
 
 import requests
 
 # ======================================================
-#  FRIDAY SHORTLIST v2  (Giannis Edition) - FINAL
+#  FRIDAY SHORTLIST v2  (Giannis Edition – FINAL RULES)
 #
-#  - Διαβάζει το Thursday report (fair odds + scores)
-#  - Τραβάει ΠΡΑΓΜΑΤΙΚΕΣ αποδόσεις από TheOddsAPI
-#  - Φτιάχνει:
-#       * Draw singles (max 10)
-#       * Over singles (max 10)
-#       * FunBet Draw system
-#       * FunBet Over system
+#  - Διαβάζει Thursday report (fair odds + scores)
+#  - Τραβάει πραγματικές αποδόσεις από TheOddsAPI
+#  - Επιλογές:
+#       * Draw singles  (έως 10 picks / όλες οι λίγκες)
+#       * Over singles  (έως 10 picks / όλες οι λίγκες)
+#       * FanBet Draw system (3-4-5 ή 4-5-6)
+#       * FanBet Over system (2-from-X)
 #       * Kelly value bets (1 / X / 2 / Over 2.5)
 #       * Bankroll summary
-#  - Fallback:
-#       * Αν δεν βρεθούν odds για έναν αγώνα, τα singles
-#         μπορούν να βγουν με fair_odd (χωρίς value diff).
 # ======================================================
 
 THURSDAY_REPORT_PATH = "logs/thursday_report_v1.json"
@@ -37,7 +33,14 @@ DRAW_WALLET = 300
 OVER_WALLET = 300
 FANBET_DRAW_WALLET = 100
 FANBET_OVER_WALLET = 100
-KELLY_WALLET = 300.0      # αρχικό Kelly κεφάλαιο (σταθερή βάση)
+KELLY_WALLET = 300.0       # αρχικό Kelly κεφάλαιο (reference)
+
+# ---------------------- LIMITS -------------------------
+MAX_DRAW_PICKS = 10
+MAX_OVER_PICKS = 10
+
+FUNBET_DRAW_STAKE_PER_COL = 2.0
+FUNBET_OVER_STAKE_PER_COL = 4.0
 
 # ---------------------- THRESHOLDS ---------------------
 DRAW_MIN_SCORE = 7.5
@@ -46,28 +49,22 @@ DRAW_MIN_ODDS = 2.70
 OVER_MIN_SCORE = 7.5
 OVER_MIN_FAIR = 1.70
 
-# Overs με score >= 9 παίζονται "υποχρεωτικά" με μικρή ανοχή εις βάρος μας
-OVER_FORCE_SCORE = 9.0
-OVER_NEG_EDGE_TOL = -0.10   # επιτρέπουμε μέχρι -10% edge για forced overs
-
-MAX_DRAW_SINGLES = 10
-MAX_OVER_SINGLES = 10
+# auto-play over rules (για “τέρατα” σκορ)
+OVER_AUTO_SCORE = 9.0
+OVER_NEG_EDGE_LIMIT = -0.10   # δεχόμαστε μέχρι -10% εις βάρος μας
 
 # Kelly rules
-KELLY_VALUE_THRESHOLD = 0.15      # +15% min edge
+KELLY_VALUE_THRESHOLD = 0.15      # +15% min edge vs fair
 KELLY_FRACTION = 0.40             # 40% του πλήρους Kelly
-KELLY_MIN_PROB = 0.25             # min probability 25%
+KELLY_MIN_PROB = 0.25             # min probability 25% (fair <= 4.00)
 KELLY_MAX_EXPOSURE_PCT = 0.35     # 35% του αρχικού bank → max 105€
-KELLY_MAX_BET_PCT = 0.05          # max 5% του αρχικού bank ανά bet → max 15€
 
-FUNBET_DRAW_STAKE_PER_COL = 2.0
-FUNBET_OVER_STAKE_PER_COL = 4.0
+# bonus προτεραιότητας για “αγαπημένες” λίγκες
+DRAW_LEAGUE_BONUS = 0.20
+OVER_LEAGUE_BONUS = 0.20
 
-# Bonus προτεραιότητας για "καλές" λίγκες
-DRAW_PRIORITY_BONUS = 0.20
-OVER_PRIORITY_BONUS = 0.20
-
-# Λίγκες σύμφωνα με το blueprint (για bonus/priorities)
+# ---------------------- LEAGUES ------------------------
+# Λίγκες όπου ο Draw / Over engine είναι πιο αξιόπιστος
 DRAW_LEAGUES = {
     "Ligue 1",
     "Serie A",
@@ -91,8 +88,6 @@ OVER_LEAGUES = {
 }
 
 # league name -> TheOddsAPI sport_key
-# (μόνο όσες λίγκες υποστηρίζει το TheOddsAPI – οι υπόλοιπες
-#  θα δουλεύουν μόνο με fair odds και χωρίς Kelly)
 LEAGUE_TO_SPORT = {
     # Αγγλία
     "Premier League": "soccer_epl",
@@ -197,7 +192,7 @@ def api_get_odds(sport_key: str):
 
 def normalize_team(name: str) -> str:
     """
-    Απλοποιημένο normalizer για να ταιριάζουμε ονόματα ομάδων
+    Normalizer για να ταιριάζουμε ονόματα ομάδων
     μεταξύ API-Football και TheOddsAPI.
     """
     if not name:
@@ -211,14 +206,9 @@ def normalize_team(name: str) -> str:
 
 def build_odds_index(fixtures):
     """
-    Χτυπάει TheOddsAPI μόνο για τα leagues που χρειαζόμαστε
-    και χτίζει index:
-        (norm_home, norm_away) -> {
-            "odds_home": price,
-            "odds_draw": price,
-            "odds_away": price,
-            "odds_over_2_5": price
-        }
+    Χτίζει index:
+        (norm_home, norm_away) -> odds dict
+    μόνο για λίγκες που υποστηρίζει το TheOddsAPI.
     """
     leagues_used = sorted({f["league"] for f in fixtures if f.get("league") in LEAGUE_TO_SPORT})
     log(f"Leagues in Thursday report (with odds support): {leagues_used}")
@@ -297,7 +287,7 @@ def flat_stake(score: float) -> int:
     """
     8.5+ → 20€
     7.5–8.49 → 15€
-    κάτω από 7.5 → skip
+    <7.5  →  0€ (skip)
     """
     if score >= 8.5:
         return 20
@@ -316,11 +306,6 @@ def generate_picks(fixtures, odds_index):
     for f in fixtures:
         league = f.get("league", "")
         match_label = f.get("match", "")
-
-        # date/time από Thursday (αν υπάρχουν)
-        date_local = f.get("date_local", "")
-        time_local = f.get("time_local", "")
-
         fair_1 = f.get("fair_1")
         fair_x = f.get("fair_x")
         fair_2 = f.get("fair_2")
@@ -348,12 +333,8 @@ def generate_picks(fixtures, odds_index):
         odds_away = odds.get("odds_away")
         odds_over = odds.get("odds_over_2_5")
 
-        # --------------------------------------------------
-        # DRAW SINGLES  (από ΟΛΕΣ τις λίγκες, με bonus στις draw_leagues)
-        # --------------------------------------------------
+        # -------------- DRAW SINGLES  (όλες οι λίγκες) --------------
         if fair_x and score_draw >= DRAW_MIN_SCORE:
-
-            score_eff = score_draw + (DRAW_PRIORITY_BONUS if league in DRAW_LEAGUES else 0.0)
 
             if odds_x:
                 market_odds_x = float(odds_x)
@@ -363,16 +344,15 @@ def generate_picks(fixtures, odds_index):
                 odds_source = "market"
             else:
                 market_odds_x = float(fair_x)
-                diff_label = "n/a"
+                diff_label = "—"
                 value_raw = 0.0
                 odds_source = "model"
 
             if market_odds_x >= DRAW_MIN_ODDS:
                 stake = flat_stake(score_draw)
                 if stake > 0:
+                    priority = score_draw + (DRAW_LEAGUE_BONUS if league in DRAW_LEAGUES else 0.0)
                     draw_singles.append({
-                        "date": date_local,
-                        "time": time_local,
                         "match": match_label,
                         "league": league,
                         "odds": round(market_odds_x, 2),
@@ -380,66 +360,58 @@ def generate_picks(fixtures, odds_index):
                         "diff": diff_label,
                         "value_raw": round(value_raw, 4),
                         "score": round(score_draw, 2),
-                        "score_eff": round(score_eff, 3),
                         "stake": stake,
                         "wallet": "Draw Singles",
                         "odds_source": odds_source,
+                        "priority": priority,
                     })
 
-        # --------------------------------------------------
-        # OVER SINGLES  (από ΟΛΕΣ τις λίγκες, με bonus στις over_leagues)
-        # --------------------------------------------------
+        # -------------- OVER SINGLES  (όλες οι λίγκες) --------------
         if fair_over and score_over >= OVER_MIN_SCORE:
 
-            score_eff_over = score_over + (OVER_PRIORITY_BONUS if league in OVER_LEAGUES else 0.0)
-
             if odds_over:
-                used_odds_over = float(odds_over)
-                diff_over = (used_odds_over - fair_over) / fair_over
+                market_odds_over = float(odds_over)
+                diff_over = (market_odds_over - fair_over) / fair_over
                 diff_label = f"{diff_over:+.0%}"
                 value_raw = diff_over
                 odds_source = "market"
             else:
-                used_odds_over = float(fair_over)
-                diff_over = 0.0
-                diff_label = "n/a"
+                market_odds_over = float(fair_over)
+                diff_label = "—"
                 value_raw = 0.0
                 odds_source = "model"
 
-            should_play = False
+            # βασικός κανόνας value (παίζουμε μόνο αν >= fair)
+            edge_ok = value_raw >= 0.0
 
-            # Forced over zone (score >= 9): παίζουμε ό,τι και να γίνει
-            # αρκεί απόδοση ≥ 1.70 και edge ≥ -10%
-            if score_over >= OVER_FORCE_SCORE:
-                if used_odds_over >= OVER_MIN_FAIR and diff_over >= OVER_NEG_EDGE_TOL:
-                    should_play = True
-            else:
-                # Κανονική ζώνη: score 7.5–8.99, απλό φίλτρο απόδοσης
-                if used_odds_over >= OVER_MIN_FAIR:
-                    should_play = True
+            # special rule για σκορ ≥ 9:
+            # παίζουμε οπωσδήποτε αν η απόδοση είναι τουλάχιστον 1.70
+            # και το value δεν είναι χειρότερο από -10%
+            auto_over_monster = (
+                score_over >= OVER_AUTO_SCORE
+                and market_odds_over >= OVER_MIN_FAIR
+                and value_raw >= OVER_NEG_EDGE_LIMIT
+            )
 
-            if should_play:
+            if market_odds_over >= OVER_MIN_FAIR and (edge_ok or auto_over_monster):
                 stake = flat_stake(score_over)
                 if stake > 0:
+                    priority = score_over + (OVER_LEAGUE_BONUS if league in OVER_LEAGUES else 0.0)
                     over_singles.append({
-                        "date": date_local,
-                        "time": time_local,
                         "match": match_label,
                         "league": league,
-                        "odds": round(used_odds_over, 2),
+                        "odds": round(market_odds_over, 2),
                         "fair": round(fair_over, 2),
                         "diff": diff_label,
                         "value_raw": round(value_raw, 4),
                         "score": round(score_over, 2),
-                        "score_eff": round(score_eff_over, 3),
                         "stake": stake,
                         "wallet": "Over Singles",
                         "odds_source": odds_source,
+                        "priority": priority,
                     })
 
-        # --------------------------------------------------
-        # KELLY CANDIDATES (1 / X / 2 / Over 2.5) - RAW
-        # --------------------------------------------------
+        # -------------- KELLY CANDIDATES (1 / X / 2 / Over 2.5) --------------
         def add_kelly_candidate(market_label, fair, offered):
             if not fair or not offered:
                 return
@@ -449,12 +421,13 @@ def generate_picks(fixtures, odds_index):
             if fair <= 1.01 or offered <= 1.01:
                 return
 
+            # probability από fair odds
             p = 1.0 / fair
             if p < KELLY_MIN_PROB:
                 return
 
-            edge = (offered - fair) / fair
-            if edge < KELLY_VALUE_THRESHOLD:
+            diff = (offered - fair) / fair
+            if diff < KELLY_VALUE_THRESHOLD:
                 return
 
             b = offered - 1.0
@@ -462,26 +435,12 @@ def generate_picks(fixtures, odds_index):
             if b <= 0:
                 return
 
-            f_full = (b * p - q) / b
-            if f_full <= 0:
+            full_kelly_fraction = (b * p - q) / b
+            if full_kelly_fraction <= 0:
                 return
 
-            # Fractional Kelly
-            f_frac = f_full * KELLY_FRACTION
-
-            # Βασικό stake
-            stake = f_frac * KELLY_WALLET
-
-            # Όσο μεγαλύτερη η απόδοση, τόσο μικρότερο stake
-            # π.χ. σε απόδοση 2.5 → factor ~1, σε 5 → 0.5, σε 10 → 0.25
-            risk_factor = min(1.0, 2.5 / offered)
-            stake *= risk_factor
-
-            # Cap ανά bet: max 5% του αρχικού bank
-            max_per_bet = KELLY_WALLET * KELLY_MAX_BET_PCT
-            stake = min(stake, max_per_bet)
-
-            if stake <= 0:
+            raw_stake = full_kelly_fraction * KELLY_FRACTION * KELLY_WALLET
+            if raw_stake <= 0:
                 return
 
             kelly_candidates.append({
@@ -490,9 +449,9 @@ def generate_picks(fixtures, odds_index):
                 "market": market_label,
                 "fair": fair,
                 "offered": offered,
-                "edge": edge,
+                "edge": diff,
                 "prob": p,
-                "stake_raw": stake,
+                "stake_raw": raw_stake,
             })
 
         # Kelly μόνο όταν έχουμε πραγματικά odds:
@@ -505,24 +464,24 @@ def generate_picks(fixtures, odds_index):
         if odds_over and fair_over:
             add_kelly_candidate("Over 2.5", fair_over, odds_over)
 
-    # --------------------------------------------------
-    # Limit Draw/Over singles σε max 10 (με βάση score_eff)
-    # --------------------------------------------------
+    # ------- LIMIT & SORT DRAWS / OVERS (έως 10 picks) -------
     draw_singles = sorted(
         draw_singles,
-        key=lambda x: x.get("score_eff", x["score"]),
+        key=lambda x: x["priority"],
         reverse=True
-    )[:MAX_DRAW_SINGLES]
+    )[:MAX_DRAW_PICKS]
+    for d in draw_singles:
+        d.pop("priority", None)
 
     over_singles = sorted(
         over_singles,
-        key=lambda x: x.get("score_eff", x["score"]),
+        key=lambda x: x["priority"],
         reverse=True
-    )[:MAX_OVER_SINGLES]
+    )[:MAX_OVER_PICKS]
+    for o in over_singles:
+        o.pop("priority", None)
 
-    # --------------------------------------------------
-    # Kelly scaling: top 10, cap 35% exposure
-    # --------------------------------------------------
+    # ------- KELLY: scale ώστε συνολικό exposure <= 35% -------
     kelly_candidates = sorted(
         kelly_candidates,
         key=lambda x: x["stake_raw"],
@@ -530,7 +489,7 @@ def generate_picks(fixtures, odds_index):
     )[:10]
 
     total_raw = sum(p["stake_raw"] for p in kelly_candidates)
-    max_exposure = KELLY_WALLET * KELLY_MAX_EXPOSURE_PCT  # π.χ. 105€
+    max_exposure = KELLY_WALLET * KELLY_MAX_EXPOSURE_PCT
 
     if total_raw > 0 and total_raw > max_exposure:
         scale = max_exposure / total_raw
@@ -540,9 +499,6 @@ def generate_picks(fixtures, odds_index):
     kelly_picks = []
     for c in kelly_candidates:
         stake_final = round(c["stake_raw"] * scale, 2)
-        if stake_final < 1.0:
-            # πετάμε γελοία μικρά stakes
-            continue
         kelly_picks.append({
             "match": c["match"],
             "league": c["league"],
@@ -571,11 +527,7 @@ def build_funbet_draw(draw_singles):
     """
     Παίρνει τις καλύτερες ισοπαλίες και φτιάχνει σύστημα 3-4-5 ή 4-5-6.
     """
-    sorted_draws = sorted(
-        draw_singles,
-        key=lambda x: x.get("score_eff", x["score"]),
-        reverse=True
-    )
+    sorted_draws = sorted(draw_singles, key=lambda x: x["score"], reverse=True)
     picks = sorted_draws[:6]  # max 6
 
     n = len(picks)
@@ -611,26 +563,24 @@ def build_funbet_over(over_singles):
     """
     Σύστημα 2-from-X για τα καλύτερα Over.
     """
-    sorted_overs = sorted(
-        over_singles,
-        key=lambda x: x.get("score_eff", x["score"]),
-        reverse=True
-    )
+    sorted_overs = sorted(over_singles, key=lambda x: x["score"], reverse=True)
     picks = sorted_overs[:6]  # μέχρι 6
 
     n = len(picks)
     if n < 3:
         columns = 0
+        system = None
     else:
         columns = 0
         for _ in itertools.combinations(range(n), 2):
             columns += 1
+        system = f"2-from-{n}"
 
     total_stake = columns * FUNBET_OVER_STAKE_PER_COL
 
     return {
         "picks": picks,
-        "system": f"2-from-{n}" if n >= 3 else None,
+        "system": system,
         "columns": columns,
         "stake_per_column": FUNBET_OVER_STAKE_PER_COL,
         "total_stake": total_stake,
@@ -685,7 +635,7 @@ def bankroll_summary(draw_singles, over_singles, funbet_draw, funbet_over, kelly
 # MAIN
 # ------------------------------------------------------
 def main():
-    log("🎯 Running Friday Shortlist (v2, final Giannis edition)...")
+    log("🎯 Running Friday Shortlist (v2 – final rules)...")
 
     fixtures = load_thursday_fixtures()
     odds_index = build_odds_index(fixtures)
@@ -718,8 +668,8 @@ def main():
 
     log(f"✅ Friday shortlist report saved: {FRIDAY_REPORT_PATH}")
     log(
-        f"Summary → Draw singles: {len(draw_singles)}, "
-        f"Over singles: {len(over_singles)}, "
+        "Summary → Draw singles: "
+        f"{len(draw_singles)}, Over singles: {len(over_singles)}, "
         f"Kelly picks: {len(kelly_picks)}, "
         f"FunBet Draw cols: {funbet_draw.get('columns', 0)}, "
         f"FunBet Over cols: {funbet_over.get('columns', 0)}"
