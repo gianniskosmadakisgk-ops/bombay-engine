@@ -1,61 +1,90 @@
 openapi: 3.1.1
 info:
   title: Bombay Engine API
-  version: "6.0.0"
-  description: |
-    Bombay Engine endpoints for automated football analytics and ChatGPT integration.
+  version: "1.0.0"
+  description: >
+    Internal API for Agent Bombay – Thursday analysis (full v3 model),
+    Friday shortlist (Kelly), and Tuesday recap.
+
 servers:
   - url: https://bombay-engine.onrender.com
 
 paths:
+  /healthcheck:
+    get:
+      operationId: healthcheck
+      summary: Healthcheck for Bombay Engine
+      responses:
+        "200":
+          description: Engine is alive
+          content:
+            application/json:
+              schema:
+                type: object
+
+  # --------------------------------------------------
+  # THURSDAY – FULL ENGINE v3
+  # --------------------------------------------------
+  /thursday-analysis-v3:
+    get:
+      operationId: thursday_analysis_v3
+      summary: Run full Thursday analysis (v3 model)
+      description: >
+        Runs the Thursday engine (thursday_engine_full_v3.py) and returns
+        the JSON report with fixtures, model probabilities and scores.
+      responses:
+        "200":
+          description: Thursday analysis result
+          content:
+            application/json:
+              schema:
+                type: object
+
+  # Alias for compatibility
   /thursday-analysis:
     get:
-      operationId: runThursdayAnalysis
-      summary: Run Thursday Analysis
-      description: Triggers the Thursday analytics pipeline and returns status and data.
+      operationId: thursday_analysis_legacy
+      summary: Run Thursday analysis (alias to v3)
       responses:
         "200":
-          description: Thursday analysis completed successfully.
+          description: Thursday analysis result (alias)
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/AnalysisResponse"
+                type: object
 
+  # --------------------------------------------------
+  # FRIDAY – SHORTLIST (Kelly)
+  # --------------------------------------------------
   /friday-shortlist:
     get:
-      operationId: runFridayShortlist
-      summary: Run Friday Shortlist
-      description: Generates Friday shortlist (draws, O/U, value picks).
+      operationId: friday_shortlist
+      summary: Run Friday shortlist engine
+      description: >
+        Runs the Friday shortlist script (friday_shortlist_v2.py),
+        loading the latest Thursday report and applying value + Kelly filters.
       responses:
         "200":
-          description: Friday shortlist completed successfully.
+          description: Friday shortlist with recommended bets
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/AnalysisResponse"
+                type: object
 
+  # --------------------------------------------------
+  # TUESDAY – WEEKLY RECAP
+  # --------------------------------------------------
   /tuesday-recap:
     get:
-      operationId: runTuesdayRecap
-      summary: Run Tuesday Recap
-      description: Creates recap report for last sessions and performance summary.
+      operationId: tuesday_recap
+      summary: Run Tuesday recap engine
+      description: >
+        Runs the Tuesday recap script (tuesday_recap_v2.py) and returns
+        weekly performance stats (winrate, ROI, drawdowns, etc.).
       responses:
         "200":
-          description: Tuesday recap completed successfully.
+          description: Tuesday recap report
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/AnalysisResponse"
-
-components:
-  schemas:
-    AnalysisResponse:
-      type: object
-      properties:
-        status:
-          type: string
-          example: "Thursday Analysis complete"
-        timestamp:
-          type: string
-          format: date-time
-          example: "2025-11-21T09:30:08.602463Z"
+                type: object
