@@ -109,8 +109,8 @@ def run_script_with_report(script_name: str, report_path: str):
 # ======================================================
 @app.route("/run/thursday", methods=["GET"])
 def run_thursday():
-    # τρέχει μόνο το script και γυρίζει stdout/stderr
-    return run_script("thursday_analysis_v1.py")
+    # Πλέον τρέχουμε το νέο full engine script (v3)
+    return run_script("analysis/thursday_engine_full_v3.py")
 
 
 @app.route("/run/friday", methods=["GET"])
@@ -129,8 +129,9 @@ def run_tuesday():
 # ======================================================
 @app.route("/thursday-analysis", methods=["GET"])
 def api_thursday_analysis():
+    # Το report παραμένει στο ίδιο path, το γράφει πλέον το v3 engine
     return run_script_with_report(
-        "thursday_analysis_v1.py", "logs/thursday_report_v1.json"
+        "analysis/thursday_engine_full_v3.py", "logs/thursday_report_v1.json"
     )
 
 
