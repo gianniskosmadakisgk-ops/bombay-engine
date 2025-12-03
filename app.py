@@ -9,7 +9,7 @@ app = Flask(__name__)
 
 
 # ======================================================
-# Βοηθητικό: τρέχει script και γυρίζει stdout / stderr
+# Helper: run script and return stdout / stderr
 # ======================================================
 def run_script(script_name: str):
     try:
@@ -46,8 +46,7 @@ def run_script(script_name: str):
 
 
 # ======================================================
-# Βοηθητικό: τρέχει script ΚΑΙ φορτώνει JSON report
-# (για χρήση από τον Agent Bombay μέσω OpenAPI)
+# Helper: run script AND load JSON report
 # ======================================================
 def run_script_with_report(script_name: str, report_path: str):
     try:
@@ -105,47 +104,58 @@ def run_script_with_report(script_name: str, report_path: str):
 
 
 # ======================================================
-#  ΠΑΛΙΑ MANUAL ENDPOINTS (για browser tests)
+#  ΠΑΛΙΑ MANUAL ENDPOINTS (v1) – τα κρατάμε για backup
 # ======================================================
 @app.route("/run/thursday", methods=["GET"])
-def run_thursday():
-    # Πλέον τρέχουμε το νέο full engine script (v3)
-    return run_script("analysis/thursday_engine_full_v3.py")
+def run_thursday_v1():
+    return run_script("thursday_analysis_v1.py")
 
 
-@app.route("/run/friday", methods=["GET"])
-def run_friday():
-    return run_script("friday_shortlist_v2.py")
-
-
-@app.route("/run/tuesday", methods=["GET"])
-def run_tuesday():
-    return run_script("tuesday_recap_v2.py")
-
-
-# ======================================================
-#  ΝΕΑ ENDPOINTS ΓΙΑ ΤΟΝ AGENT (OpenAPI)
-#  Εδώ γυρίζουμε και το JSON report
-# ======================================================
 @app.route("/thursday-analysis", methods=["GET"])
-def api_thursday_analysis():
-    # Το report παραμένει στο ίδιο path, το γράφει πλέον το v3 engine
+def api_thursday_analysis_v1():
     return run_script_with_report(
-        "analysis/thursday_engine_full_v3.py", "logs/thursday_report_v1.json"
+        "thursday_analysis_v1.py", "logs/thursday_report_v1.json"
     )
 
 
+@app.route("/run/friday", methods=["GET"])
+def run_friday_v2():
+    return run_script("friday_shortlist_v2.py")
+
+
 @app.route("/friday-shortlist", methods=["GET"])
-def api_friday_shortlist():
+def api_friday_shortlist_v2():
     return run_script_with_report(
         "friday_shortlist_v2.py", "logs/friday_shortlist_v2.json"
     )
 
 
+@app.route("/run/tuesday", methods=["GET"])
+def run_tuesday_v2():
+    return run_script("tuesday_recap_v2.py")
+
+
 @app.route("/tuesday-recap", methods=["GET"])
-def api_tuesday_recap():
+def api_tuesday_recap_v2():
     return run_script_with_report(
         "tuesday_recap_v2.py", "logs/tuesday_recap_v2.json"
+    )
+
+
+# ======================================================
+#  ΝΕΑ ENDPOINTS ΓΙΑ ΤΟΝ FULL ENGINE v3
+# ======================================================
+@app.route("/run/thursday-v3", methods=["GET"])
+def run_thursday_v3():
+    # νέο full engine – βρίσκεται στο src/analysis
+    return run_script("src/analysis/thursday_engine_full_v3.py")
+
+
+@app.route("/thursday-analysis-v3", methods=["GET"])
+def api_thursday_analysis_v3():
+    return run_script_with_report(
+        "src/analysis/thursday_engine_full_v3.py",
+        "logs/thursday_report_v3.json",
     )
 
 
