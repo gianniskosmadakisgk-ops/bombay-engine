@@ -20,7 +20,7 @@ paths:
           content:
             application/json:
               schema:
-                type: object
+                $ref: "#/components/schemas/HealthcheckResponse"
 
   # --------------------------------------------------
   # THURSDAY – FULL ENGINE v3
@@ -38,9 +38,9 @@ paths:
           content:
             application/json:
               schema:
-                type: object
+                $ref: "#/components/schemas/ThursdayAnalysisResponse"
 
-  # Alias for compatibility
+  # Alias για συμβατότητα
   /thursday-analysis:
     get:
       operationId: thursday_analysis_legacy
@@ -51,7 +51,7 @@ paths:
           content:
             application/json:
               schema:
-                type: object
+                $ref: "#/components/schemas/ThursdayAnalysisResponse"
 
   # --------------------------------------------------
   # FRIDAY – SHORTLIST (Kelly)
@@ -69,7 +69,7 @@ paths:
           content:
             application/json:
               schema:
-                type: object
+                $ref: "#/components/schemas/FridayShortlistResponse"
 
   # --------------------------------------------------
   # TUESDAY – WEEKLY RECAP
@@ -87,4 +87,85 @@ paths:
           content:
             application/json:
               schema:
+                $ref: "#/components/schemas/TuesdayRecapResponse"
+
+components:
+  schemas:
+    HealthcheckResponse:
+      type: object
+      properties:
+        status:
+          type: string
+        message:
+          type: string
+
+    ThursdayAnalysisResponse:
+      type: object
+      properties:
+        status:
+          type: string
+        script:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        return_code:
+          type: integer
+        stderr:
+          type: string
+          nullable: true
+        stdout:
+          type: string
+          nullable: true
+        report:
+          type: object
+          properties:
+            fixtures:
+              type: array
+              items:
                 type: object
+                additionalProperties: true
+
+    FridayShortlistResponse:
+      type: object
+      properties:
+        status:
+          type: string
+        script:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        return_code:
+          type: integer
+        stderr:
+          type: string
+          nullable: true
+        stdout:
+          type: string
+          nullable: true
+        report:
+          type: object
+          additionalProperties: true
+
+    TuesdayRecapResponse:
+      type: object
+      properties:
+        status:
+          type: string
+        script:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        return_code:
+          type: integer
+        stderr:
+          type: string
+          nullable: true
+        stdout:
+          type: string
+          nullable: true
+        report:
+          type: object
+          additionalProperties: true
