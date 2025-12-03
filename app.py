@@ -2,14 +2,12 @@ import os
 import json
 import subprocess
 from datetime import datetime
-
 from flask import Flask, jsonify
 
 app = Flask(__name__)
 
-
 # ======================================================
-#  Helper: run script and capture stdout/stderr
+# Βοηθητικό: τρέχει script και γυρίζει stdout / stderr
 # ======================================================
 def run_script(script_name: str):
     try:
@@ -46,8 +44,7 @@ def run_script(script_name: str):
 
 
 # ======================================================
-#  Helper: run script AND load JSON report
-#  (Used by the Agent – gives full structured report)
+#  Helper για scripts με JSON output
 # ======================================================
 def run_script_with_report(script_name: str, report_path: str):
     try:
@@ -91,7 +88,7 @@ def run_script_with_report(script_name: str, report_path: str):
         )
 
     except Exception as e:
-        print(f"❌ Error running {script_name} with report: {e}", flush=True)
+        print(f"❌ Error running {script_name}: {e}", flush=True)
         return (
             jsonify(
                 {
@@ -105,43 +102,26 @@ def run_script_with_report(script_name: str, report_path: str):
 
 
 # ======================================================
-#  LEGACY ENDPOINTS (still work)
+#  MANUAL ENDPOINTS
 # ======================================================
-
-@app.route("/run/thursday", methods=["GET"])
-def run_thursday_legacy():
-    return run_script("thursday_analysis_v1.py")
-
-
-@app.route("/run/friday", methods=["GET"])
-def run_friday_legacy():
-    return run_script("friday_shortlist_v2.py")
-
-
-@app.route("/run/tuesday", methods=["GET"])
-def run_tuesday_legacy():
-    return run_script("tuesday_recap_v2.py")
-
-
-# ======================================================
-#  NEW ENDPOINTS V3 – FULL ENGINE
-# ======================================================
-
 @app.route("/run/thursday-v3", methods=["GET"])
 def run_thursday_v3():
-    return run_script("analysis/thursday_engine_full_v3.py")
+    return run_script("src/analysis/thursday_engine_full_v3.py")
 
 
+# ======================================================
+#  NEW API ENDPOINTS (για GPT)
+# ======================================================
 @app.route("/thursday-analysis-v3", methods=["GET"])
-def thursday_analysis_v3():
+def api_thursday_analysis_v3():
     return run_script_with_report(
-        "analysis/thursday_engine_full_v3.py",
+        "src/analysis/thursday_engine_full_v3.py",
         "logs/thursday_report_v3.json"
     )
 
 
 # ======================================================
-#  HEALTHCHECK
+#  Healthcheck
 # ======================================================
 @app.route("/healthcheck", methods=["GET"])
 def healthcheck():
@@ -149,9 +129,9 @@ def healthcheck():
 
 
 # ======================================================
-#  ENTRY POINT
+#  Entry point
 # ======================================================
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
-    print(f"🟢 Starting Bombay Engine on port {port}...", flush=True)
+    print(f"🟢 Starting Bombay Engine Flask Server on port {port}...", flush=True)
     app.run(host="0.0.0.0", port=port, use_reloader=False)
