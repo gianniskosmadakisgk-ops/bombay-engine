@@ -9,7 +9,7 @@ app = Flask(__name__)
 
 
 # ======================================================
-# Βοηθητικό: τρέχει script και γυρίζει stdout / stderr
+#  Helper: run script and capture stdout/stderr
 # ======================================================
 def run_script(script_name: str):
     try:
@@ -46,7 +46,8 @@ def run_script(script_name: str):
 
 
 # ======================================================
-# Βοηθητικό: τρέχει script ΚΑΙ φορτώνει JSON report
+#  Helper: run script AND load JSON report
+#  (Used by the Agent – gives full structured report)
 # ======================================================
 def run_script_with_report(script_name: str, report_path: str):
     try:
@@ -104,69 +105,43 @@ def run_script_with_report(script_name: str, report_path: str):
 
 
 # ======================================================
-#  MANUAL ENDPOINTS (για browser tests)
-#  ΌΛΑ πλέον δείχνουν στο ΝΕΟ Thursday engine v3
+#  LEGACY ENDPOINTS (still work)
 # ======================================================
 
-THURSDAY_SCRIPT = "src/analysis/thursday_engine_full_v3.py"
-THURSDAY_REPORT = "logs/thursday_report_v3.json"
-
-
 @app.route("/run/thursday", methods=["GET"])
-def run_thursday_alias():
-    # παλιό URL, πλέον τρέχει τον νέο engine
-    return run_script(THURSDAY_SCRIPT)
-
-
-@app.route("/run/thursday-v3", methods=["GET"])
-def run_thursday_v3():
-    return run_script(THURSDAY_SCRIPT)
+def run_thursday_legacy():
+    return run_script("thursday_analysis_v1.py")
 
 
 @app.route("/run/friday", methods=["GET"])
-def run_friday():
+def run_friday_legacy():
     return run_script("friday_shortlist_v2.py")
 
 
 @app.route("/run/tuesday", methods=["GET"])
-def run_tuesday():
+def run_tuesday_legacy():
     return run_script("tuesday_recap_v2.py")
 
 
 # ======================================================
-#  ENDPOINTS ΓΙΑ ΤΟΝ AGENT (OpenAPI)
-#  Επιστρέφουν και το JSON report
+#  NEW ENDPOINTS V3 – FULL ENGINE
 # ======================================================
 
-@app.route("/thursday-analysis", methods=["GET"])
-def api_thursday_analysis_alias():
-    # παλιό URL → πλέον δίνει το v3 report
-    return run_script_with_report(THURSDAY_SCRIPT, THURSDAY_REPORT)
+@app.route("/run/thursday-v3", methods=["GET"])
+def run_thursday_v3():
+    return run_script("analysis/thursday_engine_full_v3.py")
 
 
 @app.route("/thursday-analysis-v3", methods=["GET"])
-def api_thursday_analysis_v3():
-    return run_script_with_report(THURSDAY_SCRIPT, THURSDAY_REPORT)
-
-
-@app.route("/friday-shortlist", methods=["GET"])
-def api_friday_shortlist():
+def thursday_analysis_v3():
     return run_script_with_report(
-        "friday_shortlist_v2.py",
-        "logs/friday_shortlist_v2.json",
-    )
-
-
-@app.route("/tuesday-recap", methods=["GET"])
-def api_tuesday_recap():
-    return run_script_with_report(
-        "tuesday_recap_v2.py",
-        "logs/tuesday_recap_v2.json",
+        "analysis/thursday_engine_full_v3.py",
+        "logs/thursday_report_v3.json"
     )
 
 
 # ======================================================
-#  Healthcheck
+#  HEALTHCHECK
 # ======================================================
 @app.route("/healthcheck", methods=["GET"])
 def healthcheck():
@@ -174,9 +149,9 @@ def healthcheck():
 
 
 # ======================================================
-#  Entry point
+#  ENTRY POINT
 # ======================================================
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
-    print(f"🟢 Starting Bombay Engine Flask Server on port {port}...", flush=True)
+    print(f"🟢 Starting Bombay Engine on port {port}...", flush=True)
     app.run(host="0.0.0.0", port=port, use_reloader=False)
