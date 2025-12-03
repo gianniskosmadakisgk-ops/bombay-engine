@@ -17,14 +17,40 @@ import yaml
 #       score_draw, score_over
 #  - Χρησιμοποιεί τοπικό cache για /teams/statistics
 #    ώστε να μην σκάει σε rate limits.
+#  - Φιλτράρει μόνο τις λίγκες-στόχους (Draw + Over engine)
 #  - Σώζει: logs/thursday_report_v1.json
 # ======================================================
 
 FOOTBALL_API_KEY = os.getenv("FOOTBALL_API_KEY")
 FOOTBALL_BASE_URL = "https://v3.football.api-sports.io"
 
-# Κύριες λίγκες – μπορείς να αλλάξεις / επεκτείνεις
-LEAGUES = [39, 140, 135, 78, 61]  # EPL, LaLiga, Serie A, Bundesliga, Ligue 1
+# ΛΙΓΚΕΣ-ΣΤΟΧΟΙ με βάση τα ονόματα του API-Football
+# (όχι IDs – φιλτράρισμα με league.name)
+TARGET_LEAGUES = {
+    # Draw Engine leagues
+    "Ligue 1",
+    "Serie A",
+    "La Liga",
+    "Championship",
+    "Serie B",
+    "Ligue 2",
+    "Liga Portugal 2",
+    "Swiss Super League",
+
+    # Over Engine leagues
+    "Bundesliga",
+    "Eredivisie",
+    "Jupiler Pro League",
+    "Superliga",
+    "Allsvenskan",
+    "Eliteserien",
+    "Liga Portugal 1",
+
+    # Extra για Kelly / γενική εικόνα
+    "Premier League",
+    "La Liga 2",
+    "Bundesliga 2",
+}
 
 # Από την ημέρα που τρέχει → επόμενες 4 μέρες (συμπερ. σήμερα)
 DAYS_FORWARD = 4
@@ -171,17 +197,27 @@ def api_get(path: str, params: dict) -> list:
 
 
 def fetch_fixtures(date_from: str, date_to: str, season: str) -> list:
+    """
+    Φέρνει ΟΛΑ τα fixtures στο window και μετά φιλτράρει
+    μόνο τις λίγκες που μας ενδιαφέρουν (TARGET_LEAGUES).
+    Δεν βασιζόμαστε σε numeric league IDs.
+    """
+    params = {
+        "season": season,
+        "from": date_from,
+        "to": date_to,
+    }
+    resp = api_get("/fixtures", params)
+    log(f"✅ Raw fixtures from API: {len(resp)} matches total")
+
     fixtures = []
-    for league_id in LEAGUES:
-        params = {
-            "league": league_id,
-            "season": season,
-            "from": date_from,
-            "to": date_to,
-        }
-        resp = api_get("/fixtures", params)
-        log(f"✅ Fixtures: league {league_id} → {len(resp)} matches")
-        fixtures.extend(resp)
+    for f in resp:
+        league = f.get("league", {}) or {}
+        league_name = league.get("name")
+        if league_name in TARGET_LEAGUES:
+            fixtures.append(f)
+
+    log(f"🎯 Filtered fixtures in target leagues: {len(fixtures)} matches")
     return fixtures
 
 
@@ -345,6 +381,11 @@ def main():
         try:
             league_name = f["league"]["name"]
             league_id = int(f["league"]["id"])
+
+            fixture_info = f["fixture"]
+            kickoff_iso = fixture_info.get("date")  # ISO UTC string
+            kickoff_ts = fixture_info.get("timestamp")  # UNIX timestamp
+
             home_team = f["teams"]["home"]["name"]
             away_team = f["teams"]["away"]["name"]
             home_id = int(f["teams"]["home"]["id"])
@@ -372,7 +413,10 @@ def main():
             processed.append(
                 {
                     "league": league_name,
+                    "league_id": league_id,
                     "match": match_label,
+                    "date_utc": kickoff_iso,
+                    "timestamp": kickoff_ts,
                     "fair_1": fair_1,
                     "fair_x": fair_x,
                     "fair_2": fair_2,
