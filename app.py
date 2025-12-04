@@ -7,13 +7,9 @@ from flask import Flask, jsonify
 app = Flask(__name__)
 
 # ======================================================
-#  Βοηθητικό: τρέχει script και γυρίζει stdout / stderr
+#  Helper: τρέχει script και γυρίζει stdout / stderr
 # ======================================================
 def run_script(script_name: str):
-    """
-    Τρέχει ένα Python script μέσα στο /opt/render/project/src
-    και γυρίζει μόνο stdout / stderr (για manual debug).
-    """
     try:
         print(f"🚀 Running script: {script_name}", flush=True)
 
@@ -48,140 +44,76 @@ def run_script(script_name: str):
 
 
 # ======================================================
-#  Helper για scripts με JSON report (για GPT)
+#  Helper: φορτώνει JSON report από δίσκο (ΧΩΡΙΣ να τρέχει script)
 # ======================================================
-def run_script_with_report(script_name: str, report_path: str):
-    """
-    Τρέχει ένα script και μετά προσπαθεί να φορτώσει JSON report
-    από το report_path (relative στο /opt/render/project/src).
-    """
+def load_report_json(report_path: str):
+    if not os.path.exists(report_path):
+        print(f"⚠️ Report file not found: {report_path}", flush=True)
+        return None, f"Report file not found: {report_path}"
+
     try:
-        print(f"🚀 Running script with report: {script_name}", flush=True)
-
-        result = subprocess.run(
-            ["python3", script_name],
-            cwd="/opt/render/project/src",
-            capture_output=True,
-            text=True,
-        )
-
-        print("----- SCRIPT OUTPUT START -----", flush=True)
-        print(result.stdout, flush=True)
-        print("----- SCRIPT OUTPUT END -----", flush=True)
-
-        if result.stderr:
-            print("⚠️ SCRIPT ERRORS:", flush=True)
-            print(result.stderr, flush=True)
-
-        report_data = None
-        report_full_path = os.path.join("/opt/render/project/src", report_path)
-
-        if os.path.exists(report_full_path):
-            try:
-                with open(report_full_path, "r", encoding="utf-8") as f:
-                    report_data = json.load(f)
-            except Exception as e:
-                print(f"⚠️ Failed to load report file {report_full_path}: {e}", flush=True)
-        else:
-            print(f"⚠️ Report file not found: {report_full_path}", flush=True)
-
-        return jsonify(
-            {
-                "status": "ok" if result.returncode == 0 else "error",
-                "script": script_name,
-                "timestamp": datetime.utcnow().isoformat(),
-                "return_code": result.returncode,
-                "stderr": result.stderr,
-                "stdout": result.stdout,
-                "report": report_data,
-            }
-        )
-
+        with open(report_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data, None
     except Exception as e:
-        print(f"❌ Error running {script_name} with report: {e}", flush=True)
+        print(f"⚠️ Failed to load report file {report_path}: {e}", flush=True)
+        return None, str(e)
+
+
+# ======================================================
+#  MANUAL ENDPOINTS  (τα χρησιμοποιείς εσύ από browser)
+# ======================================================
+@app.route("/run/thursday-v3", methods=["GET"])
+def run_thursday_v3():
+    # Αυτό καλεί το μεγάλο script και γράφει το logs/thursday_report_v3.json
+    return run_script("src/analysis/thursday_engine_full_v3.py")
+
+
+# ======================================================
+#  API ENDPOINTS ΓΙΑ GPT – γρήγορα, μόνο ανάγνωση report
+# ======================================================
+@app.route("/thursday-analysis-v3", methods=["GET"])
+def api_thursday_analysis_v3():
+    """
+    Επιστρέφει το τελευταίο Thursday report από logs/thursday_report_v3.json
+    ΔΕΝ ξανατρέχει το engine – υποθέτει ότι το /run/thursday-v3 έχει ήδη τρέξει.
+    """
+    report_path = "logs/thursday_report_v3.json"
+    report_data, error = load_report_json(report_path)
+
+    if report_data is None:
         return (
             jsonify(
                 {
                     "status": "error",
-                    "script": script_name,
-                    "error": str(e),
+                    "script": "src/analysis/thursday_engine_full_v3.py",
+                    "message": "Thursday report not available yet. Run /run/thursday-v3 first.",
+                    "error": error,
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "report": None,
                 }
             ),
-            500,
+            503,
         )
 
-
-# ======================================================
-#  MANUAL ENDPOINTS (browser tests)
-# ======================================================
-
-@app.route("/run/thursday-v3", methods=["GET"])
-def run_thursday_v3():
-    # Full Thursday engine (v3) με όλα τα μοντέλα
-    return run_script("src/analysis/thursday_engine_full_v3.py")
-
-
-@app.route("/run/friday-v3", methods=["GET"])
-def run_friday_v3():
-    # Friday shortlist (v2 script)
-    return run_script("friday_shortlist_v2.py")
-
-
-@app.route("/run/tuesday-v3", methods=["GET"])
-def run_tuesday_v3():
-    # Tuesday recap (v2 script)
-    return run_script("tuesday_recap_v2.py")
-
-
-# ======================================================
-#  API ENDPOINTS ΓΙΑ GPT (OpenAPI)
-# ======================================================
-
-@app.route("/thursday-analysis-v3", methods=["GET"])
-def api_thursday_analysis_v3():
-    """
-    Χρησιμοποιείται από το OpenAPI path /thursday-analysis-v3
-    και γυρίζει:
-      - status, script, timestamp, stdout/stderr
-      - report: το περιεχόμενο του logs/thursday_report_v3.json
-    """
-    return run_script_with_report(
-        "src/analysis/thursday_engine_full_v3.py",
-        "logs/thursday_report_v3.json",
+    return jsonify(
+        {
+            "status": "ok",
+            "script": "src/analysis/thursday_engine_full_v3.py",
+            "timestamp": datetime.utcnow().isoformat(),
+            "report": report_data,
+        }
     )
 
 
-@app.route("/thursday-analysis", methods=["GET"])
-def api_thursday_analysis_alias():
-    """
-    Alias για συμβατότητα – ίδιο αποτέλεσμα με /thursday-analysis-v3
-    """
-    return api_thursday_analysis_v3()
+# (placeholder – θα τα προσθέσουμε αργότερα αν θέλεις να συνδέσουμε Friday / Tuesday)
+# @app.route("/friday-shortlist-v3", methods=["GET"])
+# def api_friday_shortlist_v3():
+#     ...
 
-
-@app.route("/friday-shortlist", methods=["GET"])
-def api_friday_shortlist():
-    """
-    Χρησιμοποιείται από το OpenAPI path /friday-shortlist
-    Διαβάζει το τελευταίο Thursday report και βγάζει shortlist
-    σε logs/friday_shortlist_v2.json
-    """
-    return run_script_with_report(
-        "friday_shortlist_v2.py",
-        "logs/friday_shortlist_v2.json",
-    )
-
-
-@app.route("/tuesday-recap", methods=["GET"])
-def api_tuesday_recap():
-    """
-    Χρησιμοποιείται από το OpenAPI path /tuesday-recap
-    Γυρίζει weekly recap σε logs/tuesday_recap_v2.json
-    """
-    return run_script_with_report(
-        "tuesday_recap_v2.py",
-        "logs/tuesday_recap_v2.json",
-    )
+# @app.route("/tuesday-recap", methods=["GET"])
+# def api_tuesday_recap():
+#     ...
 
 
 # ======================================================
