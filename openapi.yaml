@@ -3,8 +3,8 @@ info:
   title: Bombay Engine API
   version: "1.0.0"
   description: >
-    Internal API for Agent Bombay – Thursday analysis (full v3 model),
-    Friday shortlist (Kelly), and Tuesday recap.
+    Internal API for Agent Bombay – Thursday analysis v3.
+    Το GPT διαβάζει ΜΟΝΟ το έτοιμο report (δεν τρέχει το engine).
 
 servers:
   - url: https://bombay-engine.onrender.com
@@ -22,72 +22,27 @@ paths:
               schema:
                 $ref: "#/components/schemas/HealthcheckResponse"
 
-  # --------------------------------------------------
-  # THURSDAY – FULL ENGINE v3
-  # --------------------------------------------------
   /thursday-analysis-v3:
     get:
-      operationId: thursday_analysis_v3
-      summary: Run full Thursday analysis (v3 model)
+      operationId: runThursdayAnalysis
+      summary: Get latest Thursday analysis (v3)
       description: >
-        Runs the Thursday engine (thursday_engine_full_v3.py) and returns
-        the JSON report with fixtures, model probabilities and scores.
+        Διαβάζει το τελευταίο αρχείο αναφοράς (logs/thursday_report_v3.json)
+        που παράγεται από το script src/analysis/thursday_engine_full_v3.py.
+        Δεν ξανατρέχει το engine – πρέπει πρώτα να έχει κληθεί το /run/thursday-v3.
       responses:
         "200":
-          description: Thursday analysis result
+          description: Thursday analysis successfully returned
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ThursdayAnalysisResponse"
-
-  # Alias για συμβατότητα
-  /thursday-analysis:
-    get:
-      operationId: thursday_analysis_legacy
-      summary: Run Thursday analysis (alias to v3)
-      responses:
-        "200":
-          description: Thursday analysis result (alias)
+        "503":
+          description: Thursday report not available yet
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ThursdayAnalysisResponse"
-
-  # --------------------------------------------------
-  # FRIDAY – SHORTLIST (Kelly)
-  # --------------------------------------------------
-  /friday-shortlist:
-    get:
-      operationId: friday_shortlist
-      summary: Run Friday shortlist engine
-      description: >
-        Runs the Friday shortlist script (friday_shortlist_v2.py),
-        loading the latest Thursday report and applying value + Kelly filters.
-      responses:
-        "200":
-          description: Friday shortlist with recommended bets
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/FridayShortlistResponse"
-
-  # --------------------------------------------------
-  # TUESDAY – WEEKLY RECAP
-  # --------------------------------------------------
-  /tuesday-recap:
-    get:
-      operationId: tuesday_recap
-      summary: Run Tuesday recap engine
-      description: >
-        Runs the Tuesday recap script (tuesday_recap_v2.py) and returns
-        weekly performance stats (winrate, ROI, drawdowns, etc.).
-      responses:
-        "200":
-          description: Tuesday recap report
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/TuesdayRecapResponse"
+                $ref: "#/components/schemas/ErrorResponse"
 
 components:
   schemas:
@@ -96,76 +51,135 @@ components:
       properties:
         status:
           type: string
+          example: "ok"
         message:
           type: string
+          example: "Bombay Engine alive"
+
+    ThursdayFixture:
+      type: object
+      properties:
+        date:
+          type: string
+          description: "Ημερομηνία αγώνα (YYYY-MM-DD)"
+          example: "2025-12-06"
+        time:
+          type: string
+          description: "Ώρα αγώνα (HH:MM, local/UTC ανά report)"
+          example: "17:00"
+        league:
+          type: string
+          example: "Premier League"
+        league_id:
+          type: integer
+          example: 39
+        home:
+          type: string
+          example: "Arsenal"
+        away:
+          type: string
+          example: "Chelsea"
+        model:
+          type: string
+          description: "Ποιο engine / μοντέλο χρησιμοποίησε το backend"
+          example: "draw"
+        fair_1:
+          type: number
+          format: float
+          example: 1.95
+        fair_x:
+          type: number
+          format: float
+          example: 3.40
+        fair_2:
+          type: number
+          format: float
+          example: 4.00
+        fair_over_2_5:
+          type: number
+          format: float
+          example: 1.85
+        fair_under_2_5:
+          type: number
+          format: float
+          example: 2.10
+        score_home:
+          type: number
+          format: float
+          example: 1.6
+        score_away:
+          type: number
+          format: float
+          example: 0.9
+        draw_prob:
+          type: number
+          format: float
+          description: "Μοντελοποιημένη πιθανότητα για ισοπαλία"
+          example: 0.29
+        over_2_5_prob:
+          type: number
+          format: float
+          description: "Μοντελοποιημένη πιθανότητα για Over 2.5"
+          example: 0.63
+        under_2_5_prob:
+          type: number
+          format: float
+          description: "Μοντελοποιημένη πιθανότητα για Under 2.5"
+          example: 0.37
+      additionalProperties: true
+
+    ThursdayAnalysisReport:
+      type: object
+      properties:
+        fixtures:
+          type: array
+          items:
+            $ref: "#/components/schemas/ThursdayFixture"
+        window:
+          type: object
+          description: "Date window που χρησιμοποίησε το engine"
+          properties:
+            date_from:
+              type: string
+              example: "2025-12-03"
+            date_to:
+              type: string
+              example: "2025-12-07"
+            season:
+              type: integer
+              example: 2025
+        generated_at:
+          type: string
+          description: "ISO timestamp όταν γράφτηκε το report"
+          example: "2025-12-03T13:12:59.050871"
 
     ThursdayAnalysisResponse:
       type: object
       properties:
         status:
           type: string
+          example: "ok"
         script:
           type: string
+          example: "src/analysis/thursday_engine_full_v3.py"
         timestamp:
           type: string
-          format: date-time
-        return_code:
-          type: integer
-        stderr:
-          type: string
-          nullable: true
-        stdout:
-          type: string
-          nullable: true
+          example: "2025-12-03T13:33:11.351547"
         report:
-          type: object
-          properties:
-            fixtures:
-              type: array
-              items:
-                type: object
-                additionalProperties: true
+          $ref: "#/components/schemas/ThursdayAnalysisReport"
 
-    FridayShortlistResponse:
+    ErrorResponse:
       type: object
       properties:
         status:
           type: string
-        script:
+          example: "error"
+        message:
           type: string
+          example: "Thursday report not available yet. Run /run/thursday-v3 first."
+        error:
+          type: string
+          example: "Report file not found"
         timestamp:
           type: string
-          format: date-time
-        return_code:
-          type: integer
-        stderr:
-          type: string
-          nullable: true
-        stdout:
-          type: string
-          nullable: true
-        report:
-          type: object
-          additionalProperties: true
-
-    TuesdayRecapResponse:
-      type: object
-      properties:
-        status:
-          type: string
-        script:
-          type: string
-        timestamp:
-          type: string
-          format: date-time
-        return_code:
-          type: integer
-        stderr:
-          type: string
-          nullable: true
-        stdout:
-          type: string
-          nullable: true
-        report:
-          type: object
-          additionalProperties: true
+          example: "2025-12-03T13:33:11.351547"
