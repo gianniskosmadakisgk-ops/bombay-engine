@@ -6,8 +6,8 @@ from flask import Flask, jsonify
 
 app = Flask(__name__)
 
-# Ριζικός φάκελος στο Render
-BASE_DIR = "/opt/render/project/src"
+# Ριζικός φάκελος στο Render = ο φάκελος που βρίσκεται το app.py
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 # ======================================================
