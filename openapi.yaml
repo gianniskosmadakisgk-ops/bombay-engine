@@ -59,7 +59,7 @@ paths:
       summary: Get latest Friday shortlist (value + Kelly)
       description: >
         Διαβάζει το αρχείο logs/friday_shortlist_v3.json
-        που παράγεται αφού έχει υπάρχει διαθέσιμο Thursday report.
+        που παράγεται αφού υπάρχει διαθέσιμο Thursday report.
       responses:
         "200":
           description: Friday shortlist returned successfully
@@ -137,6 +137,74 @@ components:
     # --------------------------
     ThursdayFixture:
       type: object
+      properties:
+        date:
+          type: string
+          description: "Ημερομηνία αγώνα (YYYY-MM-DD)"
+          example: "2025-12-06"
+        time:
+          type: string
+          description: "Ώρα αγώνα (HH:MM)"
+          example: "17:00"
+        league:
+          type: string
+          example: "Premier League"
+        league_id:
+          type: integer
+          example: 39
+        home:
+          type: string
+          example: "Arsenal"
+        away:
+          type: string
+          example: "Chelsea"
+        model:
+          type: string
+          description: "Ποιο engine / μοντέλο χρησιμοποίησε το backend"
+          example: "draw"
+        fair_1:
+          type: number
+          format: float
+          example: 1.95
+        fair_x:
+          type: number
+          format: float
+          example: 3.40
+        fair_2:
+          type: number
+          format: float
+          example: 4.00
+        fair_over_2_5:
+          type: number
+          format: float
+          example: 1.85
+        fair_under_2_5:
+          type: number
+          format: float
+          example: 2.10
+        score_home:
+          type: number
+          format: float
+          example: 1.6
+        score_away:
+          type: number
+          format: float
+          example: 0.9
+        draw_prob:
+          type: number
+          format: float
+          description: "Πιθανότητα για ισοπαλία από το μοντέλο"
+          example: 0.29
+        over_2_5_prob:
+          type: number
+          format: float
+          description: "Πιθανότητα για Over 2.5"
+          example: 0.63
+        under_2_5_prob:
+          type: number
+          format: float
+          description: "Πιθανότητα για Under 2.5"
+          example: 0.37
       additionalProperties: true
 
     ThursdayAnalysisReport:
@@ -175,6 +243,32 @@ components:
     # --------------------------
     FridayShortlistItem:
       type: object
+      properties:
+        league:
+          type: string
+          example: "Bundesliga"
+        match:
+          type: string
+          example: "Dortmund – Bayern"
+        pick_type:
+          type: string
+          description: "Τύπος επιλογής (Draw / Over / FunBet κλπ)"
+          example: "Over 2.5"
+        edge:
+          type: number
+          format: float
+          description: "Value edge vs αγορά"
+          example: 0.07
+        kelly_stake:
+          type: number
+          format: float
+          description: "Προτεινόμενο ποσοστό Kelly"
+          example: 0.025
+        odds:
+          type: number
+          format: float
+          description: "Odds της επιλογής στην αγορά"
+          example: 1.90
       additionalProperties: true
 
     FridayShortlistReport:
@@ -202,6 +296,36 @@ components:
     # --------------------------
     TuesdayRecapStats:
       type: object
+      properties:
+        total_bets:
+          type: integer
+          example: 42
+        wins:
+          type: integer
+          example: 24
+        losses:
+          type: integer
+          example: 16
+        pushes:
+          type: integer
+          example: 2
+        roi:
+          type: number
+          format: float
+          description: "Return on Investment για την εβδομάδα"
+          example: 0.123
+        bankroll_start:
+          type: number
+          format: float
+          example: 1000.0
+        bankroll_end:
+          type: number
+          format: float
+          example: 1112.3
+        max_drawdown:
+          type: number
+          format: float
+          example: -0.08
       additionalProperties: true
 
     TuesdayRecapResponse:
