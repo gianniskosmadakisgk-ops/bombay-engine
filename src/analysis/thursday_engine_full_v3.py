@@ -81,9 +81,9 @@ OVER_LEAGUES = {
     78: "Bundesliga",          # Germany
     88: "Eredivisie",          # Netherlands
     144: "Jupiler Pro League", # Belgium
-    271: "Superliga",          # Denmark (Superliga)  ⚠️ έλεγξε ότι το ID ταιριάζει
-    113: "Allsvenskan",        # Sweden               ⚠️ "
-    103: "Eliteserien",        # Norway               ⚠️ "
+    271: "Superliga",          # Denmark
+    113: "Allsvenskan",        # Sweden
+    103: "Eliteserien",        # Norway
     207: "Swiss Super League", # shared
     94: "Liga Portugal 1",     # Portugal 1
 }
@@ -97,6 +97,7 @@ for lid, name in DRAW_LEAGUES.items():
 for lid, name in OVER_LEAGUES.items():
     LEAGUES.setdefault(lid, {"name": name, "engines": set()})
     LEAGUES[lid]["engines"].add("over")
+
 
 # -------------------------------------------------
 #  Χρήσιμο logging
@@ -236,7 +237,7 @@ def fetch_fixtures_for_league(league_id: int, season: str,
 
     params = {
         "league": league_id,
-        "season": season,
+        "season": int(season),
         "from": date_from,
         "to": date_to,
     }
@@ -256,7 +257,7 @@ def fetch_team_stats(league_id: int, team_id: int, season: str) -> dict:
     params = {
         "league": league_id,
         "team": team_id,
-        "season": season,
+        "season": int(season),
     }
     data = api_get("/teams/statistics", params)
     resp = data.get("response") if data else None
@@ -280,7 +281,7 @@ def fetch_league_standings(league_id: int, season: str) -> dict:
 
     params = {
         "league": league_id,
-        "season": season,
+        "season": int(season),
     }
     data = api_get("/standings", params)
     resp = data.get("response") if data else None
@@ -488,8 +489,6 @@ def compute_match_model(home_profile: dict, away_profile: dict,
 
     # logistic for home win prob
     p_home_raw = 1.0 / (1.0 + math.exp(-diff * 1.45))
-    p_away_raw = 1.0 / (1.0 + math.exp(diff * 1.45))
-    # symmetrical
     p_away_raw = 1.0 - p_home_raw
 
     # draw probability: base + ισορροπία
@@ -538,6 +537,12 @@ def compute_match_model(home_profile: dict, away_profile: dict,
         "over_2_5": round(p_over, 3),
         "under_2_5": round(p_under, 3),
     }
+
+
+def prob_to_fair_odds(p: float) -> float:
+    """Μετατρέπει probability σε fair odds, με clamp."""
+    p = clamp(p, 0.05, 0.95)
+    return round(1.0 / p, 2)
 
 
 # -------------------------------------------------
@@ -604,8 +609,28 @@ def main():
             away_name = away_team["name"]
 
             fixture_id = int(fixture["id"])
-            kickoff_iso = fixture.get("date")
-            # timestamp = fixture.get("timestamp")
+            kickoff_iso = fixture.get("date")  # ISO string
+
+            # split date / time
+            match_date = ""
+            match_time = ""
+            if kickoff_iso:
+                try:
+                    # Handle πιθανό "Z"
+                    dt = datetime.fromisoformat(
+                        kickoff_iso.replace("Z", "+00:00")
+                    )
+                    match_date = dt.strftime("%Y-%m-%d")
+                    match_time = dt.strftime("%H:%M")
+                except Exception:
+                    # fallback: κόβουμε στο "T"
+                    if "T" in kickoff_iso:
+                        parts = kickoff_iso.split("T")
+                        match_date = parts[0]
+                        time_part = parts[1]
+                        match_time = time_part[:5]
+                    else:
+                        match_date = kickoff_iso
 
             standings_table = standings_per_league.get(league_id, {})
             home_standing = standings_table.get(home_id, {})
@@ -628,10 +653,32 @@ def main():
 
             model = compute_match_model(home_profile, away_profile, league_id)
 
+            p_home = model["home_win"]
+            p_draw = model["draw_win"]
+            p_away = model["away_win"]
+            p_over = model["over_2_5"]
+            p_under = model["under_2_5"]
+
+            fair_1 = prob_to_fair_odds(p_home)
+            fair_x = prob_to_fair_odds(p_draw)
+            fair_2 = prob_to_fair_odds(p_away)
+            fair_over = prob_to_fair_odds(p_over)
+            fair_under = prob_to_fair_odds(p_under)
+
+            # “engine tag” για GPT
+            if "draw" in engines and "over" in engines:
+                engine_tag = "Draw + Over Engine"
+            elif "draw" in engines:
+                engine_tag = "Draw Engine"
+            elif "over" in engines:
+                engine_tag = "Over Engine"
+            else:
+                engine_tag = "Other"
+
+            # κρατάμε και λίγη επιπλέον info
             expected_goals = round(
                 home_profile["attack_index"] + away_profile["attack_index"], 3
             )
-
             strength_home = round(
                 home_profile["attack_index"] * home_profile["prestige"], 3
             )
@@ -639,23 +686,27 @@ def main():
                 away_profile["attack_index"] * away_profile["prestige"], 3
             )
 
-            if "draw" in engines:
-                engine_tag = "draw"
-            elif "over" in engines:
-                engine_tag = "over"
-            else:
-                engine_tag = "other"
-
             processed.append(
                 {
                     "fixture_id": fixture_id,
-                    "date": kickoff_iso,
+                    "date": match_date,
+                    "time": match_time,
                     "league_id": league_id,
                     "league": league_info["name"],
-                    "engine": list(sorted(engines)),
                     "home": home_name,
                     "away": away_name,
-                    "model": model,
+                    "model": engine_tag,
+                    # fair odds
+                    "fair_1": fair_1,
+                    "fair_x": fair_x,
+                    "fair_2": fair_2,
+                    "fair_over_2_5": fair_over,
+                    "fair_under_2_5": fair_under,
+                    # probabilities (για Kelly κλπ)
+                    "draw_prob": p_draw,
+                    "over_2_5_prob": p_over,
+                    "under_2_5_prob": p_under,
+                    # extra analytics
                     "expected_goals": expected_goals,
                     "strength_home": strength_home,
                     "strength_away": strength_away,
@@ -672,7 +723,7 @@ def main():
         "window": {
             "date_from": date_from,
             "date_to": date_to,
-            "season": SEASON,
+            "season": int(SEASON),
         },
         "fixtures_analyzed": len(processed),
         "fixtures": processed,
