@@ -6,8 +6,13 @@ from flask import Flask, jsonify
 
 app = Flask(__name__)
 
+# Ριζικός φάκελος στο Render
+BASE_DIR = "/opt/render/project/src"
+
+
 # ======================================================
-#  Helper: τρέχει script και γυρίζει stdout / stderr
+# Βοηθητικό: τρέχει script και γυρίζει stdout / stderr
+# (για χειροκίνητο run, όχι για GPT)
 # ======================================================
 def run_script(script_name: str):
     try:
@@ -15,7 +20,7 @@ def run_script(script_name: str):
 
         result = subprocess.run(
             ["python3", script_name],
-            cwd="/opt/render/project/src",
+            cwd=BASE_DIR,
             capture_output=True,
             text=True,
         )
@@ -35,6 +40,7 @@ def run_script(script_name: str):
                 "return_code": result.returncode,
                 "stderr": result.stderr,
                 "stdout": result.stdout,
+                "timestamp": datetime.utcnow().isoformat(),
             }
         )
 
@@ -44,53 +50,72 @@ def run_script(script_name: str):
 
 
 # ======================================================
-#  Helper: φορτώνει JSON report από δίσκο (ΧΩΡΙΣ να τρέχει script)
+# Βοηθητικό: διαβάζει ΜΟΝΟ το JSON report από δίσκο
+# (αυτό είναι που χρησιμοποιεί το GPT)
 # ======================================================
-def load_report_json(report_path: str):
-    if not os.path.exists(report_path):
-        print(f"⚠️ Report file not found: {report_path}", flush=True)
-        return None, f"Report file not found: {report_path}"
+def load_json_report(relative_path: str):
+    """Διαβάζει JSON report από logs/*.json χωρίς να τρέχει engine."""
+    full_path = os.path.join(BASE_DIR, relative_path)
+
+    if not os.path.exists(full_path):
+        msg = f"Report file not found: {full_path}"
+        print(f"⚠️ {msg}", flush=True)
+        return None, msg
 
     try:
-        with open(report_path, "r", encoding="utf-8") as f:
+        with open(full_path, "r", encoding="utf-8") as f:
             data = json.load(f)
         return data, None
     except Exception as e:
-        print(f"⚠️ Failed to load report file {report_path}: {e}", flush=True)
-        return None, str(e)
+        msg = f"Failed to load report file {full_path}: {e}"
+        print(f"⚠️ {msg}", flush=True)
+        return None, msg
 
 
 # ======================================================
-#  MANUAL ENDPOINTS  (τα χρησιμοποιείς εσύ από browser)
+#  HEALTHCHECK
+# ======================================================
+@app.route("/healthcheck", methods=["GET"])
+def healthcheck():
+    return jsonify({"status": "ok", "message": "Bombay Engine alive"})
+
+
+# ======================================================
+#  MANUAL RUN ENDPOINTS (μόνο για σένα, όχι για GPT)
 # ======================================================
 @app.route("/run/thursday-v3", methods=["GET"])
-def run_thursday_v3():
-    # Αυτό καλεί το μεγάλο script και γράφει το logs/thursday_report_v3.json
+def manual_run_thursday_v3():
+    """
+    Τρέχει το full Thursday engine και γράφει το logs/thursday_report_v3.json.
+    Το κάνεις χειροκίνητα από browser όταν θες να ανανεώσεις την εβδομάδα.
+    """
     return run_script("src/analysis/thursday_engine_full_v3.py")
 
 
+# (Αν αργότερα θέλεις manual run και για Friday / Tuesday,
+# μπορείς να προσθέσεις αντίστοιχα endpoints εδώ.)
+
+
 # ======================================================
-#  API ENDPOINTS ΓΙΑ GPT – γρήγορα, μόνο ανάγνωση report
+#  GPT ENDPOINTS – ΔΙΑΒΑΖΟΥΝ ΜΟΝΟ REPORTS
 # ======================================================
 @app.route("/thursday-analysis-v3", methods=["GET"])
 def api_thursday_analysis_v3():
     """
-    Επιστρέφει το τελευταίο Thursday report από logs/thursday_report_v3.json
-    ΔΕΝ ξανατρέχει το engine – υποθέτει ότι το /run/thursday-v3 έχει ήδη τρέξει.
+    Το endpoint που καλεί το GPT (runThursdayAnalysis).
+    ΔΕΝ τρέχει το engine, απλά διαβάζει το logs/thursday_report_v3.json.
+    Πρέπει να έχεις τρέξει πριν το /run/thursday-v3 ώστε να υπάρχει φρέσκο report.
     """
-    report_path = "logs/thursday_report_v3.json"
-    report_data, error = load_report_json(report_path)
+    report, error = load_json_report("logs/thursday_report_v3.json")
 
-    if report_data is None:
+    if report is None:
         return (
             jsonify(
                 {
                     "status": "error",
-                    "script": "src/analysis/thursday_engine_full_v3.py",
-                    "message": "Thursday report not available yet. Run /run/thursday-v3 first.",
+                    "message": "Thursday report not available",
                     "error": error,
                     "timestamp": datetime.utcnow().isoformat(),
-                    "report": None,
                 }
             ),
             503,
@@ -101,27 +126,70 @@ def api_thursday_analysis_v3():
             "status": "ok",
             "script": "src/analysis/thursday_engine_full_v3.py",
             "timestamp": datetime.utcnow().isoformat(),
-            "report": report_data,
+            "report": report,
         }
     )
 
 
-# (placeholder – θα τα προσθέσουμε αργότερα αν θέλεις να συνδέσουμε Friday / Tuesday)
-# @app.route("/friday-shortlist-v3", methods=["GET"])
-# def api_friday_shortlist_v3():
-#     ...
+@app.route("/friday-shortlist-v3", methods=["GET"])
+def api_friday_shortlist_v3():
+    """
+    Το GPT παίρνει έτοιμο shortlist από logs/friday_shortlist_v3.json.
+    Δεν τρέχεις εδώ το script – απλά διαβάζεις το report.
+    (Πρέπει να υπάρχει το αντίστοιχο JSON από το δικό σου pipeline.)
+    """
+    report, error = load_json_report("logs/friday_shortlist_v3.json")
 
-# @app.route("/tuesday-recap", methods=["GET"])
-# def api_tuesday_recap():
-#     ...
+    if report is None:
+        return (
+            jsonify(
+                {
+                    "status": "error",
+                    "message": "Friday shortlist not available",
+                    "error": error,
+                    "timestamp": datetime.utcnow().isoformat(),
+                }
+            ),
+            503,
+        )
+
+    return jsonify(
+        {
+            "status": "ok",
+            "timestamp": datetime.utcnow().isoformat(),
+            "report": report,
+        }
+    )
 
 
-# ======================================================
-#  Healthcheck
-# ======================================================
-@app.route("/healthcheck", methods=["GET"])
-def healthcheck():
-    return jsonify({"status": "ok", "message": "Bombay Engine alive"})
+@app.route("/tuesday-recap", methods=["GET"])
+def api_tuesday_recap():
+    """
+    Το GPT παίρνει εβδομαδιαίο recap από logs/tuesday_recap_v2.json.
+    Δεν τρέχεις εδώ scripts – απλά διαβάζεις το report.
+    """
+    report, error = load_json_report("logs/tuesday_recap_v2.json")
+
+    if report is None:
+        return (
+            jsonify(
+                {
+                    "status": "error",
+                    "message": "Tuesday recap not available",
+                    "error": error,
+                    "timestamp": datetime.utcnow().isoformat(),
+                }
+            ),
+            503,
+        )
+
+    return jsonify(
+        {
+            "status": "ok",
+            "timestamp": datetime.utcnow().isoformat(),
+            "report": report,
+        }
+    )
 
 
 # ======================================================
