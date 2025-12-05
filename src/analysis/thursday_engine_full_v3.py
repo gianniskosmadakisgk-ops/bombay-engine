@@ -11,7 +11,6 @@
 #  - Caching για /teams/statistics και /standings
 #  - Υποστηρίζει Draw Engine / Over Engine ανά λίγκα
 #  - Σώζει JSON report → logs/thursday_report_v3.json
-#    + timestamped αντίγραφο → logs/thursday_YYYY-MM-DD_HH-MM-SS.json
 # ================================================================
 
 import os
@@ -719,9 +718,6 @@ def main():
         except Exception as e:
             log(f"⚠️ Error processing fixture: {e}")
 
-    # -------------------------------------------------
-    #  SAVE REPORTS
-    # -------------------------------------------------
     report = {
         "generated_at": datetime.utcnow().isoformat(),
         "window": {
@@ -733,16 +729,7 @@ def main():
         "fixtures": processed,
     }
 
-    # timestamped filename για ιστορικό
-    timestamp_str = datetime.utcnow().strftime("%Y-%m-%d_%H-%M-%S")
-    timestamp_path = f"logs/thursday_{timestamp_str}.json"
-
-    # 1) Σταθερό report για GPT
     with open(REPORT_PATH, "w", encoding="utf-8") as f:
-        json.dump(report, f, ensure_ascii=False)
-
-    # 2) Timestamped αντίγραφο
-    with open(timestamp_path, "w", encoding="utf-8") as f:
         json.dump(report, f, ensure_ascii=False)
 
     save_json_cache(TEAM_CACHE_PATH, TEAM_STATS_CACHE)
@@ -750,7 +737,6 @@ def main():
 
     log(f"✅ Thursday v3 ready → {len(processed)} fixtures analysed.")
     log(f"📝 Saved → {REPORT_PATH}")
-    log(f"📝 Saved (timestamped) → {timestamp_path}")
 
 
 if __name__ == "__main__":
