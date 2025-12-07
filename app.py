@@ -185,21 +185,20 @@ def download_tuesday_recap_v2():
 @app.route("/thursday-analysis-v3", methods=["GET"])
 def api_thursday_analysis_v3():
     """
-    Το GPT παίρνει το Thursday report από logs/thursday_report_v3.json.
-    ΠΡΙΝ το διαβάσει, τρέχει τον Thursday engine για να φτιαχτεί/φρεσκαριστεί το report.
+    Το GPT παίρνει μια "light" έκδοση του Thursday report,
+    βασισμένη στο logs/thursday_report_v3.json.
+    ΠΡΙΝ το διαβάσει, τρέχει τον Thursday engine για να φτιαχτεί/φρεσκαριστεί το full report.
     """
     # 1) Τρέχουμε τον Thursday engine (ίδιο script με το /run/thursday-v3)
-    #    Αγνοούμε την JSON απόκριση του run_script, το θέλουμε μόνο για το side-effect:
-    #    να γραφτεί/ενημερωθεί το logs/thursday_report_v3.json.
     try:
         run_script("src/analysis/thursday_engine_full_v3.py")
     except Exception as e:
         print(f"⚠️ Error while auto-running Thursday engine: {e}", flush=True)
 
-    # 2) Διαβάζουμε το report από logs/thursday_report_v3.json
-    report, error = load_json_report("logs/thursday_report_v3.json")
+    # 2) Διαβάζουμε το FULL report από logs/thursday_report_v3.json
+    full_report, error = load_json_report("logs/thursday_report_v3.json")
 
-    if report is None:
+    if full_report is None:
         return (
             jsonify(
                 {
@@ -212,13 +211,48 @@ def api_thursday_analysis_v3():
             503,
         )
 
-    # 3) Επιστρέφουμε στο GPT το report όπως είναι, μέσα στο πεδίο "report"
+    fixtures = full_report.get("fixtures", []) or []
+
+    # 3) Χτίζουμε ένα "light" fixtures list μόνο με τα απαραίτητα πεδία για το GPT
+    light_fixtures = []
+    for fx in fixtures:
+        light_fixtures.append(
+            {
+                "fixture_id": fx.get("fixture_id"),
+                "date": fx.get("date"),
+                "time": fx.get("time"),
+                "league_id": fx.get("league_id"),
+                "league": fx.get("league"),
+                "home": fx.get("home"),
+                "away": fx.get("away"),
+                "model": fx.get("model"),
+                # fair odds
+                "fair_1": fx.get("fair_1"),
+                "fair_x": fx.get("fair_x"),
+                "fair_2": fx.get("fair_2"),
+                "fair_over_2_5": fx.get("fair_over_2_5"),
+                "fair_under_2_5": fx.get("fair_under_2_5"),
+                # probabilities
+                "draw_prob": fx.get("draw_prob"),
+                "over_2_5_prob": fx.get("over_2_5_prob"),
+                "under_2_5_prob": fx.get("under_2_5_prob"),
+            }
+        )
+
+    light_report = {
+        "generated_at": full_report.get("generated_at"),
+        "window": full_report.get("window", {}),
+        "fixtures_analyzed": len(light_fixtures),
+        "fixtures": light_fixtures,
+    }
+
+    # 4) Επιστρέφουμε στο GPT το LIGHT report μέσα στο πεδίο "report"
     return jsonify(
         {
             "status": "ok",
             "script": "src/analysis/thursday_engine_full_v3.py",
             "timestamp": datetime.utcnow().isoformat(),
-            "report": report,
+            "report": light_report,
         }
     )
 
