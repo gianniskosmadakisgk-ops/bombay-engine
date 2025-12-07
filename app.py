@@ -96,13 +96,22 @@ def manual_run_thursday_v3():
 
 
 # ------------------------------------------------------
+#  MANUAL RUN — Friday Shortlist v3  (ΝΕΟ)
+# ------------------------------------------------------
+@app.route("/run/friday-shortlist-v3", methods=["GET"])
+def manual_run_friday_shortlist_v3():
+    """
+    Τρέχει το Friday shortlist script.
+    Γράφει logs/friday_shortlist_v3.json.
+    """
+    return run_script("src/analysis/friday_shortlist_v3.py")
+
+
+# ------------------------------------------------------
 #  DOWNLOAD ENDPOINTS (για manual upload στο Custom GPT)
 # ------------------------------------------------------
 @app.route("/download/thursday-report-v3", methods=["GET"])
 def download_thursday_report_v3():
-    """
-    Κατεβάζει το τελευταίο Thursday report σαν JSON αρχείο.
-    """
     full_path = os.path.join(BASE_DIR, "logs", "thursday_report_v3.json")
 
     if not os.path.exists(full_path):
@@ -118,18 +127,11 @@ def download_thursday_report_v3():
             404,
         )
 
-    return send_file(
-        full_path,
-        mimetype="application/json",
-        as_attachment=True,
-    )
+    return send_file(full_path, mimetype="application/json", as_attachment=True)
 
 
 @app.route("/download/friday-shortlist-v3", methods=["GET"])
 def download_friday_shortlist_v3():
-    """
-    Κατεβάζει το τελευταίο Friday shortlist σαν JSON αρχείο.
-    """
     full_path = os.path.join(BASE_DIR, "logs", "friday_shortlist_v3.json")
 
     if not os.path.exists(full_path):
@@ -145,18 +147,11 @@ def download_friday_shortlist_v3():
             404,
         )
 
-    return send_file(
-        full_path,
-        mimetype="application/json",
-        as_attachment=True,
-    )
+    return send_file(full_path, mimetype="application/json", as_attachment=True)
 
 
 @app.route("/download/tuesday-recap-v2", methods=["GET"])
 def download_tuesday_recap_v2():
-    """
-    Κατεβάζει το τελευταίο Tuesday recap σαν JSON αρχείο.
-    """
     full_path = os.path.join(BASE_DIR, "logs", "tuesday_recap_v2.json")
 
     if not os.path.exists(full_path):
@@ -172,11 +167,7 @@ def download_tuesday_recap_v2():
             404,
         )
 
-    return send_file(
-        full_path,
-        mimetype="application/json",
-        as_attachment=True,
-    )
+    return send_file(full_path, mimetype="application/json", as_attachment=True)
 
 
 # ------------------------------------------------------
@@ -189,31 +180,25 @@ def api_thursday_analysis_v3():
     βασισμένη στο logs/thursday_report_v3.json.
     ΠΡΙΝ το διαβάσει, τρέχει τον Thursday engine για να φτιαχτεί/φρεσκαριστεί το full report.
     """
-    # 1) Τρέχουμε τον Thursday engine (ίδιο script με το /run/thursday-v3)
     try:
         run_script("src/analysis/thursday_engine_full_v3.py")
     except Exception as e:
         print(f"⚠️ Error while auto-running Thursday engine: {e}", flush=True)
 
-    # 2) Διαβάζουμε το FULL report από logs/thursday_report_v3.json
     full_report, error = load_json_report("logs/thursday_report_v3.json")
 
     if full_report is None:
-        return (
-            jsonify(
-                {
-                    "status": "error",
-                    "message": "Thursday report not available",
-                    "error": error,
-                    "timestamp": datetime.utcnow().isoformat(),
-                }
-            ),
-            503,
-        )
+        return jsonify(
+            {
+                "status": "error",
+                "message": "Thursday report not available",
+                "error": error,
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+        ), 503
 
-    fixtures = full_report.get("fixtures", []) or []
+    fixtures = full_report.get("fixtures", [])
 
-    # 3) Χτίζουμε ένα "light" fixtures list μόνο με τα απαραίτητα πεδία για το GPT
     light_fixtures = []
     for fx in fixtures:
         light_fixtures.append(
@@ -226,13 +211,11 @@ def api_thursday_analysis_v3():
                 "home": fx.get("home"),
                 "away": fx.get("away"),
                 "model": fx.get("model"),
-                # fair odds
                 "fair_1": fx.get("fair_1"),
                 "fair_x": fx.get("fair_x"),
                 "fair_2": fx.get("fair_2"),
                 "fair_over_2_5": fx.get("fair_over_2_5"),
                 "fair_under_2_5": fx.get("fair_under_2_5"),
-                # probabilities
                 "draw_prob": fx.get("draw_prob"),
                 "over_2_5_prob": fx.get("over_2_5_prob"),
                 "under_2_5_prob": fx.get("under_2_5_prob"),
@@ -246,7 +229,6 @@ def api_thursday_analysis_v3():
         "fixtures": light_fixtures,
     }
 
-    # 4) Επιστρέφουμε στο GPT το LIGHT report μέσα στο πεδίο "report"
     return jsonify(
         {
             "status": "ok",
@@ -259,23 +241,17 @@ def api_thursday_analysis_v3():
 
 @app.route("/friday-shortlist-v3", methods=["GET"])
 def api_friday_shortlist_v3():
-    """
-    Το GPT παίρνει Friday shortlist από logs/friday_shortlist_v3.json.
-    """
     report, error = load_json_report("logs/friday_shortlist_v3.json")
 
     if report is None:
-        return (
-            jsonify(
-                {
-                    "status": "error",
-                    "message": "Friday shortlist not available",
-                    "error": error,
-                    "timestamp": datetime.utcnow().isoformat(),
-                }
-            ),
-            503,
-        )
+        return jsonify(
+            {
+                "status": "error",
+                "message": "Friday shortlist not available",
+                "error": error,
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+        ), 503
 
     return jsonify(
         {
@@ -288,23 +264,17 @@ def api_friday_shortlist_v3():
 
 @app.route("/tuesday-recap", methods=["GET"])
 def api_tuesday_recap():
-    """
-    Το GPT παίρνει Tuesday recap από logs/tuesday_recap_v2.json.
-    """
     report, error = load_json_report("logs/tuesday_recap_v2.json")
 
     if report is None:
-        return (
-            jsonify(
-                {
-                    "status": "error",
-                    "message": "Tuesday recap not available",
-                    "error": error,
-                    "timestamp": datetime.utcnow().isoformat(),
-                }
-            ),
-            503,
-        )
+        return jsonify(
+            {
+                "status": "error",
+                "message": "Tuesday recap not available",
+                "error": error,
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+        ), 503
 
     return jsonify(
         {
