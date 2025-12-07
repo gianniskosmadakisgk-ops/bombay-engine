@@ -11,6 +11,7 @@
 #  - Caching για /teams/statistics και /standings
 #  - Υποστηρίζει Draw Engine / Over Engine ανά λίγκα
 #  - Σώζει JSON report → logs/thursday_report_v3.json
+#  - Περιλαμβάνει score_draw & score_over (1–10) από p_draw / p_over_2_5
 # ================================================================
 
 import os
@@ -66,26 +67,26 @@ os.makedirs("logs", exist_ok=True)
 # -------------------------------------------------
 # Draw Engine leagues
 DRAW_LEAGUES = {
-    61: "Ligue 1",              # France
-    135: "Serie A",             # Italy
-    140: "La Liga",             # Spain
-    40: "Championship",         # England
-    136: "Serie B",             # Italy
-    62: "Ligue 2",              # France
-    95: "Liga Portugal 2",      # Portugal 2
+    61: "Ligue 1",          # France
+    135: "Serie A",         # Italy
+    140: "La Liga",         # Spain
+    40: "Championship",     # England
+    136: "Serie B",         # Italy
+    62: "Ligue 2",          # France
+    95: "Liga Portugal 2",  # Portugal 2
     207: "Swiss Super League",  # Shared με Over
 }
 
 # Over Engine leagues
 OVER_LEAGUES = {
-    78: "Bundesliga",           # Germany
-    88: "Eredivisie",           # Netherlands
-    144: "Jupiler Pro League",  # Belgium
-    271: "Superliga",           # Denmark
-    113: "Allsvenskan",         # Sweden
-    103: "Eliteserien",         # Norway
-    207: "Swiss Super League",  # shared
-    94: "Liga Portugal 1",      # Portugal 1
+    78: "Bundesliga",          # Germany
+    88: "Eredivisie",          # Netherlands
+    144: "Jupiler Pro League", # Belgium
+    271: "Superliga",          # Denmark
+    113: "Allsvenskan",        # Sweden
+    103: "Eliteserien",        # Norway
+    207: "Swiss Super League", # shared
+    94: "Liga Portugal 1",     # Portugal 1
 }
 
 # Ενιαίο mapping: league_id → {name, engines}
@@ -226,12 +227,8 @@ def api_get(path: str, params: dict) -> dict:
 # -------------------------------------------------
 #  Fetchers
 # -------------------------------------------------
-def fetch_fixtures_for_league(
-    league_id: int,
-    season: str,
-    date_from: str,
-    date_to: str,
-) -> list:
+def fetch_fixtures_for_league(league_id: int, season: str,
+                              date_from: str, date_to: str) -> list:
     """
     Τραβάμε fixtures για συγκεκριμένη λίγκα, season, window.
     Χρησιμοποιούμε ΜΟΝΟ from/to (όχι date) για να μη γκρινιάζει το API.
@@ -308,21 +305,78 @@ def fetch_league_standings(league_id: int, season: str) -> dict:
 
 
 # -------------------------------------------------
-#  Model helpers — team profile
+#  SCORING HELPERS (1–10 scale για Draw / Over)
 # -------------------------------------------------
-def build_team_profile(
-    stats: dict,
-    standing_row: dict,
-    league_id: int,
-    side: str,
-) -> dict:
+def compute_draw_score(p_draw: float) -> float:
+    """
+    Μετατρέπει p_draw (0–1) σε score_draw (1–10) με piecewise scaling.
+    Στόχος:
+      - < ~0.18 → χαμηλά σκορ (1–4)
+      - ~0.25 → γύρω στο 6
+      - ~0.31 → γύρω στο 8
+      - ~0.35–0.36 → 9–10 (σπάνια)
+    """
+    p = clamp(p_draw, 0.0, 1.0)
+
+    if p <= 0.18:
+        # 0.10 → 1, 0.18 → 4
+        score = 1.0 + (p - 0.10) * (3.0 / 0.08)
+    elif p <= 0.25:
+        # 0.18 → 4, 0.25 → 6
+        score = 4.0 + (p - 0.18) * (2.0 / 0.07)
+    elif p <= 0.31:
+        # 0.25 → 6, 0.31 → 8
+        score = 6.0 + (p - 0.25) * (2.0 / 0.06)
+    elif p <= 0.36:
+        # 0.31 → 8, 0.36 → 10
+        score = 8.0 + (p - 0.31) * (2.0 / 0.05)
+    else:
+        score = 10.0
+
+    return round(clamp(score, 1.0, 10.0), 1)
+
+
+def compute_over_score(p_over: float) -> float:
+    """
+    Μετατρέπει p_over_2_5 (0–1) σε score_over (1–10) με piecewise scaling.
+    Στόχος:
+      - <= ~0.40 → χαμηλά (1–4)
+      - ~0.50 → γύρω στο 6
+      - ~0.60 → γύρω στο 8
+      - ~0.70–0.75 → 9–10 (σπάνια)
+    """
+    p = clamp(p_over, 0.0, 1.0)
+
+    if p <= 0.40:
+        # 0.30 → 1, 0.40 → 4
+        score = 1.0 + (p - 0.30) * (3.0 / 0.10)
+    elif p <= 0.50:
+        # 0.40 → 4, 0.50 → 6
+        score = 4.0 + (p - 0.40) * (2.0 / 0.10)
+    elif p <= 0.60:
+        # 0.50 → 6, 0.60 → 8
+        score = 6.0 + (p - 0.50) * (2.0 / 0.10)
+    elif p <= 0.75:
+        # 0.60 → 8, 0.75 → 9.5
+        score = 8.0 + (p - 0.60) * (1.5 / 0.15)
+    else:
+        score = 10.0
+
+    return round(clamp(score, 1.0, 10.0), 1)
+
+
+# -------------------------------------------------
+#  Model helpers
+# -------------------------------------------------
+def build_team_profile(stats: dict, standing_row: dict,
+                       league_id: int, side: str) -> dict:
     """
     Φτιάχνει προφίλ ομάδας:
       - attack_index
       - defence_index
       - tempo_index
-      - prestige
-      - motivation
+      - prestige_factor
+      - motivation_factor
     side: "home" / "away"
     """
 
@@ -337,9 +391,7 @@ def build_team_profile(
     ga_away = get_nested(stats, ["goals", "against", "average", "away"], ga_total)
 
     # xG – αν δεν υπάρχει, fallback στα goals
-    xg_for = get_nested(
-        stats, ["expected", "goals", "for", "average", "total"], gf_total
-    )
+    xg_for = get_nested(stats, ["expected", "goals", "for", "average", "total"], gf_total)
     xg_against = get_nested(
         stats, ["expected", "goals", "against", "average", "total"], ga_total
     )
@@ -388,7 +440,8 @@ def build_team_profile(
     # --- Prestige & Motivation from standings ---
     total_teams = 20
     rank = None
-    goal_diff = 0.0
+    points = None
+    goal_diff = 0
 
     if standing_row:
         try:
@@ -396,13 +449,15 @@ def build_team_profile(
         except Exception:
             rank = None
         try:
+            points = int(standing_row.get("points") or 0)
+        except Exception:
+            points = None
+        try:
             goals_for = standing_row.get("all", {}).get("goals", {}).get("for", 0)
-            goals_against = (
-                standing_row.get("all", {}).get("goals", {}).get("against", 0)
-            )
+            goals_against = standing_row.get("all", {}).get("goals", {}).get("against", 0)
             goal_diff = safe_float(goals_for) - safe_float(goals_against)
         except Exception:
-            goal_diff = 0.0
+            goal_diff = 0
 
         try:
             total_teams = int(
@@ -456,170 +511,93 @@ def build_team_profile(
     }
 
 
-# -------------------------------------------------
-#  Model helpers — expected goals & Poisson pricing
-# -------------------------------------------------
-def compute_expected_goals(
-    home_profile: dict,
-    away_profile: dict,
-    league_id: int,
-) -> tuple[float, float]:
-    """
-    Χτίζει λ_home / λ_away (expected goals) με deterministic λογική:
-      - βάση league goal rate
-      - attack vs defence
-      - tempo
-      - home advantage
-    """
-
-    engines = LEAGUES.get(league_id, {}).get("engines", set())
-    draw_league = "draw" in engines
-    over_league = "over" in engines
-
-    # base league goal rate (μ.ο. goals / game)
-    base_total_goals = 2.60
-    if draw_league and not over_league:
-        base_total_goals -= 0.15
-    if over_league and not draw_league:
-        base_total_goals += 0.20
-    if draw_league and over_league:
-        base_total_goals += 0.05
-
-    # tempo factor
-    tempo_avg = (home_profile["tempo_index"] + away_profile["tempo_index"]) / 2.0
-    tempo_factor = clamp(0.85 + 0.25 * (tempo_avg - 1.0), 0.70, 1.30)
-
-    att_h = home_profile["attack_index"]
-    def_h = home_profile["defence_index"]
-    att_a = away_profile["attack_index"]
-    def_a = away_profile["defence_index"]
-
-    # offensive potential vs opponent defence
-    off_home = att_h * (2.2 - def_a)
-    off_away = att_a * (2.2 - def_h)
-
-    off_home = clamp(off_home, 0.30, 4.00)
-    off_away = clamp(off_away, 0.30, 4.00)
-
-    lambda_home_raw = off_home * 0.55
-    lambda_away_raw = off_away * 0.55
-
-    total_raw = lambda_home_raw + lambda_away_raw
-    target_total = base_total_goals * tempo_factor
-
-    scale = target_total / total_raw if total_raw > 0 else 1.0
-
-    lam_home = clamp(lambda_home_raw * scale, 0.20, 3.50)
-    lam_away = clamp(lambda_away_raw * scale, 0.20, 3.50)
-
-    # home advantage σε goals
-    home_adv_goals = 0.20
-    if draw_league:
-        home_adv_goals -= 0.03
-    if over_league:
-        home_adv_goals += 0.05
-
-    lam_home = clamp(lam_home + home_adv_goals / 2.0, 0.20, 3.80)
-    lam_away = clamp(lam_away - home_adv_goals / 2.0, 0.10, 3.20)
-
-    return lam_home, lam_away
-
-
-def poisson_pmf(k: int, lam: float) -> float:
-    """P(X = k) για Poisson(λ)."""
-    try:
-        return math.exp(-lam) * (lam ** k) / math.factorial(k)
-    except OverflowError:
-        return 0.0
-
-
-def build_poisson_pmf(lam: float, max_goals: int = 7) -> list[float]:
-    """
-    Δημιουργεί λίστα [P(0), P(1), ..., P(max_goals)] και ρίχνει όλη την ουρά (>=max_goals)
-    στο τελευταίο bucket.
-    """
-    probs = [poisson_pmf(k, lam) for k in range(max_goals + 1)]
-    s = sum(probs)
-    if s <= 0:
-        # fallback uniform-ish
-        return [1.0] + [0.0] * max_goals
-    if s < 0.9999:
-        probs[-1] += max(0.0, 1.0 - s)
-    elif s > 1.0001:
-        probs = [p / s for p in probs]
-    return probs
-
-
-def compute_match_model(
-    home_profile: dict,
-    away_profile: dict,
-    league_id: int,
-) -> dict:
+def compute_match_model(home_profile: dict, away_profile: dict,
+                        league_id: int) -> dict:
     """
     Παίρνει τα δύο profiles και παράγει:
       - p_home, p_draw, p_away
       - p_over_2_5, p_under_2_5
-    με Poisson μοντέλο πάνω στα λ_home / λ_away.
     """
 
-    lam_home, lam_away = compute_expected_goals(
-        home_profile,
-        away_profile,
-        league_id,
-    )
+    # home advantage baseline
+    home_adv_base = 0.10
 
-    max_goals = 7
-    ph = build_poisson_pmf(lam_home, max_goals=max_goals)
-    pa = build_poisson_pmf(lam_away, max_goals=max_goals)
+    # league type tweaks
+    engines = LEAGUES.get(league_id, {}).get("engines", set())
+    draw_league = "draw" in engines
+    over_league = "over" in engines
 
-    p_home = 0.0
-    p_draw = 0.0
-    p_away = 0.0
-    p_over = 0.0
-    p_under = 0.0
+    if draw_league:
+        home_adv_base -= 0.02  # πιο ισορροπημένες
+    if over_league:
+        home_adv_base += 0.01  # λίγο παραπάνω home edge
 
-    for gh in range(max_goals + 1):
-        for ga in range(max_goals + 1):
-            p = ph[gh] * pa[ga]
-            if p <= 0:
-                continue
+    # effective strength
+    def strength(p):
+        return (
+            1.4 * p["attack_index"]
+            - 1.0 * p["defence_index"]
+        ) * p["prestige"] * p["motivation"]
 
-            # 1X2
-            if gh > ga:
-                p_home += p
-            elif gh == ga:
-                p_draw += p
-            else:
-                p_away += p
+    s_home = strength(home_profile)
+    s_away = strength(away_profile)
 
-            # O/U 2.5
-            total_goals = gh + ga
-            if total_goals >= 3:
-                p_over += p
-            else:
-                p_under += p
+    # normalise a bit
+    scale = max(1.0, (abs(s_home) + abs(s_away)) / 3.5)
+    s_home /= scale
+    s_away /= scale
 
-    # normalise 1X2 in case of rounding noise
-    total_1x2 = p_home + p_draw + p_away
-    if total_1x2 > 0:
-        p_home /= total_1x2
-        p_draw /= total_1x2
-        p_away /= total_1x2
+    diff = s_home - s_away + home_adv_base
 
-    # normalise O/U
-    total_ou = p_over + p_under
-    if total_ou > 0:
-        p_over /= total_ou
-        p_under /= total_ou
+    # logistic for home win prob
+    p_home_raw = 1.0 / (1.0 + math.exp(-diff * 1.45))
+    p_away_raw = 1.0 - p_home_raw
+
+    # draw probability: base + ισορροπία
+    balance = 1.0 - clamp(abs(diff), 0.0, 1.5) / 1.5
+    p_draw_base = 0.25
+    if draw_league:
+        p_draw_base += 0.03
+    if over_league:
+        p_draw_base -= 0.02
+
+    p_draw = clamp(p_draw_base + 0.07 * balance, 0.18, 0.35)
+
+    remaining = max(0.0, 1.0 - p_draw)
+    p_home = clamp(remaining * p_home_raw, 0.05, 0.80)
+    p_away = clamp(remaining * p_away_raw, 0.05, 0.80)
+
+    # normalise
+    total = p_home + p_draw + p_away
+    if total > 0:
+        p_home /= total
+        p_draw /= total
+        p_away /= total
+
+    # Over 2.5 model
+    tempo_avg = (home_profile["tempo_index"] + away_profile["tempo_index"]) / 2.0
+    attack_sum = home_profile["attack_index"] + away_profile["attack_index"]
+    defence_sum = home_profile["defence_index"] + away_profile["defence_index"]
+
+    base_over = 0.52
+    if over_league:
+        base_over += 0.06
+    if draw_league:
+        base_over -= 0.02
+
+    # attack vs defence signal
+    attack_signal = clamp((attack_sum - defence_sum) / 4.0, -0.08, 0.10)
+    tempo_signal = clamp((tempo_avg - 1.0) * 0.12, -0.05, 0.07)
+
+    p_over = clamp(base_over + attack_signal + tempo_signal, 0.40, 0.78)
+    p_under = 1.0 - p_over
 
     return {
-        "home_win": round(clamp(p_home, 0.01, 0.90), 3),
-        "draw_win": round(clamp(p_draw, 0.05, 0.40), 3),
-        "away_win": round(clamp(p_away, 0.01, 0.90), 3),
-        "over_2_5": round(clamp(p_over, 0.20, 0.85), 3),
-        "under_2_5": round(clamp(p_under, 0.15, 0.80), 3),
-        "lambda_home": round(lam_home, 3),
-        "lambda_away": round(lam_away, 3),
+        "home_win": round(p_home, 3),
+        "draw_win": round(p_draw, 3),
+        "away_win": round(p_away, 3),
+        "over_2_5": round(p_over, 3),
+        "under_2_5": round(p_under, 3),
     }
 
 
@@ -644,29 +622,19 @@ def main():
     TEAM_STATS_CACHE = load_json_cache(TEAM_CACHE_PATH)
     STANDINGS_CACHE = load_json_cache(STANDINGS_CACHE_PATH)
 
-    # Window: 3 πλήρεις μέρες ΜΠΡΟΣΤΑ (π.χ. Πέμπτη → Παρασκευή–Κυριακή)
+    # Window: από σήμερα + 4 ημέρες
     today = datetime.utcnow().date()
-    start_date = today + timedelta(days=1)
-    end_date = today + timedelta(days=3)
-
-    date_from = start_date.strftime("%Y-%m-%d")
-    date_to = end_date.strftime("%Y-%m-%d")
-
-    iso_year, iso_week, _ = start_date.isocalendar()
-
+    date_from = today.strftime("%Y-%m-%d")
+    date_to = (today + timedelta(days=4)).strftime("%Y-%m-%d")
     log("==============================================")
     log(f"🗓  Window: {date_from} → {date_to} (season {SEASON})")
-    log(f"📅 Week label: Week {iso_week} (ISO {iso_year})")
 
     all_fixtures = []
 
     # 1) Τραβάμε fixtures ανά λίγκα
     for league_id in sorted(LEAGUES.keys()):
         league_fixtures = fetch_fixtures_for_league(
-            league_id,
-            SEASON,
-            date_from,
-            date_to,
+            league_id, SEASON, date_from, date_to
         )
         all_fixtures.extend(league_fixtures)
 
@@ -711,7 +679,9 @@ def main():
             if kickoff_iso:
                 try:
                     # Handle πιθανό "Z"
-                    dt = datetime.fromisoformat(kickoff_iso.replace("Z", "+00:00"))
+                    dt = datetime.fromisoformat(
+                        kickoff_iso.replace("Z", "+00:00")
+                    )
                     match_date = dt.strftime("%Y-%m-%d")
                     match_time = dt.strftime("%H:%M")
                 except Exception:
@@ -733,23 +703,14 @@ def main():
             away_stats = fetch_team_stats(league_id, away_id, SEASON)
 
             if not home_stats or not away_stats:
-                log(
-                    f"⚠️ Missing stats for fixture {fixture_id} "
-                    f"({home_name} - {away_name})"
-                )
+                log(f"⚠️ Missing stats for fixture {fixture_id} ({home_name} - {away_name})")
                 continue
 
             home_profile = build_team_profile(
-                home_stats,
-                home_standing,
-                league_id,
-                side="home",
+                home_stats, home_standing, league_id, side="home"
             )
             away_profile = build_team_profile(
-                away_stats,
-                away_standing,
-                league_id,
-                side="away",
+                away_stats, away_standing, league_id, side="away"
             )
 
             model = compute_match_model(home_profile, away_profile, league_id)
@@ -760,12 +721,15 @@ def main():
             p_over = model["over_2_5"]
             p_under = model["under_2_5"]
 
-            # fair odds
             fair_1 = prob_to_fair_odds(p_home)
             fair_x = prob_to_fair_odds(p_draw)
             fair_2 = prob_to_fair_odds(p_away)
             fair_over = prob_to_fair_odds(p_over)
             fair_under = prob_to_fair_odds(p_under)
+
+            # scores 1–10 για draw / over από probabilities
+            draw_score = compute_draw_score(p_draw)
+            over_score = compute_over_score(p_over)
 
             # “engine tag” για GPT
             if "draw" in engines and "over" in engines:
@@ -777,23 +741,16 @@ def main():
             else:
                 engine_tag = "Other"
 
-            # extra analytics
+            # κρατάμε και λίγη επιπλέον info
             expected_goals = round(
-                home_profile["attack_index"] + away_profile["attack_index"],
-                3,
+                home_profile["attack_index"] + away_profile["attack_index"], 3
             )
             strength_home = round(
-                home_profile["attack_index"] * home_profile["prestige"],
-                3,
+                home_profile["attack_index"] * home_profile["prestige"], 3
             )
             strength_away = round(
-                away_profile["attack_index"] * away_profile["prestige"],
-                3,
+                away_profile["attack_index"] * away_profile["prestige"], 3
             )
-
-            # Scores 1–10 για GPT (Draw / Over)
-            score_draw = round(max(1.0, min(10.0, p_draw * 10.0)), 1)
-            score_over = round(max(1.0, min(10.0, p_over * 10.0)), 1)
 
             processed.append(
                 {
@@ -804,7 +761,6 @@ def main():
                     "league": league_info["name"],
                     "home": home_name,
                     "away": away_name,
-                    "match": f"{home_name} - {away_name}",
                     "model": engine_tag,
                     # fair odds
                     "fair_1": fair_1,
@@ -812,16 +768,13 @@ def main():
                     "fair_2": fair_2,
                     "fair_over_2_5": fair_over,
                     "fair_under_2_5": fair_under,
-                    # probabilities (0–1)
+                    # probabilities (για Kelly κλπ)
                     "draw_prob": p_draw,
                     "over_2_5_prob": p_over,
                     "under_2_5_prob": p_under,
-                    # scores 1–10
-                    "score_draw": score_draw,
-                    "score_over_2_5": score_over,
-                    # λ για debugging / calibration
-                    "lambda_home": model["lambda_home"],
-                    "lambda_away": model["lambda_away"],
+                    # scores (για Draw / Over engines, Friday shortlist, UI)
+                    "score_draw": draw_score,
+                    "score_over": over_score,
                     # extra analytics
                     "expected_goals": expected_goals,
                     "strength_home": strength_home,
@@ -834,31 +787,15 @@ def main():
         except Exception as e:
             log(f"⚠️ Error processing fixture: {e}")
 
-    # sort fixtures by date → time → league → fixture_id
-    processed_sorted = sorted(
-        processed,
-        key=lambda fx: (
-            fx.get("date") or "",
-            fx.get("time") or "",
-            fx.get("league_id") or 0,
-            fx.get("fixture_id") or 0,
-        ),
-    )
-
     report = {
         "generated_at": datetime.utcnow().isoformat(),
-        "meta": {
-            "week_year": int(iso_year),
-            "week_number": int(iso_week),
-            "week_label": f"Week {iso_week}",
-        },
         "window": {
             "date_from": date_from,
             "date_to": date_to,
             "season": int(SEASON),
         },
-        "fixtures_analyzed": len(processed_sorted),
-        "fixtures": processed_sorted,
+        "fixtures_analyzed": len(processed),
+        "fixtures": processed,
     }
 
     with open(REPORT_PATH, "w", encoding="utf-8") as f:
@@ -867,7 +804,7 @@ def main():
     save_json_cache(TEAM_CACHE_PATH, TEAM_STATS_CACHE)
     save_json_cache(STANDINGS_CACHE_PATH, STANDINGS_CACHE)
 
-    log(f"✅ Thursday v3 ready → {len(processed_sorted)} fixtures analysed.")
+    log(f"✅ Thursday v3 ready → {len(processed)} fixtures analysed.")
     log(f"📝 Saved → {REPORT_PATH}")
 
 
