@@ -331,7 +331,7 @@ def generate_picks(fixtures, odds_index):
         # ------------------------------------------------------------------ #
         # DRAW SINGLES
         # ------------------------------------------------------------------ #
-        if draw_prob is not None and draw_prob >= 0.35 and fair_x is not None:
+        if draw_prob is not None and draw_prob >= 0.33 and fair_x is not None:
             score = draw_score(draw_prob, league)
             edge = None
             if offered_x and offered_x > 0 and fair_x > 0:
