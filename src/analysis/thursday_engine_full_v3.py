@@ -1,15 +1,15 @@
 # ================================================================
-#  BOMBAY ENGINE — THURSDAY ANALYSIS FULL v3
-#  (Complete script — έτοιμο για Render)
+#  BOMBAY ENGINE — THURSDAY ANALYSIS FULL v3.5
+#  (Complete script — για Render)
 #
 #  - Τραβάει fixtures ανά λίγκα από API-FOOTBALL
-#  - Χρησιμοποιεί FOOTBALL_SEASON από environment
-#  - Χτίζει full model για:
+#  - Χρησιμοποιεί FOOTBALL_SEASON από environment (ή auto)
+#  - Φτιάχνει μοντέλο για:
 #       * p_home, p_draw, p_away
 #       * p_over_2_5, p_under_2_5
 #  - Βασισμένο σε team statistics + standings
 #  - Caching για /teams/statistics και /standings
-#  - Υποστηρίζει Draw Engine / Over Engine ανά λίγκα
+#  - Υποστηρίζει Draw / Over engines ανά λίγκα
 #  - Σώζει JSON report → logs/thursday_report_v3.json
 # ================================================================
 
@@ -35,7 +35,7 @@ FOOTBALL_SEASON_ENV = os.getenv("FOOTBALL_SEASON")
 def resolve_season() -> str:
     """
     Αν υπάρχει FOOTBALL_SEASON στο περιβάλλον → το χρησιμοποιούμε.
-    Αλλιώς κάνουμε classic ευρωπαϊκή λογική:
+    Αλλιώς:
       - Ιούλιος–Δεκέμβριος → season = current year
       - Ιανουάριος–Ιούνιος → season = previous year
     """
@@ -66,26 +66,34 @@ os.makedirs("logs", exist_ok=True)
 # -------------------------------------------------
 # Draw Engine leagues
 DRAW_LEAGUES = {
-    61: "Ligue 1",          # France
-    135: "Serie A",         # Italy
-    140: "La Liga",         # Spain
-    40: "Championship",     # England
-    136: "Serie B",         # Italy
-    62: "Ligue 2",          # France
-    95: "Liga Portugal 2",  # Portugal 2
-    207: "Swiss Super League",  # Shared με Over
+    61: "Ligue 1",              # France
+    135: "Serie A",             # Italy
+    140: "La Liga",             # Spain
+    40: "Championship",         # England
+    136: "Serie B",             # Italy
+    62: "Ligue 2",              # France
+    95: "Liga Portugal 2",      # Portugal 2
+    207: "Swiss Super League",  # shared with Over
+    39: "Premier League",       # England
+    128: "Argentina Primera",
+    71: "Brazil Serie A",
 }
 
 # Over Engine leagues
 OVER_LEAGUES = {
-    78: "Bundesliga",          # Germany
-    88: "Eredivisie",          # Netherlands
-    144: "Jupiler Pro League", # Belgium
-    271: "Superliga",          # Denmark
-    113: "Allsvenskan",        # Sweden
-    103: "Eliteserien",        # Norway
-    207: "Swiss Super League", # shared
-    94: "Liga Portugal 1",     # Portugal 1
+    78: "Bundesliga",              # Germany
+    88: "Eredivisie",              # Netherlands
+    144: "Jupiler Pro League",     # Belgium
+    271: "Superliga",              # Denmark
+    113: "Allsvenskan",            # Sweden
+    103: "Eliteserien",            # Norway
+    207: "Swiss Super League",     # shared
+    94: "Liga Portugal 1",         # Portugal 1
+    39: "Premier League",          # England
+    98: "J1 League",               # Japan
+    253: "MLS",                    # USA
+    71: "Brazil Serie A",
+    128: "Argentina Primera",
 }
 
 # Ενιαίο mapping: league_id → {name, engines}
@@ -107,13 +115,9 @@ def log(msg: str):
 
 
 # -------------------------------------------------
-#  Load core YAMLs (sanity only)
+#  Load core YAMLs (sanity only – δεν τα χρησιμοποιούμε ακόμα)
 # -------------------------------------------------
 def load_core_configs():
-    """
-    Optional: απλά δοκιμάζει ότι τα YAML υπάρχουν / είναι valid.
-    Δεν επηρεάζει τους υπολογισμούς αν λείπουν.
-    """
     try:
         root = Path(__file__).resolve().parent
         core_path = root / "core" / "bombay_rules_v4.yaml"
@@ -230,8 +234,12 @@ def api_get(path: str, params: dict) -> dict:
 # -------------------------------------------------
 #  Fetchers
 # -------------------------------------------------
-def fetch_fixtures_for_league(league_id: int, season: str,
-                              date_from: str, date_to: str) -> list:
+def fetch_fixtures_for_league(
+    league_id: int,
+    season: str,
+    date_from: str,
+    date_to: str,
+) -> list:
     """
     Τραβάμε fixtures για συγκεκριμένη λίγκα, season, window.
     Χρησιμοποιούμε ΜΟΝΟ from/to (όχι date) για να μη γκρινιάζει το API.
@@ -310,20 +318,23 @@ def fetch_league_standings(league_id: int, season: str) -> dict:
 # -------------------------------------------------
 #  Model helpers
 # -------------------------------------------------
-def build_team_profile(stats: dict, standing_row: dict,
-                       league_id: int, side: str) -> dict:
+def build_team_profile(
+    stats: dict,
+    standing_row: dict,
+    league_id: int,
+    side: str,
+) -> dict:
     """
     Φτιάχνει προφίλ ομάδας:
       - attack_index
       - defence_index
       - tempo_index
-      - prestige_factor
-      - motivation_factor
+      - prestige
+      - motivation
     side: "home" / "away"
     """
 
     # --- Basic production (goals, xG, shots) ---
-    # averages per game
     gf_total = get_nested(stats, ["goals", "for", "average", "total"], 1.3)
     ga_total = get_nested(stats, ["goals", "against", "average", "total"], 1.3)
 
@@ -333,7 +344,9 @@ def build_team_profile(stats: dict, standing_row: dict,
     ga_away = get_nested(stats, ["goals", "against", "average", "away"], ga_total)
 
     # xG – αν δεν υπάρχει, fallback στα goals
-    xg_for = get_nested(stats, ["expected", "goals", "for", "average", "total"], gf_total)
+    xg_for = get_nested(
+        stats, ["expected", "goals", "for", "average", "total"], gf_total
+    )
     xg_against = get_nested(
         stats, ["expected", "goals", "against", "average", "total"], ga_total
     )
@@ -382,7 +395,6 @@ def build_team_profile(stats: dict, standing_row: dict,
     # --- Prestige & Motivation from standings ---
     total_teams = 20
     rank = None
-    points = None
     goal_diff = 0
 
     if standing_row:
@@ -391,12 +403,10 @@ def build_team_profile(stats: dict, standing_row: dict,
         except Exception:
             rank = None
         try:
-            points = int(standing_row.get("points") or 0)
-        except Exception:
-            points = None
-        try:
             goals_for = standing_row.get("all", {}).get("goals", {}).get("for", 0)
-            goals_against = standing_row.get("all", {}).get("goals", {}).get("against", 0)
+            goals_against = (
+                standing_row.get("all", {}).get("goals", {}).get("against", 0)
+            )
             goal_diff = safe_float(goals_for) - safe_float(goals_against)
         except Exception:
             goal_diff = 0
@@ -410,11 +420,10 @@ def build_team_profile(stats: dict, standing_row: dict,
         except Exception:
             total_teams = 20
 
-    # prestige: πάνω οι “μεγάλοι” + λίγη ενίσχυση από goal_diff
+    # prestige: 1ος → ~1.15, τελευταίος → ~0.75
     if rank is None or rank <= 0:
         prestige = 0.9
     else:
-        # 1ος → 1.15, τελευταίος → 0.75
         prestige = 1.15 - 0.40 * (rank - 1) / max(1, total_teams - 1)
         prestige += clamp(goal_diff / 40.0, -0.05, 0.05)
 
@@ -424,24 +433,22 @@ def build_team_profile(stats: dict, standing_row: dict,
     motivation = 1.0
     if rank is not None and total_teams >= 10:
         if rank <= 4:
-            motivation += 0.10  # title / Europe
+            motivation += 0.10
         if rank <= 2:
-            motivation += 0.05  # title fight
+            motivation += 0.05
 
         if rank >= total_teams - 2:
-            motivation += 0.15  # direct relegation fight
+            motivation += 0.15
         elif rank >= total_teams - 4:
-            motivation += 0.08  # play-out zone
+            motivation += 0.08
 
     motivation = clamp(motivation, 0.85, 1.25)
 
-    # μικρό league-specific tweak
+    # league-specific tempo tweak
     engines = LEAGUES.get(league_id, {}).get("engines", set())
     if "draw" in engines:
-        # πιο αργές λίγκες
         tempo_index *= 0.95
     if "over" in engines:
-        # πιο γρήγορες
         tempo_index *= 1.05
 
     return {
@@ -453,8 +460,7 @@ def build_team_profile(stats: dict, standing_row: dict,
     }
 
 
-def compute_match_model(home_profile: dict, away_profile: dict,
-                        league_id: int) -> dict:
+def compute_match_model(home_profile: dict, away_profile: dict, league_id: int) -> dict:
     """
     Παίρνει τα δύο profiles και παράγει:
       - p_home, p_draw, p_away
@@ -470,28 +476,27 @@ def compute_match_model(home_profile: dict, away_profile: dict,
     over_league = "over" in engines
 
     if draw_league:
-        home_adv_base -= 0.02  # πιο ισορροπημένες
+        home_adv_base -= 0.02
     if over_league:
-        home_adv_base += 0.01  # λίγο παραπάνω home edge
+        home_adv_base += 0.01
 
     # effective strength
     def strength(p):
-        return (
-            1.4 * p["attack_index"]
-            - 1.0 * p["defence_index"]
-        ) * p["prestige"] * p["motivation"]
+        return (1.4 * p["attack_index"] - 1.0 * p["defence_index"]) * p[
+            "prestige"
+        ] * p["motivation"]
 
     s_home = strength(home_profile)
     s_away = strength(away_profile)
 
-    # normalise a bit
+    # normalise λίγο
     scale = max(1.0, (abs(s_home) + abs(s_away)) / 3.5)
     s_home /= scale
     s_away /= scale
 
     diff = s_home - s_away + home_adv_base
 
-    # logistic for home win prob
+    # logistic για home win prob
     p_home_raw = 1.0 / (1.0 + math.exp(-diff * 1.45))
     p_away_raw = 1.0 - p_home_raw
 
@@ -509,7 +514,6 @@ def compute_match_model(home_profile: dict, away_profile: dict,
     p_home = clamp(remaining * p_home_raw, 0.05, 0.80)
     p_away = clamp(remaining * p_away_raw, 0.05, 0.80)
 
-    # normalise
     total = p_home + p_draw + p_away
     if total > 0:
         p_home /= total
@@ -527,7 +531,6 @@ def compute_match_model(home_profile: dict, away_profile: dict,
     if draw_league:
         base_over -= 0.02
 
-    # attack vs defence signal
     attack_signal = clamp((attack_sum - defence_sum) / 4.0, -0.08, 0.10)
     tempo_signal = clamp((tempo_avg - 1.0) * 0.12, -0.05, 0.07)
 
@@ -557,18 +560,19 @@ def main():
 
     if not API_KEY:
         raise RuntimeError("FOOTBALL_API_KEY is not set in environment")
+
     log(f"🔑 Using FOOTBALL_SEASON={SEASON}")
 
-    # ΕΔΩ ήταν το crash – τώρα η συνάρτηση υπάρχει.
     load_core_configs()
 
     TEAM_STATS_CACHE = load_json_cache(TEAM_CACHE_PATH)
     STANDINGS_CACHE = load_json_cache(STANDINGS_CACHE_PATH)
 
-    # Window: από σήμερα + 4 ημέρες
+    # Window: 3 μέρες ΜΠΡΟΣΤΑ (χωρίς σήμερα)
     today = datetime.utcnow().date()
-    date_from = today.strftime("%Y-%m-%d")
-    date_to = (today + timedelta(days=4)).strftime("%Y-%m-%d")
+    date_from = (today + timedelta(days=1)).strftime("%Y-%m-%d")
+    date_to = (today + timedelta(days=3)).strftime("%Y-%m-%d")
+
     log("==============================================")
     log(f"🗓  Window: {date_from} → {date_to} (season {SEASON})")
 
@@ -588,7 +592,9 @@ def main():
     # 2) Standings cache per league
     standings_per_league = {}
     for league_id in sorted(LEAGUES.keys()):
-        standings_per_league[league_id] = fetch_league_standings(league_id, SEASON)
+        standings_per_league[league_id] = fetch_league_standings(
+            league_id, SEASON
+        )
 
     # 3) Process κάθε fixture
     for f in all_fixtures:
@@ -614,21 +620,16 @@ def main():
             away_name = away_team["name"]
 
             fixture_id = int(fixture["id"])
-            kickoff_iso = fixture.get("date")  # ISO string
+            kickoff_iso = fixture.get("date")
 
-            # split date / time
             match_date = ""
             match_time = ""
             if kickoff_iso:
                 try:
-                    # Handle πιθανό "Z"
-                    dt = datetime.fromisoformat(
-                        kickoff_iso.replace("Z", "+00:00")
-                    )
+                    dt = datetime.fromisoformat(kickoff_iso.replace("Z", "+00:00"))
                     match_date = dt.strftime("%Y-%m-%d")
                     match_time = dt.strftime("%H:%M")
                 except Exception:
-                    # fallback: κόβουμε στο "T"
                     if "T" in kickoff_iso:
                         parts = kickoff_iso.split("T")
                         match_date = parts[0]
@@ -641,12 +642,14 @@ def main():
             home_standing = standings_table.get(home_id, {})
             away_standing = standings_table.get(away_id, {})
 
-            # Φέρνουμε team statistics
             home_stats = fetch_team_stats(league_id, home_id, SEASON)
             away_stats = fetch_team_stats(league_id, away_id, SEASON)
 
             if not home_stats or not away_stats:
-                log(f"⚠️ Missing stats for fixture {fixture_id} ({home_name} - {away_name})")
+                log(
+                    f"⚠️ Missing stats for fixture {fixture_id} "
+                    f"({home_name} - {away_name})"
+                )
                 continue
 
             home_profile = build_team_profile(
@@ -670,7 +673,7 @@ def main():
             fair_over = prob_to_fair_odds(p_over)
             fair_under = prob_to_fair_odds(p_under)
 
-            # “engine tag” για GPT
+            # engine tag για GPT
             if "draw" in engines and "over" in engines:
                 engine_tag = "Draw + Over Engine"
             elif "draw" in engines:
@@ -680,7 +683,6 @@ def main():
             else:
                 engine_tag = "Other"
 
-            # κρατάμε και λίγη επιπλέον info
             expected_goals = round(
                 home_profile["attack_index"] + away_profile["attack_index"], 3
             )
@@ -707,7 +709,7 @@ def main():
                     "fair_2": fair_2,
                     "fair_over_2_5": fair_over,
                     "fair_under_2_5": fair_under,
-                    # probabilities (για Kelly κλπ)
+                    # probabilities (για Kelly & scores στο GPT)
                     "draw_prob": p_draw,
                     "over_2_5_prob": p_over,
                     "under_2_5_prob": p_under,
