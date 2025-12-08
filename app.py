@@ -2,21 +2,23 @@ import os
 import json
 import subprocess
 from datetime import datetime
-from flask import Flask, jsonify, send_file  # + send_file
+
+from flask import Flask, jsonify, send_file
 
 app = Flask(__name__)
 
 # ------------------------------------------------------
-#  Ριζικός φάκελος (εκεί που βρίσκεται το app.py)
+# Ριζικός φάκελος (εκεί που βρίσκεται το app.py)
 # ------------------------------------------------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
+
 # ------------------------------------------------------
-#  Βοηθητικό: τρέξιμο script (χειροκίνητο, όχι GPT)
+# Βοηθητικό: τρέξιμο script (χειροκίνητο, όχι GPT)
 # ------------------------------------------------------
 def run_script(script_name: str):
     try:
-        print(f"🚀 Running script: {script_name}", flush=True)
+        print(f"▶️ Running script: {script_name}", flush=True)
 
         result = subprocess.run(
             ["python3", script_name],
@@ -45,17 +47,20 @@ def run_script(script_name: str):
         )
     except Exception as e:
         print(f"❌ Error running {script_name}: {e}", flush=True)
-        return jsonify(
-            {
-                "status": "error",
-                "script": script_name,
-                "error": str(e),
-            }
-        ), 500
+        return (
+            jsonify(
+                {
+                    "status": "error",
+                    "script": script_name,
+                    "error": str(e),
+                }
+            ),
+            500,
+        )
 
 
 # ------------------------------------------------------
-#  Βοηθητικό: φόρτωση JSON report από logs/
+# Βοηθητικό: φόρτωση JSON report από logs/
 # ------------------------------------------------------
 def load_json_report(relative_path: str):
     full_path = os.path.join(BASE_DIR, relative_path)
@@ -76,7 +81,7 @@ def load_json_report(relative_path: str):
 
 
 # ------------------------------------------------------
-#  HEALTHCHECK
+# HEALTHCHECK
 # ------------------------------------------------------
 @app.route("/healthcheck", methods=["GET"])
 def healthcheck():
@@ -84,7 +89,7 @@ def healthcheck():
 
 
 # ------------------------------------------------------
-#  MANUAL RUN — Thursday Engine v3
+# MANUAL RUN — Thursday Engine v3
 # ------------------------------------------------------
 @app.route("/run/thursday-v3", methods=["GET"])
 def manual_run_thursday_v3():
@@ -96,19 +101,31 @@ def manual_run_thursday_v3():
 
 
 # ------------------------------------------------------
-#  MANUAL RUN — Friday Shortlist v3  (ΝΕΟ)
+# MANUAL RUN — Friday Shortlist v3 (παλιό)
 # ------------------------------------------------------
 @app.route("/run/friday-shortlist-v3", methods=["GET"])
 def manual_run_friday_shortlist_v3():
     """
-    Τρέχει το Friday shortlist script.
+    Τρέχει το Friday shortlist v3 script.
     Γράφει logs/friday_shortlist_v3.json.
     """
     return run_script("src/analysis/friday_shortlist_v3.py")
 
 
 # ------------------------------------------------------
-#  DOWNLOAD ENDPOINTS (για manual upload στο Custom GPT)
+# MANUAL RUN — Friday Shortlist v4 (ΝΕΟ)
+# ------------------------------------------------------
+@app.route("/run/friday-shortlist-v4", methods=["GET"])
+def manual_run_friday_shortlist_v4():
+    """
+    Τρέχει το Friday shortlist v4 script.
+    Γράφει logs/friday_shortlist_v4.json.
+    """
+    return run_script("src/analysis/friday_shortlist_v4.py")
+
+
+# ------------------------------------------------------
+# DOWNLOAD ENDPOINTS (για manual upload στο Custom GPT)
 # ------------------------------------------------------
 @app.route("/download/thursday-report-v3", methods=["GET"])
 def download_thursday_report_v3():
@@ -139,7 +156,27 @@ def download_friday_shortlist_v3():
             jsonify(
                 {
                     "status": "error",
-                    "message": "Friday shortlist file not found",
+                    "message": "Friday shortlist v3 file not found",
+                    "path": full_path,
+                    "timestamp": datetime.utcnow().isoformat(),
+                }
+            ),
+            404,
+        )
+
+    return send_file(full_path, mimetype="application/json", as_attachment=True)
+
+
+@app.route("/download/friday-shortlist-v4", methods=["GET"])
+def download_friday_shortlist_v4():
+    full_path = os.path.join(BASE_DIR, "logs", "friday_shortlist_v4.json")
+
+    if not os.path.exists(full_path):
+        return (
+            jsonify(
+                {
+                    "status": "error",
+                    "message": "Friday shortlist v4 file not found",
                     "path": full_path,
                     "timestamp": datetime.utcnow().isoformat(),
                 }
@@ -171,14 +208,16 @@ def download_tuesday_recap_v2():
 
 
 # ------------------------------------------------------
-#  GPT ENDPOINTS (READ-ONLY JSON REPORTS)
+# GPT ENDPOINTS (READ-ONLY JSON REPORTS)
 # ------------------------------------------------------
 @app.route("/thursday-analysis-v3", methods=["GET"])
 def api_thursday_analysis_v3():
     """
     Το GPT παίρνει μια "light" έκδοση του Thursday report,
     βασισμένη στο logs/thursday_report_v3.json.
-    ΠΡΙΝ το διαβάσει, τρέχει τον Thursday engine για να φτιαχτεί/φρεσκαριστεί το full report.
+
+    ΠΡΙΝ το διαβάσει, τρέχει τον Thursday engine για να φτιαχτεί/φρεσκαριστεί
+    το full report.
     """
     try:
         run_script("src/analysis/thursday_engine_full_v3.py")
@@ -186,20 +225,22 @@ def api_thursday_analysis_v3():
         print(f"⚠️ Error while auto-running Thursday engine: {e}", flush=True)
 
     full_report, error = load_json_report("logs/thursday_report_v3.json")
-
     if full_report is None:
-        return jsonify(
-            {
-                "status": "error",
-                "message": "Thursday report not available",
-                "error": error,
-                "timestamp": datetime.utcnow().isoformat(),
-            }
-        ), 503
+        return (
+            jsonify(
+                {
+                    "status": "error",
+                    "message": "Thursday report not available",
+                    "error": error,
+                    "timestamp": datetime.utcnow().isoformat(),
+                }
+            ),
+            503,
+        )
 
     fixtures = full_report.get("fixtures", [])
-
     light_fixtures = []
+
     for fx in fixtures:
         light_fixtures.append(
             {
@@ -244,14 +285,43 @@ def api_friday_shortlist_v3():
     report, error = load_json_report("logs/friday_shortlist_v3.json")
 
     if report is None:
-        return jsonify(
-            {
-                "status": "error",
-                "message": "Friday shortlist not available",
-                "error": error,
-                "timestamp": datetime.utcnow().isoformat(),
-            }
-        ), 503
+        return (
+            jsonify(
+                {
+                    "status": "error",
+                    "message": "Friday shortlist v3 not available",
+                    "error": error,
+                    "timestamp": datetime.utcnow().isoformat(),
+                }
+            ),
+            503,
+        )
+
+    return jsonify(
+        {
+            "status": "ok",
+            "timestamp": datetime.utcnow().isoformat(),
+            "report": report,
+        }
+    )
+
+
+@app.route("/friday-shortlist-v4", methods=["GET"])
+def api_friday_shortlist_v4():
+    report, error = load_json_report("logs/friday_shortlist_v4.json")
+
+    if report is None:
+        return (
+            jsonify(
+                {
+                    "status": "error",
+                    "message": "Friday shortlist v4 not available",
+                    "error": error,
+                    "timestamp": datetime.utcnow().isoformat(),
+                }
+            ),
+            503,
+        )
 
     return jsonify(
         {
@@ -267,14 +337,17 @@ def api_tuesday_recap():
     report, error = load_json_report("logs/tuesday_recap_v2.json")
 
     if report is None:
-        return jsonify(
-            {
-                "status": "error",
-                "message": "Tuesday recap not available",
-                "error": error,
-                "timestamp": datetime.utcnow().isoformat(),
-            }
-        ), 503
+        return (
+            jsonify(
+                {
+                    "status": "error",
+                    "message": "Tuesday recap not available",
+                    "error": error,
+                    "timestamp": datetime.utcnow().isoformat(),
+                }
+            ),
+            503,
+        )
 
     return jsonify(
         {
@@ -286,12 +359,12 @@ def api_tuesday_recap():
 
 
 # ------------------------------------------------------
-#  ENTRY POINT
+# ENTRY POINT
 # ------------------------------------------------------
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     print(
-        f"🟢 Starting Bombay Engine Flask Server on port {port}...",
+        f"🚀 Starting Bombay Engine Flask Server on port {port}...",
         flush=True,
     )
     app.run(host="0.0.0.0", port=port, use_reloader=False)
