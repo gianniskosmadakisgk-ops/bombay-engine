@@ -11,7 +11,6 @@
 #  - Caching για /teams/statistics και /standings
 #  - Υποστηρίζει Draw Engine / Over Engine ανά λίγκα
 #  - Σώζει JSON report → logs/thursday_report_v3.json
-#  - Περιλαμβάνει score_draw & score_over (1–10) από p_draw / p_over_2_5
 # ================================================================
 
 import os
@@ -305,67 +304,6 @@ def fetch_league_standings(league_id: int, season: str) -> dict:
 
 
 # -------------------------------------------------
-#  SCORING HELPERS (1–10 scale για Draw / Over)
-# -------------------------------------------------
-def compute_draw_score(p_draw: float) -> float:
-    """
-    Μετατρέπει p_draw (0–1) σε score_draw (1–10) με piecewise scaling.
-    Στόχος:
-      - < ~0.18 → χαμηλά σκορ (1–4)
-      - ~0.25 → γύρω στο 6
-      - ~0.31 → γύρω στο 8
-      - ~0.35–0.36 → 9–10 (σπάνια)
-    """
-    p = clamp(p_draw, 0.0, 1.0)
-
-    if p <= 0.18:
-        # 0.10 → 1, 0.18 → 4
-        score = 1.0 + (p - 0.10) * (3.0 / 0.08)
-    elif p <= 0.25:
-        # 0.18 → 4, 0.25 → 6
-        score = 4.0 + (p - 0.18) * (2.0 / 0.07)
-    elif p <= 0.31:
-        # 0.25 → 6, 0.31 → 8
-        score = 6.0 + (p - 0.25) * (2.0 / 0.06)
-    elif p <= 0.36:
-        # 0.31 → 8, 0.36 → 10
-        score = 8.0 + (p - 0.31) * (2.0 / 0.05)
-    else:
-        score = 10.0
-
-    return round(clamp(score, 1.0, 10.0), 1)
-
-
-def compute_over_score(p_over: float) -> float:
-    """
-    Μετατρέπει p_over_2_5 (0–1) σε score_over (1–10) με piecewise scaling.
-    Στόχος:
-      - <= ~0.40 → χαμηλά (1–4)
-      - ~0.50 → γύρω στο 6
-      - ~0.60 → γύρω στο 8
-      - ~0.70–0.75 → 9–10 (σπάνια)
-    """
-    p = clamp(p_over, 0.0, 1.0)
-
-    if p <= 0.40:
-        # 0.30 → 1, 0.40 → 4
-        score = 1.0 + (p - 0.30) * (3.0 / 0.10)
-    elif p <= 0.50:
-        # 0.40 → 4, 0.50 → 6
-        score = 4.0 + (p - 0.40) * (2.0 / 0.10)
-    elif p <= 0.60:
-        # 0.50 → 6, 0.60 → 8
-        score = 6.0 + (p - 0.50) * (2.0 / 0.10)
-    elif p <= 0.75:
-        # 0.60 → 8, 0.75 → 9.5
-        score = 8.0 + (p - 0.60) * (1.5 / 0.15)
-    else:
-        score = 10.0
-
-    return round(clamp(score, 1.0, 10.0), 1)
-
-
-# -------------------------------------------------
 #  Model helpers
 # -------------------------------------------------
 def build_team_profile(stats: dict, standing_row: dict,
@@ -608,6 +546,48 @@ def prob_to_fair_odds(p: float) -> float:
 
 
 # -------------------------------------------------
+#  Bookmaker margin helpers (μικρή γκανιότα)
+# -------------------------------------------------
+def apply_margin_1x2(p_home: float, p_draw: float, p_away: float,
+                     target_overround: float = 1.03):
+    """
+    Παίρνει fair probabilities (άθροισμα ≈ 1.0) και βάζει μικρή γκανιότα.
+    Επιστρέφει bookmaker odds για 1, Χ, 2.
+    """
+    base_sum = p_home + p_draw + p_away
+    if base_sum <= 0:
+        return None, None, None
+
+    scale = target_overround / base_sum
+    q_home = clamp(p_home * scale, 0.01, 0.97)
+    q_draw = clamp(p_draw * scale, 0.01, 0.97)
+    q_away = clamp(p_away * scale, 0.01, 0.97)
+
+    o1 = round(1.0 / q_home, 2)
+    ox = round(1.0 / q_draw, 2)
+    o2 = round(1.0 / q_away, 2)
+    return o1, ox, o2
+
+
+def apply_margin_over_under(p_over: float, p_under: float,
+                            target_overround: float = 1.02):
+    """
+    Μικρή γκανιότα στο Over/Under 2.5.
+    """
+    base_sum = p_over + p_under
+    if base_sum <= 0:
+        return None, None
+
+    scale = target_overround / base_sum
+    q_over = clamp(p_over * scale, 0.01, 0.97)
+    q_under = clamp(p_under * scale, 0.01, 0.97)
+
+    o_over = round(1.0 / q_over, 2)
+    o_under = round(1.0 / q_under, 2)
+    return o_over, o_under
+
+
+# -------------------------------------------------
 #  MAIN
 # -------------------------------------------------
 def main():
@@ -721,15 +701,16 @@ def main():
             p_over = model["over_2_5"]
             p_under = model["under_2_5"]
 
+            # fair odds (χωρίς γκανιότα)
             fair_1 = prob_to_fair_odds(p_home)
             fair_x = prob_to_fair_odds(p_draw)
             fair_2 = prob_to_fair_odds(p_away)
             fair_over = prob_to_fair_odds(p_over)
             fair_under = prob_to_fair_odds(p_under)
 
-            # scores 1–10 για draw / over από probabilities
-            draw_score = compute_draw_score(p_draw)
-            over_score = compute_over_score(p_over)
+            # bookmaker odds με μικρή γκανιότα
+            book_1, book_x, book_2 = apply_margin_1x2(p_home, p_draw, p_away, target_overround=1.03)
+            book_over, book_under = apply_margin_over_under(p_over, p_under, target_overround=1.02)
 
             # “engine tag” για GPT
             if "draw" in engines and "over" in engines:
@@ -741,7 +722,7 @@ def main():
             else:
                 engine_tag = "Other"
 
-            # κρατάμε και λίγη επιπλέον info
+            # extra analytics
             expected_goals = round(
                 home_profile["attack_index"] + away_profile["attack_index"], 3
             )
@@ -762,19 +743,22 @@ def main():
                     "home": home_name,
                     "away": away_name,
                     "model": engine_tag,
-                    # fair odds
+                    # fair odds (χωρίς margin)
                     "fair_1": fair_1,
                     "fair_x": fair_x,
                     "fair_2": fair_2,
                     "fair_over_2_5": fair_over,
                     "fair_under_2_5": fair_under,
+                    # bookmaker odds (με μικρή γκανιότα)
+                    "book_1": book_1,
+                    "book_x": book_x,
+                    "book_2": book_2,
+                    "book_over_2_5": book_over,
+                    "book_under_2_5": book_under,
                     # probabilities (για Kelly κλπ)
                     "draw_prob": p_draw,
                     "over_2_5_prob": p_over,
                     "under_2_5_prob": p_under,
-                    # scores (για Draw / Over engines, Friday shortlist, UI)
-                    "score_draw": draw_score,
-                    "score_over": over_score,
                     # extra analytics
                     "expected_goals": expected_goals,
                     "strength_home": strength_home,
