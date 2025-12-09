@@ -10,7 +10,7 @@ import requests
 #  - Φέρνει offered odds από TheOddsAPI
 #  - Χτίζει:
 #       * Draw Singles (flat 30u)
-#       * Over Singles (8 / 16 / 24u, standard/premium/monster)
+#       * Over 2.5 Singles (8 / 16 / 24u)
 #       * FunBet Draw (dynamic stake, max 20% bankroll)
 #       * FunBet Over (dynamic stake, max 20% bankroll)
 #       * Kelly value bets (1X2 + Over 2.5) με ασφαλές Kelly
@@ -33,13 +33,24 @@ BANKROLL_KELLY = 600.0
 
 UNIT = 1.0
 
+# FunBet exposure limits
 MAX_FUN_EXPOSURE_PCT = 0.20      # 20% ανά κύκλο
-MAX_KELLY_PCT = 0.05             # παλιό hard cap (χρησιμοποιούμε δυναμικό cap πιο κάτω)
+
+# Kelly params
+MAX_KELLY_PCT = 0.05             # (κρατάμε για αναφορά, δεν το χρησιμοποιούμε ωμά)
 KELLY_FRACTION = 0.30            # κλασματικό Kelly 30%
 KELLY_MIN_EDGE = 0.15            # 15%+ value
 KELLY_MAX_ODDS = 8.0
 KELLY_MAX_PICKS = 6
-KELLY_MIN_PROB = 0.18            # ελάχιστη μοντελο-πιθανότητα 18%
+KELLY_MIN_PROB = 0.20            # τουλάχιστον 20% πιθανότητα
+
+# Draw engine thresholds
+MIN_DRAW_PROB = 0.37             # 37%+
+MIN_DRAW_ODDS = 2.80             # σε πραγματική (offered) απόδοση Χ
+
+# Over engine thresholds
+MIN_OVER_PROB = 0.65
+MAX_OVER_FAIR = 1.75
 
 # ------------------------------------------------------------
 # LEAGUE PRIORITIES
@@ -244,7 +255,7 @@ def classify_over_stake(over_prob, fair_over, league):
     if over_prob >= 0.67 and fair_over <= 1.65 and score >= 67:
         return "premium", 16.0
 
-    # Ό,τι περνάει το minimum threshold αλλά δεν είναι τόσο elite
+    # Standard: περνάει το minimum threshold αλλά όχι τόσο elite
     return "standard", 8.0
 
 
@@ -257,7 +268,7 @@ def compute_system_stake(bankroll, columns, max_exposure_pct=MAX_FUN_EXPOSURE_PC
     """
     Υπολογίζει stake/στήλη ώστε:
       - total_stake <= max_exposure_pct * bankroll
-      - min_unit <= stake/στήλη <= max_unit
+      - 1u <= stake/στήλη <= 5u
     """
     if columns <= 0:
         return 0.0, 0.0
@@ -312,8 +323,15 @@ def generate_picks(fixtures, odds_index):
         over_score = compute_over_score(over_prob, league)
 
         # ---------------- DRAW SINGLES ----------------
-        # Φιλτράρισμα: μόνο αν draw_prob >= 0.38
-        if draw_prob >= 0.38:
+        # Κριτήρια:
+        # 1) draw_prob >= MIN_DRAW_PROB
+        # 2) offered_x >= MIN_DRAW_ODDS
+        if (
+            draw_prob is not None
+            and draw_prob >= MIN_DRAW_PROB
+            and offered_x is not None
+            and offered_x >= MIN_DRAW_ODDS
+        ):
             draw_singles.append(
                 {
                     "match": f"{home} – {away}",
@@ -321,14 +339,19 @@ def generate_picks(fixtures, odds_index):
                     "fair": fair_x,
                     "prob": round(draw_prob, 3),
                     "score": round(draw_score, 1),
-                    "odds": offered_x,
+                    "odds": offered_x,     # πραγματική απόδοση Χ
                     "stake": 30.0,
                 }
             )
 
         # ---------------- OVER SINGLES ----------------
         # Over probability >= 0.65, fair <= 1.75
-        if over_prob >= 0.65 and fair_over <= 1.75:
+        if (
+            over_prob is not None
+            and over_prob >= MIN_OVER_PROB
+            and fair_over is not None
+            and fair_over <= MAX_OVER_FAIR
+        ):
             tier, stake = classify_over_stake(over_prob, fair_over, league)
             over_singles.append(
                 {
@@ -337,7 +360,7 @@ def generate_picks(fixtures, odds_index):
                     "fair": fair_over,
                     "prob": round(over_prob, 3),
                     "score": round(over_score, 1),
-                    "odds": offered_over,
+                    "odds": offered_over,  # πραγματική απόδοση Over 2.5
                     "tier": tier,
                     "stake": float(stake),
                 }
@@ -348,9 +371,7 @@ def generate_picks(fixtures, odds_index):
         def add_kelly_candidate(market_label, fair, offered, prob_model):
             if not offered:
                 return
-
-            # minimum μοντελο-πιθανότητα 18%
-            if prob_model < KELLY_MIN_PROB:
+            if prob_model is None or prob_model < KELLY_MIN_PROB:
                 return
 
             # Edge ως ποσοστό σε σχέση με fair:
@@ -389,7 +410,7 @@ def generate_picks(fixtures, odds_index):
 
             # Υπολογισμός stake (σε units)
             raw_stake = BANKROLL_KELLY * f
-            stake = max(3.0, round(raw_stake, 1))  # ελάχιστο 3u για να έχει νόημα
+            stake = max(3.0, round(raw_stake, 1))  # μικρό minimum για να έχει νόημα
 
             kelly_candidates.append(
                 {
@@ -405,12 +426,17 @@ def generate_picks(fixtures, odds_index):
                 }
             )
 
-        # Draw Kelly (αν έχουμε offered)
-        if offered_x:
+        # Draw Kelly: ΜΟΝΟ αν περνάει τα ίδια κριτήρια με το Draw Engine
+        if (
+            offered_x is not None
+            and draw_prob is not None
+            and draw_prob >= MIN_DRAW_PROB
+            and offered_x >= MIN_DRAW_ODDS
+        ):
             add_kelly_candidate("Draw", fair_x, offered_x, draw_prob)
 
-        # Over 2.5 Kelly
-        if offered_over:
+        # Over 2.5 Kelly (value-based)
+        if offered_over is not None and over_prob is not None:
             add_kelly_candidate("Over 2.5", fair_over, offered_over, over_prob)
 
     # --------------------------------------------------------
@@ -434,7 +460,7 @@ def generate_picks(fixtures, odds_index):
 def funbet_draw(draw_singles):
     """
     Χτίζει FunBet Draw σύστημα με βάση τα Draw Singles.
-    Top 7 by score (ή λιγότερα), που ούτως ή άλλως έχουν prob >= 0.38.
+    Top 7 by score (όλα έχουν ήδη prob>=MIN_DRAW_PROB & odds>=MIN_DRAW_ODDS).
     """
     picks = sorted(draw_singles, key=lambda x: x["score"], reverse=True)[:7]
     n = len(picks)
@@ -511,7 +537,7 @@ def funbet_over(over_singles):
 # ------------------------------------------------------------
 
 def main():
-    log("🚀 Running Friday Shortlist v3 (final units version)")
+    log("🚀 Running Friday Shortlist v3 (final units version, updated draw/kelly logic)")
 
     fixtures, th_report = load_thursday_fixtures()
     log(f"Loaded {len(fixtures)} fixtures from {THURSDAY_REPORT_PATH}")
@@ -523,55 +549,42 @@ def main():
     fb_draw = funbet_draw(draw_singles)
     fb_over = funbet_over(over_singles)
 
-    # Πόσα έχουμε ανοιχτά αυτή την εβδομάδα
+    # Bankroll updates (open = units σε εκκρεμότητα)
     draw_open = sum(d["stake"] for d in draw_singles)
     over_open = sum(o["stake"] for o in over_singles)
     fun_draw_open = fb_draw["total_stake"]
     fun_over_open = fb_over["total_stake"]
     kelly_open = sum(k["stake"] for k in kelly_picks)
 
-    # Προς το παρόν bank_week_start = αρχικό κεφάλαιο.
-    # Όταν το Tuesday recap γράφει state, θα το διαβάζουμε από εκεί.
-    draw_week_start = BANKROLL_DRAW
-    over_week_start = BANKROLL_OVER
-    fun_draw_week_start = BANKROLL_FUN_DRAW
-    fun_over_week_start = BANKROLL_FUN_OVER
-    kelly_week_start = BANKROLL_KELLY
-
     bankrolls = {
         "draw": {
-            "bank_initial": BANKROLL_DRAW,
-            "bank_week_start": draw_week_start,
+            "before": BANKROLL_DRAW,
             "open": round(draw_open, 1),
-            "bank_after_open": round(draw_week_start - draw_open, 1),
+            "after": round(BANKROLL_DRAW - draw_open, 1),
             "picks": len(draw_singles),
         },
         "over": {
-            "bank_initial": BANKROLL_OVER,
-            "bank_week_start": over_week_start,
+            "before": BANKROLL_OVER,
             "open": round(over_open, 1),
-            "bank_after_open": round(over_week_start - over_open, 1),
+            "after": round(BANKROLL_OVER - over_open, 1),
             "picks": len(over_singles),
         },
         "fun_draw": {
-            "bank_initial": BANKROLL_FUN_DRAW,
-            "bank_week_start": fun_draw_week_start,
+            "before": BANKROLL_FUN_DRAW,
             "open": round(fun_draw_open, 1),
-            "bank_after_open": round(fun_draw_week_start - fun_draw_open, 1),
-            "picks": len(fb_draw["picks"]) if fb_draw["system"] else 0,
+            "after": round(BANKROLL_FUN_DRAW - fun_draw_open, 1),
+            "picks": len(fb_draw["picks"]),
         },
         "fun_over": {
-            "bank_initial": BANKROLL_FUN_OVER,
-            "bank_week_start": fun_over_week_start,
+            "before": BANKROLL_FUN_OVER,
             "open": round(fun_over_open, 1),
-            "bank_after_open": round(fun_over_week_start - fun_over_open, 1),
-            "picks": len(fb_over["picks"]) if fb_over["system"] else 0,
+            "after": round(BANKROLL_FUN_OVER - fun_over_open, 1),
+            "picks": len(fb_over["picks"]),
         },
         "kelly": {
-            "bank_initial": BANKROLL_KELLY,
-            "bank_week_start": kelly_week_start,
+            "before": BANKROLL_KELLY,
             "open": round(kelly_open, 1),
-            "bank_after_open": round(kelly_week_start - kelly_open, 1),
+            "after": round(BANKROLL_KELLY - kelly_open, 1),
             "picks": len(kelly_picks),
         },
     }
