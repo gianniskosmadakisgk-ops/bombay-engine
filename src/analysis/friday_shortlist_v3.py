@@ -9,10 +9,10 @@ import requests
 #  - Διαβάζει το Thursday report v3
 #  - Φέρνει offered odds από TheOddsAPI
 #  - Χτίζει:
-#       * Draw Singles (flat 30u)
-#       * Over Singles (8 / 16 / 24u, standard/premium/monster)
+#       * Draw Singles (flat 30u, prob >= 0.40)
+#       * Over Singles (8 / 16 / 24u, standard/premium/monster, prob >= 0.65)
 #       * FunBet Draw (dynamic stake, max 20% bankroll)
-#       * FunBet Over (dynamic stake, max 20% bankroll)
+#       * FunBet Over (dynamic stake, max 20% bankroll, min 3u/στήλη)
 #       * Kelly value bets (1X2 + Over 2.5) με ασφαλές Kelly
 # ============================================================
 
@@ -34,11 +34,12 @@ BANKROLL_KELLY = 600.0
 UNIT = 1.0
 
 MAX_FUN_EXPOSURE_PCT = 0.20      # 20% ανά κύκλο
-MAX_KELLY_PCT = 0.05             # σκληρό cap 5% ανά επιλογή
+MAX_KELLY_PCT = 0.05             # (reserve - δεν το χρησιμοποιούμε άμεσα)
 KELLY_FRACTION = 0.30            # κλασματικό Kelly 30%
 KELLY_MIN_EDGE = 0.15            # 15%+ value
 KELLY_MAX_ODDS = 8.0
 KELLY_MAX_PICKS = 6
+KELLY_MIN_PROB = 0.20            # ελάχιστη θεωρητική πιθανότητα (20%)
 
 # ------------------------------------------------------------
 # LEAGUE PRIORITIES
@@ -243,7 +244,7 @@ def classify_over_stake(over_prob, fair_over, league):
     if over_prob >= 0.67 and fair_over <= 1.65 and score >= 67:
         return "premium", 16.0
 
-    # Ό,τι περνάει το minimum threshold αλλά δεν είναι τόσο elite
+    # Standard: περνάει το minimum threshold αλλά δεν είναι τόσο elite
     return "standard", 8.0
 
 
@@ -256,7 +257,7 @@ def compute_system_stake(bankroll, columns, max_exposure_pct=MAX_FUN_EXPOSURE_PC
     """
     Υπολογίζει stake/στήλη ώστε:
       - total_stake <= max_exposure_pct * bankroll
-      - 1u <= stake/στήλη <= 5u
+      - min_unit <= stake/στήλη <= max_unit
     """
     if columns <= 0:
         return 0.0, 0.0
@@ -312,7 +313,7 @@ def generate_picks(fixtures, odds_index):
 
         # ---------------- DRAW SINGLES ----------------
         # Πιο σκληρό φιλτράρισμα: μόνο αν draw_prob >= 0.40
-        if draw_prob >= 0.38:
+        if draw_prob >= 0.40:
             draw_singles.append(
                 {
                     "match": f"{home} – {away}",
@@ -343,9 +344,13 @@ def generate_picks(fixtures, odds_index):
             )
 
         # ---------------- KELLY CANDIDATES ----------------
-        # Χρησιμοποιούμε fair + offered για value edge σε 1X2 και Over
+        # Value edges σε Draw & Over μόνο (για τώρα)
         def add_kelly_candidate(market_label, fair, offered, prob_model):
             if not offered:
+                return
+
+            # ελάχιστη θεωρητική πιθανότητα (κόβουμε πολύ λεπτά edges σε low-prob markets)
+            if prob_model < KELLY_MIN_PROB:
                 return
 
             # Edge ως ποσοστό σε σχέση με fair:
@@ -384,7 +389,6 @@ def generate_picks(fixtures, odds_index):
 
             # Υπολογισμός stake (σε units)
             raw_stake = BANKROLL_KELLY * f
-            # Μικρό minimum για να έχει νόημα
             stake = max(3.0, round(raw_stake, 1))
 
             kelly_candidates.append(
@@ -430,7 +434,7 @@ def generate_picks(fixtures, odds_index):
 def funbet_draw(draw_singles):
     """
     Χτίζει FunBet Draw σύστημα με βάση τα Draw Singles.
-    Top 7 by score, αλλά πάντα με prob >= 0.40 από τον βασικό φιλτράρισμα.
+    Top 7 by score, όλα ήδη έχουν prob >= 0.40 από το βασικό φιλτράρισμα.
     """
     picks = sorted(draw_singles, key=lambda x: x["score"], reverse=True)[:7]
     n = len(picks)
@@ -454,7 +458,8 @@ def funbet_draw(draw_singles):
         sys = "4/7"
         cols = 35
 
-    unit, total = compute_system_stake(BANKROLL_FUN_DRAW, cols)
+    # εδώ min_unit = 1.0 είναι οκ, το έχουμε συζητήσει
+    unit, total = compute_system_stake(BANKROLL_FUN_DRAW, cols, min_unit=1.0, max_unit=5.0)
 
     return {
         "system": sys,
@@ -468,6 +473,7 @@ def funbet_draw(draw_singles):
 def funbet_over(over_singles):
     """
     FunBet Over: βασίζεται στα Over Singles.
+    Θέλουμε πιο "γεμάτο" ποντάρισμα → min 3u/στήλη.
     """
     picks = sorted(over_singles, key=lambda x: x["score"], reverse=True)[:7]
     n = len(picks)
@@ -491,7 +497,8 @@ def funbet_over(over_singles):
         sys = "3/7"
         cols = 35
 
-    unit, total = compute_system_stake(BANKROLL_FUN_OVER, cols)
+    # εδώ min_unit = 3.0 όπως ζήτησες
+    unit, total = compute_system_stake(BANKROLL_FUN_OVER, cols, min_unit=3.0, max_unit=5.0)
 
     return {
         "system": sys,
