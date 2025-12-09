@@ -312,7 +312,7 @@ def generate_picks(fixtures, odds_index):
 
         # ---------------- DRAW SINGLES ----------------
         # Πιο σκληρό φιλτράρισμα: μόνο αν draw_prob >= 0.40
-        if draw_prob >= 0.40:
+        if draw_prob >= 0.38:
             draw_singles.append(
                 {
                     "match": f"{home} – {away}",
