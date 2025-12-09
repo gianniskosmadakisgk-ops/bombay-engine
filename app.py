@@ -101,7 +101,7 @@ def manual_run_thursday_v3():
 
 
 # ------------------------------------------------------
-# MANUAL RUN — Friday Shortlist v3 (παλιό)
+# MANUAL RUN — Friday Shortlist v3 (production)
 # ------------------------------------------------------
 @app.route("/run/friday-shortlist-v3", methods=["GET"])
 def manual_run_friday_shortlist_v3():
@@ -113,7 +113,7 @@ def manual_run_friday_shortlist_v3():
 
 
 # ------------------------------------------------------
-# MANUAL RUN — Friday Shortlist v4 (ΝΕΟ)
+# MANUAL RUN — Friday Shortlist v4 (παλιό / για δοκιμές)
 # ------------------------------------------------------
 @app.route("/run/friday-shortlist-v4", methods=["GET"])
 def manual_run_friday_shortlist_v4():
@@ -125,7 +125,20 @@ def manual_run_friday_shortlist_v4():
 
 
 # ------------------------------------------------------
-# DOWNLOAD ENDPOINTS (για manual upload στο Custom GPT)
+# MANUAL RUN — Tuesday Recap v2
+# ------------------------------------------------------
+@app.route("/run/tuesday-recap-v2", methods=["GET"])
+def manual_run_tuesday_recap_v2():
+    """
+    Τρέχει το Tuesday recap v2 script.
+    Διαβάζει logs/tuesday_results_input_v2.json
+    και γράφει logs/tuesday_recap_v2.json.
+    """
+    return run_script("src/analysis/tuesday_recap_v2.py")
+
+
+# ------------------------------------------------------
+# DOWNLOAD ENDPOINTS (για manual download / upload στο GPT)
 # ------------------------------------------------------
 @app.route("/download/thursday-report-v3", methods=["GET"])
 def download_thursday_report_v3():
