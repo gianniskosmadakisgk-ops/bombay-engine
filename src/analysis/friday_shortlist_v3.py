@@ -9,11 +9,11 @@ import requests
 #  - Διαβάζει το Thursday report v3
 #  - Φέρνει offered odds από TheOddsAPI
 #  - Χτίζει:
-#       * Draw Singles (flat 30u, prob >= 0.40)
-#       * Over Singles (8 / 16 / 24u, standard/premium/monster, prob >= 0.65)
+#       * Draw Singles (flat 30u)
+#       * Over Singles (8 / 16 / 24u, standard/premium/monster)
 #       * FunBet Draw (dynamic stake, max 20% bankroll)
-#       * FunBet Over (dynamic stake, max 20% bankroll, min 3u/στήλη)
-#       * Kelly value bets (1X2 + Over 2.5) με ασφαλές Kelly
+#       * FunBet Over (dynamic stake, max 20% bankroll)
+#       * Kelly value bets (Draw / Over 2.5) με ασφαλές Kelly
 # ============================================================
 
 THURSDAY_REPORT_PATH = "logs/thursday_report_v3.json"
@@ -33,13 +33,21 @@ BANKROLL_KELLY = 600.0
 
 UNIT = 1.0
 
-MAX_FUN_EXPOSURE_PCT = 0.20      # 20% ανά κύκλο
-MAX_KELLY_PCT = 0.05             # (reserve - δεν το χρησιμοποιούμε άμεσα)
-KELLY_FRACTION = 0.30            # κλασματικό Kelly 30%
-KELLY_MIN_EDGE = 0.15            # 15%+ value
-KELLY_MAX_ODDS = 8.0
-KELLY_MAX_PICKS = 6
-KELLY_MIN_PROB = 0.20            # ελάχιστη θεωρητική πιθανότητα (20%)
+# ------------------------------------------------------------
+# ΠΥΡΗΝΙΚΑ THRESHOLDS ENGINE
+# ------------------------------------------------------------
+DRAW_MIN_PROB = 0.38      # 38%+ για να θεωρηθεί draw pick
+OVER_MIN_PROB = 0.65      # 65%+ για over 2.5 pick
+
+MAX_FUN_EXPOSURE_PCT = 0.20      # 20% ανά κύκλο σε κάθε FunBet bankroll
+
+# Kelly control
+MAX_KELLY_PCT = 0.05             # ιστορικό hard cap (δεν το χρησιμοποιούμε άμεσα πλέον)
+KELLY_FRACTION = 0.30            # fractional Kelly 30%
+KELLY_MIN_EDGE = 0.15            # 15%+ value vs fair
+KELLY_MIN_PROB = 0.20            # τουλάχιστον 20% model prob για να παιχτεί οτιδήποτε ως Kelly
+KELLY_MAX_ODDS = 8.0             # δεν παίζουμε Kelly πάνω από 8.00
+KELLY_MAX_PICKS = 6              # το πολύ 6 Kelly picks ανά κύκλο
 
 # ------------------------------------------------------------
 # LEAGUE PRIORITIES
@@ -244,7 +252,7 @@ def classify_over_stake(over_prob, fair_over, league):
     if over_prob >= 0.67 and fair_over <= 1.65 and score >= 67:
         return "premium", 16.0
 
-    # Standard: περνάει το minimum threshold αλλά δεν είναι τόσο elite
+    # Standard: περνάει το minimum threshold αλλά όχι τόσο elite
     return "standard", 8.0
 
 
@@ -257,7 +265,7 @@ def compute_system_stake(bankroll, columns, max_exposure_pct=MAX_FUN_EXPOSURE_PC
     """
     Υπολογίζει stake/στήλη ώστε:
       - total_stake <= max_exposure_pct * bankroll
-      - min_unit <= stake/στήλη <= max_unit
+      - 1u <= stake/στήλη <= 5u
     """
     if columns <= 0:
         return 0.0, 0.0
@@ -286,10 +294,18 @@ def compute_system_stake(bankroll, columns, max_exposure_pct=MAX_FUN_EXPOSURE_PC
 # ------------------------------------------------------------
 
 def generate_picks(fixtures, odds_index):
+    """
+    1ο πέρασμα: βγάζουμε Draw / Over singles.
+    2ο πέρασμα: χτίζουμε Kelly ΜΟΝΟ πάνω σε fixtures που περνάνε τα βασικά thresholds,
+               χωρίς overlap με τα singles, και μόνο αν το μοντέλο δίνει >= 20% πιθανότητα.
+    """
     draw_singles = []
     over_singles = []
     kelly_candidates = []
 
+    # --------------------------
+    # 1ο πέρασμα: Singles
+    # --------------------------
     for f in fixtures:
         home = f["home"]
         away = f["away"]
@@ -311,9 +327,8 @@ def generate_picks(fixtures, odds_index):
         draw_score = compute_draw_score(draw_prob, league)
         over_score = compute_over_score(over_prob, league)
 
-        # ---------------- DRAW SINGLES ----------------
-        # Πιο σκληρό φιλτράρισμα: μόνο αν draw_prob >= 0.40
-        if draw_prob >= 0.40:
+        # ----- DRAW SINGLES -----
+        if draw_prob >= DRAW_MIN_PROB:
             draw_singles.append(
                 {
                     "match": f"{home} – {away}",
@@ -326,9 +341,8 @@ def generate_picks(fixtures, odds_index):
                 }
             )
 
-        # ---------------- OVER SINGLES ----------------
-        # Over probability >= 0.65, fair <= 1.75
-        if over_prob >= 0.65 and fair_over <= 1.75:
+        # ----- OVER SINGLES -----
+        if over_prob >= OVER_MIN_PROB and fair_over <= 1.75:
             tier, stake = classify_over_stake(over_prob, fair_over, league)
             over_singles.append(
                 {
@@ -343,86 +357,131 @@ def generate_picks(fixtures, odds_index):
                 }
             )
 
-        # ---------------- KELLY CANDIDATES ----------------
-        # Value edges σε Draw & Over μόνο (για τώρα)
-        def add_kelly_candidate(market_label, fair, offered, prob_model):
-            if not offered:
-                return
-
-            # ελάχιστη θεωρητική πιθανότητα (κόβουμε πολύ λεπτά edges σε low-prob markets)
-            if prob_model < KELLY_MIN_PROB:
-                return
-
-            # Edge ως ποσοστό σε σχέση με fair:
-            edge_ratio = (offered / fair) - 1.0
-            if edge_ratio < KELLY_MIN_EDGE:
-                return
-
-            if offered > KELLY_MAX_ODDS:
-                return
-
-            # Full Kelly fraction
-            p = prob_model
-            q = 1.0 - p
-            b = offered - 1.0
-
-            f_full = (b * p - q) / b
-            if f_full <= 0:
-                return
-
-            # Κλασματικό Kelly
-            f = f_full * KELLY_FRACTION
-
-            # Odds-dependent cap (όσο μεγαλύτερη απόδοση, τόσο μικρότερο cap)
-            if offered <= 2.5:
-                cap = 0.05  # έως 5% bankroll
-            elif offered <= 4.0:
-                cap = 0.03
-            elif offered <= 6.0:
-                cap = 0.02
-            else:
-                cap = 0.01
-
-            f = min(f, cap)
-            if f <= 0:
-                return
-
-            # Υπολογισμός stake (σε units)
-            raw_stake = BANKROLL_KELLY * f
-            stake = max(3.0, round(raw_stake, 1))
-
-            kelly_candidates.append(
-                {
-                    "match": f"{home} – {away}",
-                    "league": league,
-                    "market": market_label,
-                    "fair": fair,
-                    "odds": offered,
-                    "prob": round(prob_model, 3),
-                    "edge": round(edge_ratio * 100.0, 1),  # σε %
-                    "stake": stake,
-                    "f_fraction": round(f, 4),
-                }
-            )
-
-        # Draw Kelly (αν έχουμε offered)
-        if offered_x:
-            add_kelly_candidate("Draw", fair_x, offered_x, draw_prob)
-
-        # Over 2.5 Kelly
-        if offered_over:
-            add_kelly_candidate("Over 2.5", fair_over, offered_over, over_prob)
-
-    # --------------------------------------------------------
-    # Τελική ταξινόμηση / caps
-    # --------------------------------------------------------
+    # Κρατάμε τα 10 καλύτερα
     draw_singles = sorted(draw_singles, key=lambda d: d["score"], reverse=True)[:10]
     over_singles = sorted(over_singles, key=lambda o: o["score"], reverse=True)[:10]
 
-    # Kelly: κρατάμε τα 6 καλύτερα ως προς edge
-    kelly_candidates = sorted(kelly_candidates, key=lambda k: k["edge"], reverse=True)[
-        :KELLY_MAX_PICKS
-    ]
+    # Markets που ΔΕΝ επιτρέπονται για Kelly (για να μην κάνουμε overlap με singles)
+    blocked_markets = set()
+    for d in draw_singles:
+        blocked_markets.add((d["match"], "Draw"))
+    for o in over_singles:
+        blocked_markets.add((o["match"], "Over 2.5"))
+
+    # --------------------------
+    # 2ο πέρασμα: Kelly
+    # --------------------------
+    def add_kelly_candidate(match_label, league, market_label,
+                            fair, offered, prob_model, engine_min_prob):
+        if not offered:
+            return
+
+        # 1) global Kelly min prob (20%) + όριο μηχανής (π.χ. 0.38 / 0.65)
+        effective_min_prob = max(KELLY_MIN_PROB, engine_min_prob)
+        if prob_model < effective_min_prob:
+            return
+
+        # 2) μην ακουμπάς markets που ήδη τα παίζουμε σαν singles
+        if (match_label, market_label) in blocked_markets:
+            return
+
+        # 3) value edge σε σχέση με fair odds
+        edge_ratio = (offered / fair) - 1.0
+        if edge_ratio < KELLY_MIN_EDGE:
+            return
+
+        if offered > KELLY_MAX_ODDS:
+            return
+
+        p = prob_model
+        q = 1.0 - p
+        b = offered - 1.0
+
+        f_full = (b * p - q) / b
+        if f_full <= 0:
+            return
+
+        # fractional Kelly
+        f = f_full * KELLY_FRACTION
+
+        # odds-dependent cap (όσο μεγαλύτερη απόδοση, τόσο μικρότερο cap)
+        if offered <= 2.5:
+            cap = 0.05   # έως 5% bankroll
+        elif offered <= 4.0:
+            cap = 0.03
+        elif offered <= 6.0:
+            cap = 0.02
+        else:
+            cap = 0.01
+
+        f = min(f, cap)
+        if f <= 0:
+            return
+
+        raw_stake = BANKROLL_KELLY * f
+        stake = max(3.0, round(raw_stake, 1))
+
+        kelly_candidates.append(
+            {
+                "match": match_label,
+                "league": league,
+                "market": market_label,
+                "fair": fair,
+                "odds": offered,
+                "prob": round(prob_model, 3),
+                "edge": round(edge_ratio * 100.0, 1),
+                "stake": stake,
+                "f_fraction": round(f, 4),
+            }
+        )
+
+    # Δεύτερο loop μόνο για Kelly, δεμένο πάνω στα thresholds μας
+    for f in fixtures:
+        home = f["home"]
+        away = f["away"]
+        league = f["league"]
+
+        fair_x = f["fair_x"]
+        fair_over = f["fair_over_2_5"]
+
+        draw_prob = f["draw_prob"]
+        over_prob = f["over_2_5_prob"]
+
+        h = normalize_team(home)
+        a = normalize_team(away)
+        odds = odds_index.get((h, a), {})
+
+        offered_x = odds.get("draw") or None
+        offered_over = odds.get("over_2_5") or None
+
+        match_label = f"{home} – {away}"
+
+        # Kelly Draw (μόνο αν περνάει και το draw engine threshold)
+        add_kelly_candidate(
+            match_label,
+            league,
+            "Draw",
+            fair_x,
+            offered_x,
+            draw_prob,
+            engine_min_prob=DRAW_MIN_PROB,
+        )
+
+        # Kelly Over 2.5 (μόνο αν περνάει και το over engine threshold)
+        add_kelly_candidate(
+            match_label,
+            league,
+            "Over 2.5",
+            fair_over,
+            offered_over,
+            over_prob,
+            engine_min_prob=OVER_MIN_PROB,
+        )
+
+    # Top 6 Kelly based on edge
+    kelly_candidates = sorted(
+        kelly_candidates, key=lambda k: k["edge"], reverse=True
+    )[:KELLY_MAX_PICKS]
 
     return draw_singles, over_singles, kelly_candidates
 
@@ -434,7 +493,7 @@ def generate_picks(fixtures, odds_index):
 def funbet_draw(draw_singles):
     """
     Χτίζει FunBet Draw σύστημα με βάση τα Draw Singles.
-    Top 7 by score, όλα ήδη έχουν prob >= 0.40 από το βασικό φιλτράρισμα.
+    Top 7 by score, πάντα μετά από φιλτράρισμα prob >= DRAW_MIN_PROB.
     """
     picks = sorted(draw_singles, key=lambda x: x["score"], reverse=True)[:7]
     n = len(picks)
@@ -458,8 +517,7 @@ def funbet_draw(draw_singles):
         sys = "4/7"
         cols = 35
 
-    # εδώ min_unit = 1.0 είναι οκ, το έχουμε συζητήσει
-    unit, total = compute_system_stake(BANKROLL_FUN_DRAW, cols, min_unit=1.0, max_unit=5.0)
+    unit, total = compute_system_stake(BANKROLL_FUN_DRAW, cols)
 
     return {
         "system": sys,
@@ -473,7 +531,6 @@ def funbet_draw(draw_singles):
 def funbet_over(over_singles):
     """
     FunBet Over: βασίζεται στα Over Singles.
-    Θέλουμε πιο "γεμάτο" ποντάρισμα → min 3u/στήλη.
     """
     picks = sorted(over_singles, key=lambda x: x["score"], reverse=True)[:7]
     n = len(picks)
@@ -497,8 +554,7 @@ def funbet_over(over_singles):
         sys = "3/7"
         cols = 35
 
-    # εδώ min_unit = 3.0 όπως ζήτησες
-    unit, total = compute_system_stake(BANKROLL_FUN_OVER, cols, min_unit=3.0, max_unit=5.0)
+    unit, total = compute_system_stake(BANKROLL_FUN_OVER, cols)
 
     return {
         "system": sys,
@@ -514,7 +570,7 @@ def funbet_over(over_singles):
 # ------------------------------------------------------------
 
 def main():
-    log("🚀 Running Friday Shortlist v3 (final units version)")
+    log("🚀 Running Friday Shortlist v3 (final units + safe Kelly version)")
 
     fixtures, th_report = load_thursday_fixtures()
     log(f"Loaded {len(fixtures)} fixtures from {THURSDAY_REPORT_PATH}")
