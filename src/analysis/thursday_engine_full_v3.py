@@ -1,12 +1,11 @@
-import os
 import json
 import requests
 import datetime
 from dateutil import parser
 
-API_FOOTBALL_KEY = os.getenv("API_FOOTBALL_KEY")
+API_FOOTBALL_KEY = "<YOUR_API_KEY>"
 API_FOOTBALL_BASE = "https://v3.football.api-sports.io"
-ODDS_API_KEY = os.getenv("ODDS_API_KEY")
+ODDS_API_KEY = "<YOUR_ODDS_API_KEY>"
 ODDS_BASE_URL = "https://api.the-odds-api.com/v4/sports"
 
 HEADERS_FOOTBALL = {"x-apisports-key": API_FOOTBALL_KEY}
@@ -24,7 +23,7 @@ LEAGUES = {
     "Liga Portugal 1": 94,
 }
 
-# 3 ημέρες ακριβώς (72 ώρες)
+# 3 ημέρες (για info)
 WINDOW_HOURS = 72
 
 
@@ -49,21 +48,23 @@ def implied(p):
     return 1.0 / p if p and p > 0 else None
 
 
-# ------------------------- HELPERS: FIXTURES -------------------------
-def fetch_fixtures(league_id):
-    url = f"{API_FOOTBALL_BASE}/fixtures?league={league_id}&season=2025"
+# ------------------------- FIXTURES -------------------------
+def fetch_fixtures(league_id, date_from, date_to):
+    """
+    Τραβάει fixtures ΜΟΝΟ για τις επόμενες 3 μέρες (from/to),
+    άρα ΔΕΝ ξαναφιλτράρουμε με ώρες μετά.
+    """
+    url = (
+        f"{API_FOOTBALL_BASE}/fixtures?"
+        f"league={league_id}&season=2025&from={date_from}&to={date_to}"
+    )
     r = requests.get(url, headers=HEADERS_FOOTBALL).json()
     if not r.get("response"):
         return []
+
     out = []
-    now = datetime.datetime.utcnow()
     for fx in r["response"]:
         if fx["fixture"]["status"]["short"] != "NS":
-            continue
-
-        dt = parser.isoparse(fx["fixture"]["date"])
-        diff = (dt - now).total_seconds() / 3600.0
-        if not (0 <= diff <= WINDOW_HOURS):
             continue
 
         home_name = fx["teams"]["home"]["name"]
@@ -81,7 +82,7 @@ def fetch_fixtures(league_id):
     return out
 
 
-# ------------------------- HELPERS: ODDS -------------------------
+# ------------------------- ODDS -------------------------
 def fetch_odds_for_league(league_name):
     """
     Τραβάει odds *μία φορά* από TheOddsAPI για τη συγκεκριμένη λίγκα.
@@ -133,7 +134,7 @@ def fetch_odds_for_league(league_name):
 
 def build_odds_index(odds_data):
     """
-    index['Home – Away'] = {...}
+    index["Home – Away"] = {... καλύτερες αποδόσεις ...}
     """
     index = {}
     for ev in odds_data:
@@ -179,22 +180,25 @@ def build_odds_index(odds_data):
 
 
 # ------------------------- BUILD FIXTURE BLOCKS -------------------------
-def build_fixture_blocks():
+def build_fixture_blocks(date_from, date_to):
     fixtures_out = []
 
+    # 1) Μαζεύουμε fixtures από όλες τις λίγκες
     all_fixtures = []
     for lg_name, lg_id in LEAGUES.items():
-        fx_list = fetch_fixtures(lg_id)
+        fx_list = fetch_fixtures(lg_id, date_from, date_to)
         for f in fx_list:
             f["league_name"] = lg_name
         all_fixtures.extend(fx_list)
 
+    # 2) Odds: μία φορά ανά λίγκα -> index Home–Away
     odds_index = {}
     for lg_name in LEAGUES.keys():
         odds_data = fetch_odds_for_league(lg_name)
         league_index = build_odds_index(odds_data)
         odds_index.update(league_index)
 
+    # 3) Χτίζουμε το τελικό block ανά fixture
     for fx in all_fixtures:
         home = fx["home"]
         away = fx["away"]
@@ -256,15 +260,22 @@ def build_fixture_blocks():
     return fixtures_out
 
 
+# ------------------------- MAIN -------------------------
 def main():
-    fixtures = build_fixture_blocks()
+    today = datetime.datetime.utcnow().date()
+    date_from = today.isoformat()
+    date_to = (today + datetime.timedelta(days=3)).isoformat()
+
+    fixtures = build_fixture_blocks(date_from, date_to)
+
     out = {
         "generated_at": datetime.datetime.utcnow().isoformat(),
-        "window": {"hours": WINDOW_HOURS},
+        "window": {"from": date_from, "to": date_to, "hours": WINDOW_HOURS},
         "fixtures_total": len(fixtures),
         "fixtures": fixtures,
     }
 
+    import os
     os.makedirs("logs", exist_ok=True)
     with open("logs/thursday_report_v3.json", "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, indent=2)
