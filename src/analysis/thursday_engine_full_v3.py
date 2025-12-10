@@ -5,7 +5,7 @@ import datetime
 from dateutil import parser
 
 # ============================================================
-#  THURSDAY ENGINE v3
+#  THURSDAY ENGINE v3 (refined)
 #  - Τραβάει fixtures από API-FOOTBALL
 #  - Υπολογίζει dummy fair odds / probabilities
 #  - (ΠΡΟΣΩΡΙΝΑ) ΔΕΝ χτυπάει TheOddsAPI για odds,
@@ -24,7 +24,7 @@ FOOTBALL_SEASON = os.getenv("FOOTBALL_SEASON", "2025")
 
 HEADERS_FOOTBALL = {"x-apisports-key": API_FOOTBALL_KEY}
 
-# Αν θες αργότερα να ξανανοίξουμε TheOddsAPI, βάζεις True εδώ.
+# Αν θες να αρχίσει να χτυπάει TheOddsAPI, κάντο True.
 USE_ODDS_API = False
 
 # ------------------------- LEAGUES -------------------------
@@ -44,7 +44,6 @@ LEAGUES = {
 WINDOW_HOURS = 72
 
 # ------------------------- LEAGUE → SPORT KEY (TheOddsAPI) -------------------------
-# (Δεν χρησιμοποιείται όσο USE_ODDS_API = False, αλλά το κρατάμε έτοιμο.)
 LEAGUE_TO_SPORT = {
     "Premier League": "soccer_epl",
     "Championship": "soccer_efl_champ",
@@ -76,6 +75,8 @@ def dummy_fair_model(match_key: str):
     Επιστρέφει probabilities που χρησιμοποιούνται για:
       - fair odds
       - draw_prob / over_prob
+
+    Προς το παρόν ΙΔΙΟ για όλα τα ματς.
     """
     home_prob = 0.38
     draw_prob = 0.33
@@ -104,6 +105,7 @@ def fetch_fixtures(league_id, league_name):
         return []
 
     url = f"{API_FOOTBALL_BASE}/fixtures?league={league_id}&season={FOOTBALL_SEASON}"
+
     try:
         r = requests.get(url, headers=HEADERS_FOOTBALL, timeout=20).json()
     except Exception as e:
@@ -115,13 +117,19 @@ def fetch_fixtures(league_id, league_name):
         return []
 
     out = []
-    now = datetime.datetime.utcnow()
+    # AWARE UTC datetime
+    now = datetime.datetime.now(datetime.timezone.utc)
+
     for fx in r["response"]:
+        # Θέλουμε μόνο μη-ξεκινήμενα ματς
         if fx["fixture"]["status"]["short"] != "NS":
             continue
 
-        dt = parser.isoparse(fx["fixture"]["date"])
+        # Ημερομηνία fixture (ISO με timezone)
+        dt = parser.isoparse(fx["fixture"]["date"]).astimezone(datetime.timezone.utc)
         diff = (dt - now).total_seconds() / 3600.0
+
+        # Φίλτρο στο παράθυρο 0–WINDOW_HOURS
         if not (0 <= diff <= WINDOW_HOURS):
             continue
 
@@ -143,7 +151,7 @@ def fetch_fixtures(league_id, league_name):
     return out
 
 
-# ------------------------- HELPERS: ODDS (ΠΡΟΣ ΤΟ ΠΑΡΟΝ OFF) -------------------------
+# ------------------------- HELPERS: ODDS (TheOddsAPI) -------------------------
 def fetch_odds_for_league(league_name):
     """
     Αν USE_ODDS_API = True, τραβάει odds *μία φορά* από TheOddsAPI
@@ -186,6 +194,9 @@ def build_odds_index(odds_data):
           'over': best_over_2_5,
           'under': best_under_2_5
       }
+
+    ΠΡΟΣΟΧΗ: Τα ονόματα ομάδων μπορεί να μην ταιριάζουν 100% με API-FOOTBALL.
+    Αργότερα μπορούμε να βάλουμε normalisation / mapping.
     """
     index = {}
     for ev in odds_data:
@@ -237,6 +248,10 @@ def build_fixture_blocks():
     print(f"Using FOOTBALL_SEASON={FOOTBALL_SEASON}", flush=True)
     print(f"Window: next {WINDOW_HOURS} hours", flush=True)
 
+    if not API_FOOTBALL_KEY:
+        print("❌ FOOTBALL_API_KEY is missing. Aborting fixture fetch.", flush=True)
+        return []
+
     # 1) Μαζεύουμε fixtures από όλες τις λίγκες
     all_fixtures = []
     for lg_name, lg_id in LEAGUES.items():
@@ -245,13 +260,14 @@ def build_fixture_blocks():
 
     print(f"Total raw fixtures collected: {len(all_fixtures)}", flush=True)
 
-    # 2) Odds index (προς το παρόν OFF)
+    # 2) Odds index
     if USE_ODDS_API:
         odds_index = {}
         for lg_name in LEAGUES.keys():
             odds_data = fetch_odds_for_league(lg_name)
             league_index = build_odds_index(odds_data)
             odds_index.update(league_index)
+        print(f"Odds index built for {len(odds_index)} matches", flush=True)
     else:
         odds_index = {}
         print("⚠️ USE_ODDS_API = False → δεν τραβάμε odds από TheOddsAPI.", flush=True)
@@ -265,7 +281,7 @@ def build_fixture_blocks():
 
         match_key = f"{home} – {away}"
 
-        # Μοντέλο fair probabilities
+        # Μοντέλο fair probabilities (dummy προς το παρόν)
         probs = dummy_fair_model(match_key)
         p_home = probs["home_prob"]
         p_draw = probs["draw_prob"]
@@ -286,7 +302,7 @@ def build_fixture_blocks():
         off_over = offered.get("over")
         off_under = offered.get("under")
 
-        dt = parser.isoparse(fx["date_raw"])
+        dt = parser.isoparse(fx["date_raw"]).astimezone(datetime.timezone.utc)
         date_str = dt.date().isoformat()
         time_str = dt.strftime("%H:%M")
 
@@ -322,7 +338,13 @@ def build_fixture_blocks():
 
 def main():
     fixtures = build_fixture_blocks()
-    now = datetime.datetime.utcnow()
+
+    # Αν απέτυχαν όλα (π.χ. δεν υπάρχει API key), μην γράψεις άδειο αρχείο
+    if fixtures is None:
+        print("No fixtures generated. Skipping report write.", flush=True)
+        return
+
+    now = datetime.datetime.now(datetime.timezone.utc)
     to_dt = now + datetime.timedelta(hours=WINDOW_HOURS)
 
     out = {
