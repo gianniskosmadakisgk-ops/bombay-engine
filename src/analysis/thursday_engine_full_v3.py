@@ -4,22 +4,28 @@ import requests
 import datetime
 from dateutil import parser
 
-# =========================
-#  API KEYS από ENV
-# =========================
-API_FOOTBALL_KEY = os.getenv("API_FOOTBALL_KEY")
-ODDS_API_KEY = os.getenv("ODDS_API_KEY")
+# ============================================================
+#  THURSDAY ENGINE v3
+#  - Τραβάει fixtures από API-FOOTBALL
+#  - Υπολογίζει dummy fair odds / probabilities
+#  - (ΠΡΟΣΩΡΙΝΑ) ΔΕΝ χτυπάει TheOddsAPI για odds,
+#    για να μην καίμε credits όσο κάνουμε debug.
+#  - Γράφει logs/thursday_report_v3.json
+# ============================================================
 
+# ------------------------- API KEYS -------------------------
+API_FOOTBALL_KEY = os.getenv("FOOTBALL_API_KEY")
 API_FOOTBALL_BASE = "https://v3.football.api-sports.io"
+
+ODDS_API_KEY = os.getenv("ODDS_API_KEY")
 ODDS_BASE_URL = "https://api.the-odds-api.com/v4/sports"
 
-HEADERS_FOOTBALL = {"x-apisports-key": API_FOOTBALL_KEY} if API_FOOTBALL_KEY else {}
+FOOTBALL_SEASON = os.getenv("FOOTBALL_SEASON", "2025")
 
-if not API_FOOTBALL_KEY:
-    print("⚠️ Missing API_FOOTBALL_KEY – NO fixtures will be fetched!", flush=True)
+HEADERS_FOOTBALL = {"x-apisports-key": API_FOOTBALL_KEY}
 
-if not ODDS_API_KEY:
-    print("⚠️ Missing ODDS_API_KEY – Thursday will run WITHOUT offered odds.", flush=True)
+# Αν θες αργότερα να ξανανοίξουμε TheOddsAPI, βάζεις True εδώ.
+USE_ODDS_API = False
 
 # ------------------------- LEAGUES -------------------------
 LEAGUES = {
@@ -37,10 +43,40 @@ LEAGUES = {
 # 3 ημέρες ακριβώς (72 ώρες)
 WINDOW_HOURS = 72
 
+# ------------------------- LEAGUE → SPORT KEY (TheOddsAPI) -------------------------
+# (Δεν χρησιμοποιείται όσο USE_ODDS_API = False, αλλά το κρατάμε έτοιμο.)
+LEAGUE_TO_SPORT = {
+    "Premier League": "soccer_epl",
+    "Championship": "soccer_efl_champ",
+    "La Liga": "soccer_spain_la_liga",
+    "La Liga 2": "soccer_spain_segunda_division",
+    "Serie A": "soccer_italy_serie_a",
+    "Serie B": "soccer_italy_serie_b",
+    "Bundesliga": "soccer_germany_bundesliga",
+    "Bundesliga 2": "soccer_germany_bundesliga2",
+    "Ligue 1": "soccer_france_ligue_one",
+    "Ligue 2": "soccer_france_ligue_two",
+    "Liga Portugal 1": "soccer_portugal_primeira_liga",
+    "Swiss Super League": "soccer_switzerland_superleague",
+    "Eredivisie": "soccer_netherlands_eredivisie",
+    "Jupiler Pro League": "soccer_belgium_first_div",
+    "Superliga": "soccer_denmark_superliga",
+    "Allsvenskan": "soccer_sweden_allsvenskan",
+    "Eliteserien": "soccer_norway_eliteserien",
+    "Argentina Primera": "soccer_argentina_primera_division",
+    "Brazil Serie A": "soccer_brazil_serie_a",
+}
+
 
 # ------------------------- FAIR MODEL (dummy) -------------------------
 def dummy_fair_model(match_key: str):
-    """Προσωρινό μοντέλο – placeholder μέχρι να μπει το κανονικό Poisson."""
+    """
+    PROVISIONAL μοντέλο – placeholder μέχρι να κουμπώσει το κανονικό Poisson.
+
+    Επιστρέφει probabilities που χρησιμοποιούνται για:
+      - fair odds
+      - draw_prob / over_prob
+    """
     home_prob = 0.38
     draw_prob = 0.33
     away_prob = 0.29
@@ -58,18 +94,24 @@ def implied(p):
 
 
 # ------------------------- HELPERS: FIXTURES -------------------------
-def fetch_fixtures(league_id):
+def fetch_fixtures(league_id, league_name):
+    """
+    Τραβάει fixtures από API-FOOTBALL για συγκεκριμένη λίγκα
+    μέσα στο παράθυρο των 72 ωρών.
+    """
     if not API_FOOTBALL_KEY:
+        print("⚠️ Missing FOOTBALL_API_KEY – NO fixtures will be fetched!", flush=True)
         return []
 
-    url = f"{API_FOOTBALL_BASE}/fixtures?league={league_id}&season=2025"
+    url = f"{API_FOOTBALL_BASE}/fixtures?league={league_id}&season={FOOTBALL_SEASON}"
     try:
         r = requests.get(url, headers=HEADERS_FOOTBALL, timeout=20).json()
     except Exception as e:
-        print(f"⚠️ Error fetching fixtures for league {league_id}: {e}", flush=True)
+        print(f"⚠️ Error fetching fixtures for {league_name}: {e}", flush=True)
         return []
 
     if not r.get("response"):
+        print(f"⚠️ No fixtures response for league {league_name}", flush=True)
         return []
 
     out = []
@@ -90,46 +132,29 @@ def fetch_fixtures(league_id):
             {
                 "id": fx["fixture"]["id"],
                 "league_id": league_id,
+                "league_name": league_name,
                 "home": home_name,
                 "away": away_name,
                 "date_raw": fx["fixture"]["date"],
-                "league_name": fx["league"]["name"],
             }
         )
+
+    print(f"→ {league_name}: {len(out)} fixtures within window", flush=True)
     return out
 
 
-# ------------------------- HELPERS: ODDS -------------------------
+# ------------------------- HELPERS: ODDS (ΠΡΟΣ ΤΟ ΠΑΡΟΝ OFF) -------------------------
 def fetch_odds_for_league(league_name):
-    """Τραβάει odds *μία φορά* από TheOddsAPI για τη συγκεκριμένη λίγκα."""
-    # Αν δεν έχουμε key, δεν χτυπάμε καν το API
-    if not ODDS_API_KEY:
+    """
+    Αν USE_ODDS_API = True, τραβάει odds *μία φορά* από TheOddsAPI
+    για τη συγκεκριμένη λίγκα.
+    """
+    sport_key = LEAGUE_TO_SPORT.get(league_name)
+    if not sport_key:
         return []
 
-    league_to_sport = {
-        "Premier League": "soccer_epl",
-        "Championship": "soccer_efl_champ",
-        "La Liga": "soccer_spain_la_liga",
-        "La Liga 2": "soccer_spain_segunda_division",
-        "Serie A": "soccer_italy_serie_a",
-        "Serie B": "soccer_italy_serie_b",
-        "Bundesliga": "soccer_germany_bundesliga",
-        "Bundesliga 2": "soccer_germany_bundesliga2",
-        "Ligue 1": "soccer_france_ligue_one",
-        "Ligue 2": "soccer_france_ligue_two",
-        "Liga Portugal 1": "soccer_portugal_primeira_liga",
-        "Swiss Super League": "soccer_switzerland_superleague",
-        "Eredivisie": "soccer_netherlands_eredivisie",
-        "Jupiler Pro League": "soccer_belgium_first_div",
-        "Superliga": "soccer_denmark_superliga",
-        "Allsvenskan": "soccer_sweden_allsvenskan",
-        "Eliteserien": "soccer_norway_eliteserien",
-        "Argentina Primera": "soccer_argentina_primera_division",
-        "Brazil Serie A": "soccer_brazil_serie_a",
-    }
-
-    sport_key = league_to_sport.get(league_name)
-    if not sport_key:
+    if not ODDS_API_KEY:
+        print("⚠️ Missing ODDS_API_KEY – skipping odds", flush=True)
         return []
 
     params = {
@@ -152,6 +177,16 @@ def fetch_odds_for_league(league_name):
 
 
 def build_odds_index(odds_data):
+    """
+    Φτιάχνει index:
+      index["Home – Away"] = {
+          'home': best_home,
+          'draw': best_draw,
+          'away': best_away,
+          'over': best_over_2_5,
+          'under': best_under_2_5
+      }
+    """
     index = {}
     for ev in odds_data:
         home_raw = ev.get("home_team", "")
@@ -199,18 +234,29 @@ def build_odds_index(odds_data):
 def build_fixture_blocks():
     fixtures_out = []
 
+    print(f"Using FOOTBALL_SEASON={FOOTBALL_SEASON}", flush=True)
+    print(f"Window: next {WINDOW_HOURS} hours", flush=True)
+
+    # 1) Μαζεύουμε fixtures από όλες τις λίγκες
     all_fixtures = []
     for lg_name, lg_id in LEAGUES.items():
-        fx_list = fetch_fixtures(lg_id)
+        fx_list = fetch_fixtures(lg_id, lg_name)
         all_fixtures.extend(fx_list)
 
-    # Odds: μία φορά ανά λίγκα -> index home–away
-    odds_index = {}
-    for lg_name in LEAGUES.keys():
-        odds_data = fetch_odds_for_league(lg_name)
-        league_index = build_odds_index(odds_data)
-        odds_index.update(league_index)
+    print(f"Total raw fixtures collected: {len(all_fixtures)}", flush=True)
 
+    # 2) Odds index (προς το παρόν OFF)
+    if USE_ODDS_API:
+        odds_index = {}
+        for lg_name in LEAGUES.keys():
+            odds_data = fetch_odds_for_league(lg_name)
+            league_index = build_odds_index(odds_data)
+            odds_index.update(league_index)
+    else:
+        odds_index = {}
+        print("⚠️ USE_ODDS_API = False → δεν τραβάμε odds από TheOddsAPI.", flush=True)
+
+    # 3) Δέσιμο fixtures + μοντέλο + odds
     for fx in all_fixtures:
         home = fx["home"]
         away = fx["away"]
@@ -219,6 +265,7 @@ def build_fixture_blocks():
 
         match_key = f"{home} – {away}"
 
+        # Μοντέλο fair probabilities
         probs = dummy_fair_model(match_key)
         p_home = probs["home_prob"]
         p_draw = probs["draw_prob"]
@@ -269,14 +316,22 @@ def build_fixture_blocks():
             }
         )
 
+    print(f"Thursday fixtures_out: {len(fixtures_out)}", flush=True)
     return fixtures_out
 
 
 def main():
     fixtures = build_fixture_blocks()
+    now = datetime.datetime.utcnow()
+    to_dt = now + datetime.timedelta(hours=WINDOW_HOURS)
+
     out = {
-        "generated_at": datetime.datetime.utcnow().isoformat(),
-        "window": {"hours": WINDOW_HOURS},
+        "generated_at": now.isoformat(),
+        "window": {
+            "from": now.date().isoformat(),
+            "to": to_dt.date().isoformat(),
+            "hours": WINDOW_HOURS,
+        },
         "fixtures_total": len(fixtures),
         "fixtures": fixtures,
     }
