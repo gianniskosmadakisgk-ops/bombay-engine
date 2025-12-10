@@ -1,14 +1,25 @@
+import os
 import json
 import requests
 import datetime
 from dateutil import parser
 
-API_FOOTBALL_KEY = "<YOUR_API_KEY>"
+# =========================
+#  API KEYS από ENV
+# =========================
+API_FOOTBALL_KEY = os.getenv("API_FOOTBALL_KEY")
+ODDS_API_KEY = os.getenv("ODDS_API_KEY")
+
 API_FOOTBALL_BASE = "https://v3.football.api-sports.io"
-ODDS_API_KEY = "<YOUR_ODDS_API_KEY>"
 ODDS_BASE_URL = "https://api.the-odds-api.com/v4/sports"
 
-HEADERS_FOOTBALL = {"x-apisports-key": API_FOOTBALL_KEY}
+HEADERS_FOOTBALL = {"x-apisports-key": API_FOOTBALL_KEY} if API_FOOTBALL_KEY else {}
+
+if not API_FOOTBALL_KEY:
+    print("⚠️ Missing API_FOOTBALL_KEY – NO fixtures will be fetched!", flush=True)
+
+if not ODDS_API_KEY:
+    print("⚠️ Missing ODDS_API_KEY – Thursday will run WITHOUT offered odds.", flush=True)
 
 # ------------------------- LEAGUES -------------------------
 LEAGUES = {
@@ -23,15 +34,13 @@ LEAGUES = {
     "Liga Portugal 1": 94,
 }
 
-# 3 ημέρες (για info)
+# 3 ημέρες ακριβώς (72 ώρες)
 WINDOW_HOURS = 72
 
 
 # ------------------------- FAIR MODEL (dummy) -------------------------
 def dummy_fair_model(match_key: str):
-    """
-    PROVISIONAL μοντέλο – placeholder μέχρι να κουμπώσει το κανονικό Poisson.
-    """
+    """Προσωρινό μοντέλο – placeholder μέχρι να μπει το κανονικό Poisson."""
     home_prob = 0.38
     draw_prob = 0.33
     away_prob = 0.29
@@ -48,23 +57,30 @@ def implied(p):
     return 1.0 / p if p and p > 0 else None
 
 
-# ------------------------- FIXTURES -------------------------
-def fetch_fixtures(league_id, date_from, date_to):
-    """
-    Τραβάει fixtures ΜΟΝΟ για τις επόμενες 3 μέρες (from/to),
-    άρα ΔΕΝ ξαναφιλτράρουμε με ώρες μετά.
-    """
-    url = (
-        f"{API_FOOTBALL_BASE}/fixtures?"
-        f"league={league_id}&season=2025&from={date_from}&to={date_to}"
-    )
-    r = requests.get(url, headers=HEADERS_FOOTBALL).json()
+# ------------------------- HELPERS: FIXTURES -------------------------
+def fetch_fixtures(league_id):
+    if not API_FOOTBALL_KEY:
+        return []
+
+    url = f"{API_FOOTBALL_BASE}/fixtures?league={league_id}&season=2025"
+    try:
+        r = requests.get(url, headers=HEADERS_FOOTBALL, timeout=20).json()
+    except Exception as e:
+        print(f"⚠️ Error fetching fixtures for league {league_id}: {e}", flush=True)
+        return []
+
     if not r.get("response"):
         return []
 
     out = []
+    now = datetime.datetime.utcnow()
     for fx in r["response"]:
         if fx["fixture"]["status"]["short"] != "NS":
+            continue
+
+        dt = parser.isoparse(fx["fixture"]["date"])
+        diff = (dt - now).total_seconds() / 3600.0
+        if not (0 <= diff <= WINDOW_HOURS):
             continue
 
         home_name = fx["teams"]["home"]["name"]
@@ -77,16 +93,19 @@ def fetch_fixtures(league_id, date_from, date_to):
                 "home": home_name,
                 "away": away_name,
                 "date_raw": fx["fixture"]["date"],
+                "league_name": fx["league"]["name"],
             }
         )
     return out
 
 
-# ------------------------- ODDS -------------------------
+# ------------------------- HELPERS: ODDS -------------------------
 def fetch_odds_for_league(league_name):
-    """
-    Τραβάει odds *μία φορά* από TheOddsAPI για τη συγκεκριμένη λίγκα.
-    """
+    """Τραβάει odds *μία φορά* από TheOddsAPI για τη συγκεκριμένη λίγκα."""
+    # Αν δεν έχουμε key, δεν χτυπάμε καν το API
+    if not ODDS_API_KEY:
+        return []
+
     league_to_sport = {
         "Premier League": "soccer_epl",
         "Championship": "soccer_efl_champ",
@@ -110,7 +129,7 @@ def fetch_odds_for_league(league_name):
     }
 
     sport_key = league_to_sport.get(league_name)
-    if not sport_key or not ODDS_API_KEY:
+    if not sport_key:
         return []
 
     params = {
@@ -133,9 +152,6 @@ def fetch_odds_for_league(league_name):
 
 
 def build_odds_index(odds_data):
-    """
-    index["Home – Away"] = {... καλύτερες αποδόσεις ...}
-    """
     index = {}
     for ev in odds_data:
         home_raw = ev.get("home_team", "")
@@ -180,25 +196,21 @@ def build_odds_index(odds_data):
 
 
 # ------------------------- BUILD FIXTURE BLOCKS -------------------------
-def build_fixture_blocks(date_from, date_to):
+def build_fixture_blocks():
     fixtures_out = []
 
-    # 1) Μαζεύουμε fixtures από όλες τις λίγκες
     all_fixtures = []
     for lg_name, lg_id in LEAGUES.items():
-        fx_list = fetch_fixtures(lg_id, date_from, date_to)
-        for f in fx_list:
-            f["league_name"] = lg_name
+        fx_list = fetch_fixtures(lg_id)
         all_fixtures.extend(fx_list)
 
-    # 2) Odds: μία φορά ανά λίγκα -> index Home–Away
+    # Odds: μία φορά ανά λίγκα -> index home–away
     odds_index = {}
     for lg_name in LEAGUES.keys():
         odds_data = fetch_odds_for_league(lg_name)
         league_index = build_odds_index(odds_data)
         odds_index.update(league_index)
 
-    # 3) Χτίζουμε το τελικό block ανά fixture
     for fx in all_fixtures:
         home = fx["home"]
         away = fx["away"]
@@ -260,27 +272,20 @@ def build_fixture_blocks(date_from, date_to):
     return fixtures_out
 
 
-# ------------------------- MAIN -------------------------
 def main():
-    today = datetime.datetime.utcnow().date()
-    date_from = today.isoformat()
-    date_to = (today + datetime.timedelta(days=3)).isoformat()
-
-    fixtures = build_fixture_blocks(date_from, date_to)
-
+    fixtures = build_fixture_blocks()
     out = {
         "generated_at": datetime.datetime.utcnow().isoformat(),
-        "window": {"from": date_from, "to": date_to, "hours": WINDOW_HOURS},
+        "window": {"hours": WINDOW_HOURS},
         "fixtures_total": len(fixtures),
         "fixtures": fixtures,
     }
 
-    import os
     os.makedirs("logs", exist_ok=True)
     with open("logs/thursday_report_v3.json", "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, indent=2)
 
-    print("Thursday v3 READY.", flush=True)
+    print(f"Thursday v3 READY. Fixtures: {len(fixtures)}", flush=True)
 
 
 if __name__ == "__main__":
