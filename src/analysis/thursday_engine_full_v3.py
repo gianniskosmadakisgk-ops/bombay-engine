@@ -23,7 +23,8 @@ DRAW_MIN_OFFERED = 2.90
 KELLY_MIN_PROB = 0.20
 KELLY_MIN_EDGE = 0.10
 
-WINDOW_HOURS = 72  # EXACTLY 3 DAYS
+# 3 ημέρες ακριβώς (72 ώρες)
+WINDOW_HOURS = 72
 
 # ------------------------- HELPERS -------------------------
 def fetch_fixtures(league_id):
@@ -85,7 +86,6 @@ def build_odds_index(odds_data):
     return index
 
 
-
 def dummy_fair_model(match):
     """Replace later with real Poisson model."""
     return {
@@ -96,7 +96,8 @@ def dummy_fair_model(match):
     }
 
 
-def implied(p): return 1/p if p > 0 else None
+def implied(p):
+    return 1 / p if p > 0 else None
 
 
 def build_fixture_blocks():
@@ -132,7 +133,10 @@ def build_fixture_blocks():
             "date": fx["date"],
             "probs": probs,
             "fair": {
-                "home": fair_1, "draw": fair_x, "away": fair_2, "over": fair_over
+                "home": fair_1,
+                "draw": fair_x,
+                "away": fair_2,
+                "over": fair_over
             },
             "offered": offered
         })
@@ -148,10 +152,11 @@ def main():
         "fixtures_total": len(fixtures),
         "fixtures": fixtures
     }
-    with open("logs/thursday_report_v4.json", "w") as f:
+    # 🔴 ΣΗΜΑΝΤΙΚΟ: Γράφουμε σε v3, γιατί αυτό διαβάζει το Friday
+    with open("logs/thursday_report_v3.json", "w") as f:
         json.dump(out, f, indent=2)
 
-    print("Thursday v4 READY.")
+    print("Thursday v3 READY.")
 
 
 if __name__ == "__main__":
