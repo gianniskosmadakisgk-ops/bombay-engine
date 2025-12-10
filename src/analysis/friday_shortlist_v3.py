@@ -9,11 +9,11 @@ import requests
 #  - Διαβάζει το Thursday report v3
 #  - Φέρνει offered odds από TheOddsAPI
 #  - Χτίζει:
-#       * Draw Singles (flat 30u)
+#       * Draw Singles (flat 30u, με min prob & min odds)
 #       * Over Singles (8 / 16 / 24u, standard/premium/monster)
 #       * FunBet Draw (dynamic stake, max 20% bankroll)
 #       * FunBet Over (dynamic stake, max 20% bankroll)
-#       * Kelly value bets (1X2 + Over 2.5) με ασφαλές Kelly
+#       * Kelly value bets (ΜΟΝΟ 1 & 2) με ασφαλές Kelly
 # ============================================================
 
 THURSDAY_REPORT_PATH = "logs/thursday_report_v3.json"
@@ -34,11 +34,14 @@ BANKROLL_KELLY = 600.0
 UNIT = 1.0
 
 MAX_FUN_EXPOSURE_PCT = 0.20      # 20% ανά κύκλο
-MAX_KELLY_PCT = 0.05             # σκληρό cap 5% ανά επιλογή (δεν το χρησιμοποιούμε πλέον ευθέως)
 KELLY_FRACTION = 0.30            # κλασματικό Kelly 30%
 KELLY_MIN_EDGE = 0.15            # 15%+ value
 KELLY_MAX_ODDS = 8.0
 KELLY_MAX_PICKS = 6
+KELLY_MIN_PROB = 0.18            # >= 18% πιθανότητα από το μοντέλο
+
+MIN_DRAW_PROB = 0.38             # ≥ 38% για Draw Engine
+MIN_DRAW_ODDS = 2.80             # προσφερόμενη απόδοση Χ ≥ 2.80
 
 # ------------------------------------------------------------
 # LEAGUE PRIORITIES
@@ -294,7 +297,9 @@ def generate_picks(fixtures, odds_index):
         away = f["away"]
         league = f["league"]
 
+        fair_1 = f["fair_1"]
         fair_x = f["fair_x"]
+        fair_2 = f["fair_2"]
         fair_over = f["fair_over_2_5"]
 
         draw_prob = f["draw_prob"]
@@ -304,17 +309,23 @@ def generate_picks(fixtures, odds_index):
         a = normalize_team(away)
         odds = odds_index.get((h, a), {})
 
-        offered_home = odds.get("home") or None
+        offered_1 = odds.get("home") or None
         offered_x = odds.get("draw") or None
-        offered_away = odds.get("away") or None
+        offered_2 = odds.get("away") or None
         offered_over = odds.get("over_2_5") or None
 
         draw_score = compute_draw_score(draw_prob, league)
         over_score = compute_over_score(over_prob, league)
 
         # ---------------- DRAW SINGLES ----------------
-        # Πιο σκληρό φιλτράρισμα: μόνο αν draw_prob >= 0.38
-        if draw_prob >= 0.38:
+        # Πιο σκληρό φιλτράρισμα:
+        # - prob >= 0.38
+        # - προσφερόμενη απόδοση Χ >= 2.80
+        if (
+            draw_prob >= MIN_DRAW_PROB
+            and offered_x is not None
+            and offered_x >= MIN_DRAW_ODDS
+        ):
             draw_singles.append(
                 {
                     "match": f"{home} – {away}",
@@ -322,7 +333,7 @@ def generate_picks(fixtures, odds_index):
                     "fair": fair_x,
                     "prob": round(draw_prob, 3),
                     "score": round(draw_score, 1),
-                    "odds": offered_x,           # ΠΡΑΓΜΑΤΙΚΗ απόδοση Χ (αν υπάρχει)
+                    "odds": offered_x,
                     "stake": 30.0,
                 }
             )
@@ -338,16 +349,20 @@ def generate_picks(fixtures, odds_index):
                     "fair": fair_over,
                     "prob": round(over_prob, 3),
                     "score": round(over_score, 1),
-                    "odds": offered_over,       # ΠΡΑΓΜΑΤΙΚΗ over απόδοση (αν υπάρχει)
+                    "odds": offered_over,
                     "tier": tier,
                     "stake": float(stake),
                 }
             )
 
         # ---------------- KELLY CANDIDATES ----------------
-        # Χρησιμοποιούμε fair + offered για value edge σε 1X2 και Over
+        # ΜΟΝΟ 1 & 2, όχι Χ, όχι Over
         def add_kelly_candidate(market_label, fair, offered, prob_model):
-            if not offered:
+            if not offered or not fair:
+                return
+
+            # min prob 18% από το μοντέλο
+            if prob_model < KELLY_MIN_PROB:
                 return
 
             # Edge ως ποσοστό σε σχέση με fair:
@@ -386,6 +401,7 @@ def generate_picks(fixtures, odds_index):
 
             # Υπολογισμός stake (σε units)
             raw_stake = BANKROLL_KELLY * f
+            # Μικρό minimum για να έχει νόημα
             stake = max(3.0, round(raw_stake, 1))
 
             kelly_candidates.append(
@@ -394,7 +410,7 @@ def generate_picks(fixtures, odds_index):
                     "league": league,
                     "market": market_label,
                     "fair": fair,
-                    "odds": offered,                # ΠΡΑΓΜΑΤΙΚΗ απόδοση
+                    "odds": offered,
                     "prob": round(prob_model, 3),
                     "edge": round(edge_ratio * 100.0, 1),  # σε %
                     "stake": stake,
@@ -402,13 +418,15 @@ def generate_picks(fixtures, odds_index):
                 }
             )
 
-        # Draw Kelly (αν έχουμε offered)
-        if offered_x:
-            add_kelly_candidate("Draw", fair_x, offered_x, draw_prob)
+        # Προσεγγιστική πιθανότητα μοντέλου από fair (1/fair)
+        p_home = 1.0 / fair_1 if fair_1 > 0 else 0.0
+        p_away = 1.0 / fair_2 if fair_2 > 0 else 0.0
 
-        # Over 2.5 Kelly
-        if offered_over:
-            add_kelly_candidate("Over 2.5", fair_over, offered_over, over_prob)
+        if offered_1:
+            add_kelly_candidate("Home", fair_1, offered_1, p_home)
+
+        if offered_2:
+            add_kelly_candidate("Away", fair_2, offered_2, p_away)
 
     # --------------------------------------------------------
     # Τελική ταξινόμηση / caps
@@ -431,7 +449,6 @@ def generate_picks(fixtures, odds_index):
 def funbet_draw(draw_singles):
     """
     Χτίζει FunBet Draw σύστημα με βάση τα Draw Singles.
-    Top 7 by score, αλλά πάντα με prob >= 0.38 από τον βασικό φιλτράρισμα.
     """
     picks = sorted(draw_singles, key=lambda x: x["score"], reverse=True)[:7]
     n = len(picks)
@@ -508,7 +525,7 @@ def funbet_over(over_singles):
 # ------------------------------------------------------------
 
 def main():
-    log("🚀 Running Friday Shortlist v3 (final units version, updated bankroll / odds logic)")
+    log("🚀 Running Friday Shortlist v3 (final units version, tightened draw/Kelly logic)")
 
     fixtures, th_report = load_thursday_fixtures()
     log(f"Loaded {len(fixtures)} fixtures from {THURSDAY_REPORT_PATH}")
@@ -527,7 +544,6 @@ def main():
     fun_over_open = fb_over["total_stake"]
     kelly_open = sum(k["stake"] for k in kelly_picks)
 
-    # Για την ώρα week_start = bank_start (μέχρι να το ταΐζει το Tuesday recap)
     bankrolls = {
         "draw": {
             "bank_start": BANKROLL_DRAW,
