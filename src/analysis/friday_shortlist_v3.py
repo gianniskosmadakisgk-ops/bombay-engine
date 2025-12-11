@@ -1,708 +1,598 @@
-import os
-import json
+"""
+Thursday Engine V3
+Production 1X2 & Over 2.5 Poisson Model
+- xG-based expected goals (API-Football data)
+- Momentum / Form / Injury / Rest / H2H / League draw bias
+- 6x6 Poisson score matrix
+- 1X2 probabilities (Draw No-Bet + draw caps)
+- Over 2.5 probabilities (caps)
+- Fair odds (no margin)
+- The Odds API v4 integration (1X2 + Over 2.5)
+"""
+
+from __future__ import annotations
+
 import math
+from typing import Dict, Any, List, Tuple, Optional
+
 import requests
-import datetime
-from dateutil import parser
+
 
 # ============================================================
-#  THURSDAY ENGINE v3 (Balanced Model, real team stats)
-#  - Fixtures & team stats από API-FOOTBALL
-#  - Poisson + league adjustments (balanced)
-#  - Fair odds = 1 / prob (όπως στο spec)
-#  - Προαιρετικά offered odds από TheOddsAPI
-#  - Γράφει logs/thursday_report_v3.json
+# CONSTANTS (σύμφωνα με τα specs σου)
 # ============================================================
 
-# ------------------------- CONFIG / KEYS -------------------------
-API_FOOTBALL_KEY = os.getenv("FOOTBALL_API_KEY")
-API_FOOTBALL_BASE = "https://v3.football.api-sports.io"
+# Λόγω table:
+#   xG For cap: 2.8
+#   xG Against cap: 2.3
+LAMBDA_HOME_MIN = 0.30
+LAMBDA_HOME_MAX = 2.80
+LAMBDA_AWAY_MIN = 0.30
+LAMBDA_AWAY_MAX = 2.30
 
-ODDS_API_KEY = os.getenv("ODDS_API_KEY")
-ODDS_BASE_URL = "https://api.the-odds-api.com/v4/sports"
+MAX_GOALS = 6  # 0..6 + tail lumped
 
-FOOTBALL_SEASON = os.getenv("FOOTBALL_SEASON", "2025")
+DRAW_MIN = 0.22
+DRAW_MAX = 0.32
 
-HEADERS_FOOTBALL = {"x-apisports-key": API_FOOTBALL_KEY}
-
-# Μπορείς να το ελέγχεις από το Render (USE_ODDS_API=true/false)
-USE_ODDS_API = os.getenv("USE_ODDS_API", "true").lower() == "true"
-
-# 3 ημέρες (72 ώρες)
-WINDOW_HOURS = 72
-
-# ------------------------- LEAGUES -------------------------
-LEAGUES = {
-    "Premier League": 39,
-    "Championship": 40,
-    "Ligue 1": 61,
-    "Ligue 2": 62,
-    "Bundesliga": 78,
-    "Serie A": 135,
-    "Serie B": 136,
-    "La Liga": 140,
-    "Liga Portugal 1": 94,
-}
-
-# ------------------------- LEAGUE → SPORT KEY (TheOddsAPI) -------------------------
-LEAGUE_TO_SPORT = {
-    "Premier League": "soccer_epl",
-    "Championship": "soccer_efl_champ",
-    "La Liga": "soccer_spain_la_liga",
-    "La Liga 2": "soccer_spain_segunda_division",
-    "Serie A": "soccer_italy_serie_a",
-    "Serie B": "soccer_italy_serie_b",
-    "Bundesliga": "soccer_germany_bundesliga",
-    "Bundesliga 2": "soccer_germany_bundesliga2",
-    "Ligue 1": "soccer_france_ligue_one",
-    "Ligue 2": "soccer_france_ligue_two",
-    "Liga Portugal 1": "soccer_portugal_primeira_liga",
-    "Swiss Super League": "soccer_switzerland_superleague",
-    "Eredivisie": "soccer_netherlands_eredivisie",
-    "Jupiler Pro League": "soccer_belgium_first_div",
-    "Superliga": "soccer_denmark_superliga",
-    "Allsvenskan": "soccer_sweden_allsvenskan",
-    "Eliteserien": "soccer_norway_eliteserien",
-    "Argentina Primera": "soccer_argentina_primera_division",
-    "Brazil Serie A": "soccer_brazil_serie_a",
-}
-
-# cache για team stats (team_id, league_id) → dict
-TEAM_STATS_CACHE = {}
-
-# ------------------------- HELPERS -------------------------
-def log(msg: str):
-    print(msg, flush=True)
+OVER25_MIN = 0.35
+OVER25_MAX = 0.72
 
 
-def implied(p: float):
-    """Υπολογισμός fair από πιθανότητα (1/p) — όπως στο master spec."""
-    return 1.0 / p if p and p > 0 else None
+# ============================================================
+# HELPERS
+# ============================================================
+
+def clamp(x: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, x))
 
 
-def normalize_team_name(raw: str) -> str:
+def poisson_pmf(lmbda: float, max_goals: int = MAX_GOALS) -> List[float]:
     """
-    Normalization για mapping με TheOddsAPI.
-    - κατεβάζουμε lower
-    - βγάζουμε 'fc', 'afc', 'cf', 'sc' κλπ
-    - βασικά aliases (wolves, west brom κ.λπ.)
+    Poisson 0..max_goals + tail at index max_goals+1.
     """
-    if not raw:
-        return ""
-
-    s = raw.lower()
-
-    # βασικά aliases / κλασικά προβλήματα ονομάτων
-    aliases = {
-        "wolverhampton wanderers": "wolves",
-        "wolverhampton": "wolves",
-        "brighton & hove albion": "brighton",
-        "brighton and hove albion": "brighton",
-        "west bromwich albion": "west brom",
-        "stoke city": "stoke",
-        "leeds united": "leeds",
-        "tottenham hotspur": "tottenham",
-        "manchester united": "man utd",
-        "manchester city": "man city",
-        "newcastle united": "newcastle",
-        "nottingham forest": "nottingham forest",
-    }
-    if s in aliases:
-        s = aliases[s]
-
-    # πετάμε τελικά "fc", "afc", "cf", "sc"
-    for suf in [" fc", " afc", " cf", " sc"]:
-        if s.endswith(suf):
-            s = s[: -len(suf)]
-
-    # καθαρισμός
-    out = []
-    for ch in s:
-        if ch.isalnum() or ch.isspace():
-            out.append(ch)
-        # αγνοούμε υπόλοιπα
-    s = "".join(out)
-    s = " ".join(s.split())
-    return s.strip()
+    pmf = []
+    for k in range(max_goals + 1):
+        pmf.append(math.exp(-lmbda) * (lmbda ** k) / math.factorial(k))
+    tail = 1.0 - sum(pmf)
+    pmf.append(tail)
+    return pmf
 
 
-# ------------------------- FIXTURES -------------------------
-def fetch_fixtures(league_id: int, league_name: str):
+def implied_prob(odds: float) -> Optional[float]:
+    if odds is None or odds <= 0:
+        return None
+    return 1.0 / odds
+
+
+def normalize_three_way(p1: float, px: float, p2: float) -> Tuple[float, float, float]:
+    s = p1 + px + p2
+    if s <= 0:
+        return 0.0, 0.0, 0.0
+    return p1 / s, px / s, p2 / s
+
+
+# ============================================================
+# 1. EXPECTED GOALS (compute_expected_goals)
+# ============================================================
+
+def compute_expected_goals(
+    *,
+    # team season stats
+    home_goals_scored: float,
+    home_goals_conceded: float,
+    home_games: int,
+    away_goals_scored: float,
+    away_goals_conceded: float,
+    away_games: int,
+    # league averages
+    league_avg_home_goals: float,
+    league_avg_away_goals: float,
+    league_avg_home_goals_conceded: float,
+    league_avg_away_goals_conceded: float,
+    league_ov25_pct: float,
+    league_draw_pct: float,
+    # form / momentum (ratio vs 1.0 baseline)
+    home_recent_xg_ratio: float = 1.0,   # last 5
+    away_recent_xg_ratio: float = 1.0,
+    home_form10_ratio: float = 1.0,      # last 10
+    away_form10_ratio: float = 1.0,
+    # injuries (count of key players)
+    home_key_injured: int = 0,
+    away_key_injured: int = 0,
+    # rest days
+    home_rest_days: float = 3.0,
+    away_rest_days: float = 3.0,
+    # draw biases
+    h2h_draw_pct: float = 0.0,          # 0..1
+) -> Dict[str, Any]:
     """
-    Τραβάει fixtures από API-FOOTBALL για συγκεκριμένη λίγκα
-    μέσα στο παράθυρο των WINDOW_HOURS ωρών.
+    Υλοποίηση του production spec:
+
+      atk_home  = (home_goals_scored / home_games) / league_avg_home_goals
+      def_away  = (away_goals_conceded / away_games) / league_avg_away_goals_conceded
+      λ_home    = atk_home * def_away * league_avg_home_goals
+
+      atk_away  = (away_goals_scored / away_games) / league_avg_away_goals
+      def_home  = (home_goals_conceded / home_games) / league_avg_home_goals_conceded
+      λ_away    = atk_away * def_home * league_avg_away_goals
+
+    Adjustments / weights:
+      Momentum (last 5)    : 0.12, cap ±0.3, Δλ = 0.12 * (recent_xg_ratio - 1.0)
+      Form (last 10)       : 0.08, cap ±0.2, Δλ = 0.08 * (form10_ratio     - 1.0)
+      Injury               : -0.25 per key, cap -0.5
+      Rest Days            : -0.05 per missing day <3, cap -0.15
+      H2H Draw Bias        : if h2h_draw_pct ≥ 0.60 → λ_both *= 0.90
+      League Draw Bias     : if league_draw_pct ≥ 0.28 → λ_both *= 0.92
+      Tempo Over Bias      : over_bias = min(0.15, 0.05 * (league_ov25_pct - 0.52))
+                             λ_both *= (1 + over_bias)
+
+    Caps:
+      λ_home ∈ [0.30, 2.80]
+      λ_away ∈ [0.30, 2.30]
     """
-    if not API_FOOTBALL_KEY:
-        log("⚠️ Missing FOOTBALL_API_KEY – NO fixtures will be fetched!")
-        return []
 
-    url = f"{API_FOOTBALL_BASE}/fixtures"
-    params = {
-        "league": league_id,
-        "season": FOOTBALL_SEASON,
-    }
+    debug: Dict[str, Any] = {}
 
-    try:
-        r = requests.get(
-            url, headers=HEADERS_FOOTBALL, params=params, timeout=20
-        ).json()
-    except Exception as e:
-        log(f"⚠️ Error fetching fixtures for {league_name}: {e}")
-        return []
+    # --- base season per-game stats
+    home_scored_pg = home_goals_scored / max(1, home_games)
+    home_conceded_pg = home_goals_conceded / max(1, home_games)
+    away_scored_pg = away_goals_scored / max(1, away_games)
+    away_conceded_pg = away_goals_conceded / max(1, away_games)
 
-    if not r.get("response"):
-        log(f"⚠️ No fixtures response for league {league_name}")
-        return []
+    # --- atk / def strengths vs league
+    atk_home = home_scored_pg / league_avg_home_goals
+    def_away = away_conceded_pg / league_avg_away_goals_conceded
 
-    out = []
-    now = datetime.datetime.now(datetime.timezone.utc)
+    atk_away = away_scored_pg / league_avg_away_goals
+    def_home = home_conceded_pg / league_avg_home_goals_conceded
 
-    for fx in r["response"]:
-        status_short = fx["fixture"]["status"]["short"]
-        if status_short != "NS":  # μόνο not started
-            continue
+    debug["atk_home"] = atk_home
+    debug["def_away"] = def_away
+    debug["atk_away"] = atk_away
+    debug["def_home"] = def_home
 
-        dt = parser.isoparse(fx["fixture"]["date"]).astimezone(
-            datetime.timezone.utc
-        )
-        diff_hours = (dt - now).total_seconds() / 3600.0
-        if not (0 <= diff_hours <= WINDOW_HOURS):
-            continue
+    # --- base lambdas
+    λ_home = atk_home * def_away * league_avg_home_goals
+    λ_away = atk_away * def_home * league_avg_away_goals
 
-        home_team = fx["teams"]["home"]
-        away_team = fx["teams"]["away"]
+    debug["λ_home_base"] = λ_home
+    debug["λ_away_base"] = λ_away
 
-        home_name = home_team["name"]
-        away_name = away_team["name"]
-        home_id = home_team["id"]
-        away_id = away_team["id"]
+    # --------------------------------------------------------
+    # Adjustments (βάσει πίνακα)
+    # --------------------------------------------------------
 
-        out.append(
-            {
-                "id": fx["fixture"]["id"],
-                "league_id": league_id,
-                "league_name": league_name,
-                "home": home_name,
-                "away": away_name,
-                "home_id": home_id,
-                "away_id": away_id,
-                "home_norm": normalize_team_name(home_name),
-                "away_norm": normalize_team_name(away_name),
-                "date_raw": fx["fixture"]["date"],
-                "timestamp_utc": dt.isoformat(),
-            }
-        )
+    # Momentum (last 5)
+    Δλ_home_mom = 0.12 * (home_recent_xg_ratio - 1.0)
+    Δλ_away_mom = 0.12 * (away_recent_xg_ratio - 1.0)
+    Δλ_home_mom = clamp(Δλ_home_mom, -0.3, 0.3)
+    Δλ_away_mom = clamp(Δλ_away_mom, -0.3, 0.3)
 
-    log(f"→ {league_name}: {len(out)} fixtures within window")
-    return out
+    λ_home += Δλ_home_mom
+    λ_away += Δλ_away_mom
 
+    debug["Δλ_home_momentum"] = Δλ_home_mom
+    debug["Δλ_away_momentum"] = Δλ_away_mom
 
-# ------------------------- TEAM STATS -------------------------
-def fetch_team_recent_stats(team_id: int, league_id: int):
-    """
-    Τραβάει πρόσφατα ματς ομάδας από API-FOOTBALL και τα μετατρέπει σε aggregate stats.
-    Χρησιμοποιούμε ΜΟΝΟ goals ως σίγουρα διαθέσιμα.
-    """
-    cache_key = (team_id, league_id)
-    if cache_key in TEAM_STATS_CACHE:
-        return TEAM_STATS_CACHE[cache_key]
+    # Form (last 10)
+    Δλ_home_form = 0.08 * (home_form10_ratio - 1.0)
+    Δλ_away_form = 0.08 * (away_form10_ratio - 1.0)
+    Δλ_home_form = clamp(Δλ_home_form, -0.2, 0.2)
+    Δλ_away_form = clamp(Δλ_away_form, -0.2, 0.2)
 
-    if not API_FOOTBALL_KEY:
-        TEAM_STATS_CACHE[cache_key] = {}
-        return TEAM_STATS_CACHE[cache_key]
+    λ_home += Δλ_home_form
+    λ_away += Δλ_away_form
 
-    url = f"{API_FOOTBALL_BASE}/fixtures"
-    params = {
-        "team": team_id,
-        "league": league_id,
-        "season": FOOTBALL_SEASON,
-        "last": 5,
-    }
+    debug["Δλ_home_form"] = Δλ_home_form
+    debug["Δλ_away_form"] = Δλ_away_form
 
-    try:
-        r = requests.get(
-            url, headers=HEADERS_FOOTBALL, params=params, timeout=20
-        ).json()
-    except Exception as e:
-        log(f"⚠️ Error fetching team stats team_id={team_id}: {e}")
-        TEAM_STATS_CACHE[cache_key] = {}
-        return TEAM_STATS_CACHE[cache_key]
+    # Injury: -0.25 per key, cap -0.5
+    Δλ_home_injury = -0.25 * home_key_injured
+    Δλ_away_injury = -0.25 * away_key_injured
+    Δλ_home_injury = clamp(Δλ_home_injury, -0.5, 0.0)
+    Δλ_away_injury = clamp(Δλ_away_injury, -0.5, 0.0)
 
-    if not r.get("response"):
-        TEAM_STATS_CACHE[cache_key] = {}
-        return TEAM_STATS_CACHE[cache_key]
+    λ_home += Δλ_home_injury
+    λ_away += Δλ_away_injury
 
-    goals_for = 0
-    goals_against = 0
-    matches = 0
+    debug["Δλ_home_injury"] = Δλ_home_injury
+    debug["Δλ_away_injury"] = Δλ_away_injury
 
-    for fx in r["response"]:
-        matches += 1
-        g_home = fx["goals"]["home"] or 0
-        g_away = fx["goals"]["away"] or 0
-        is_home = fx["teams"]["home"]["id"] == team_id
+    # Rest Days: -0.05 per missing day below 3, cap -0.15
+    Δλ_home_rest = 0.0
+    Δλ_away_rest = 0.0
+    if home_rest_days < 3:
+        Δλ_home_rest = -0.05 * (3 - home_rest_days)
+    if away_rest_days < 3:
+        Δλ_away_rest = -0.05 * (3 - away_rest_days)
+    Δλ_home_rest = clamp(Δλ_home_rest, -0.15, 0.0)
+    Δλ_away_rest = clamp(Δλ_away_rest, -0.15, 0.0)
 
-        if is_home:
-            goals_for += g_home
-            goals_against += g_away
-        else:
-            goals_for += g_away
-            goals_against += g_home
+    λ_home += Δλ_home_rest
+    λ_away += Δλ_away_rest
 
-    if matches == 0:
-        avg_for = avg_against = None
+    debug["Δλ_home_rest"] = Δλ_home_rest
+    debug["Δλ_away_rest"] = Δλ_away_rest
+
+    # --- clamp before biases
+    λ_home = clamp(λ_home, LAMBDA_HOME_MIN, LAMBDA_HOME_MAX)
+    λ_away = clamp(λ_away, LAMBDA_AWAY_MIN, LAMBDA_AWAY_MAX)
+
+    # H2H Draw Bias: if ≥ 60% draws → λ_both * 0.90
+    if h2h_draw_pct >= 0.60:
+        λ_home *= 0.90
+        λ_away *= 0.90
+        debug["h2h_draw_mul"] = 0.90
     else:
-        avg_for = goals_for / matches
-        avg_against = goals_against / matches
+        debug["h2h_draw_mul"] = 1.0
 
-    stats = {
-        "matches_count": matches,
-        "goals_for": goals_for,
-        "goals_against": goals_against,
-        "avg_goals_for": avg_for,
-        "avg_goals_against": avg_against,
-    }
-
-    TEAM_STATS_CACHE[cache_key] = stats
-    return stats
-
-
-def fetch_league_baselines(league_id: int):
-    """
-    Βασικά στατιστικά λίγκας (προς το παρόν fixed, μπορείς να τα βγάλεις
-    από ιστορικά δεδομένα στο μέλλον).
-    """
-    # light tuning ανα λίγκα (αν δεν ορίσεις κάτι, πέφτει στο default)
-    league_overrides = {
-        39: {"avg_goals_per_match": 2.9, "avg_draw_rate": 0.24, "avg_over25_rate": 0.58},  # EPL
-        40: {"avg_goals_per_match": 2.5, "avg_draw_rate": 0.28, "avg_over25_rate": 0.52},  # Championship
-        78: {"avg_goals_per_match": 3.1, "avg_draw_rate": 0.25, "avg_over25_rate": 0.60},  # Bundesliga
-        135: {"avg_goals_per_match": 2.5, "avg_draw_rate": 0.30, "avg_over25_rate": 0.52}, # Serie A
-        140: {"avg_goals_per_match": 2.6, "avg_draw_rate": 0.27, "avg_over25_rate": 0.55}, # La Liga
-    }
-
-    base = {
-        "avg_goals_per_match": 2.6,
-        "avg_draw_rate": 0.26,
-        "avg_over25_rate": 0.55,
-        "home_advantage": 0.18,
-    }
-
-    if league_id in league_overrides:
-        base.update(league_overrides[league_id])
-
-    return base
-
-
-# ------------------------- POISSON UTILITIES -------------------------
-def poisson_pmf(k: int, lam: float) -> float:
-    """P(X = k) για Poisson(λ)"""
-    if lam <= 0:
-        return 0.0
-    return math.exp(-lam) * (lam ** k) / math.factorial(k)
-
-
-# ------------------------- MODEL: EXPECTED GOALS -------------------------
-def compute_expected_goals(home_stats: dict, away_stats: dict, league_baseline: dict):
-    """
-    Balanced μοντέλο expected goals:
-
-    - Χρησιμοποιούμε avg_goals_for / avg_goals_against τελευταίων 5.
-    - Συνδέουμε attack_strength * defence_weakness.
-    - Κάνουμε scale γύρω από league_avg_goals.
-    - Προσθέτουμε home_advantage στον γηπεδούχο.
-    """
-
-    league_avg_goals = league_baseline.get("avg_goals_per_match", 2.6)
-    home_advantage = league_baseline.get("home_advantage", 0.18)
-
-    # fallback αν λείπουν stats
-    def safe_avg(stats: dict, key: str, default: float):
-        v = stats.get(key)
-        if v is None:
-            return default
-        try:
-            return float(v)
-        except Exception:
-            return default
-
-    # goals per match για κάθε ομάδα
-    home_for = safe_avg(
-        home_stats, "avg_goals_for", league_avg_goals * 0.5
-    )
-    home_against = safe_avg(
-        home_stats, "avg_goals_against", league_avg_goals * 0.5
-    )
-    away_for = safe_avg(
-        away_stats, "avg_goals_for", league_avg_goals * 0.5
-    )
-    away_against = safe_avg(
-        away_stats, "avg_goals_against", league_avg_goals * 0.5
-    )
-
-    # attack / defence strength vs league
-    home_attack_strength = home_for / (league_avg_goals / 2)
-    away_attack_strength = away_for / (league_avg_goals / 2)
-
-    home_def_weakness = home_against / (league_avg_goals / 2)
-    away_def_weakness = away_against / (league_avg_goals / 2)
-
-    # balanced mix
-    lambda_home = league_avg_goals / 2 * (
-        0.6 * home_attack_strength + 0.4 * away_def_weakness
-    )
-    lambda_away = league_avg_goals / 2 * (
-        0.6 * away_attack_strength + 0.4 * home_def_weakness
-    )
-
-    # home advantage
-    lambda_home *= (1.0 + home_advantage)
-
-    # soft caps
-    lambda_home = max(0.2, min(3.5, lambda_home))
-    lambda_away = max(0.2, min(3.5, lambda_away))
-
-    return lambda_home, lambda_away
-
-
-# ------------------------- MODEL: PROBABILITIES -------------------------
-def compute_probabilities(lambda_home: float, lambda_away: float, context: dict):
-    """
-    Balanced Poisson model:
-      - Poisson(λ_home), Poisson(λ_away) μέχρι 7 γκολ
-      - Home / Draw / Away, Over/Under 2.5
-      - League adjustments σε draw & over
-      - normalization & safety caps
-    """
-    max_goals = 7
-
-    ph = pd = pa = 0.0
-    po = 0.0
-
-    for i in range(max_goals + 1):
-        p_i = poisson_pmf(i, lambda_home)
-        for j in range(max_goals + 1):
-            p_j = poisson_pmf(j, lambda_away)
-            p = p_i * p_j
-
-            if i > j:
-                ph += p
-            elif i == j:
-                pd += p
-            else:
-                pa += p
-
-            if i + j >= 3:
-                po += p
-
-    total_1x2 = ph + pd + pa
-    if total_1x2 <= 0:
-        # extreme fallback: ισοκατανομή
-        ph = pa = 0.4
-        pd = 0.2
+    # League Draw Bias: if league_draw_pct ≥ 28% → λ_both * 0.92
+    if league_draw_pct >= 0.28:
+        λ_home *= 0.92
+        λ_away *= 0.92
+        debug["league_draw_mul"] = 0.92
     else:
-        ph /= total_1x2
-        pd /= total_1x2
-        pa /= total_1x2
+        debug["league_draw_mul"] = 1.0
 
-    # Over 2.5 (με truncated άθροισμα) – normalise λίγο
-    po = min(0.99, max(0.01, po))
-    pu = 1.0 - po
+    # Tempo Adjustment (League Over Bias)
+    over_bias = min(0.15, 0.05 * (league_ov25_pct - 0.52))
+    λ_home *= (1.0 + over_bias)
+    λ_away *= (1.0 + over_bias)
 
-    # -------- League adjustments (balanced) --------
-    league_baseline = context.get("league_baseline", {})
-    league_draw = league_baseline.get("avg_draw_rate")
-    league_over = league_baseline.get("avg_over25_rate")
+    debug["over_bias"] = over_bias
 
-    # blend προς league rates με μικρό weight
-    if league_draw:
-        alpha_d = 0.25  # πόσο "τραβάμε" προς league draw rate
-        pd = (1 - alpha_d) * pd + alpha_d * league_draw
-        pd = min(0.35, max(0.18, pd))  # δεν θέλουμε ακραία draws
+    # Final caps (safety)
+    λ_home = clamp(λ_home, LAMBDA_HOME_MIN, LAMBDA_HOME_MAX)
+    λ_away = clamp(λ_away, LAMBDA_AWAY_MIN, LAMBDA_AWAY_MAX)
 
-        # ξανά normalization 1X2
-        rest = max(1e-6, ph + pa)
-        scale = (1.0 - pd) / rest
-        ph *= scale
-        pa *= scale
-
-    if league_over:
-        alpha_o = 0.25
-        po = (1 - alpha_o) * po + alpha_o * league_over
-        po = min(0.80, max(0.40, po))
-        pu = 1.0 - po
-
-    # safety caps
-    ph = min(0.80, max(0.10, ph))
-    pa = min(0.80, max(0.10, pa))
-    pd = min(0.35, max(0.15, pd))
-
-    # final renormalization για 1X2
-    s = ph + pd + pa
-    ph /= s
-    pd /= s
-    pa /= s
-
-    # πολύ μικρό smoothing για over/under
-    po = min(0.85, max(0.35, po))
-    pu = 1.0 - po
+    debug["λ_home_final"] = λ_home
+    debug["λ_away_final"] = λ_away
 
     return {
-        "home_prob": ph,
-        "draw_prob": pd,
-        "away_prob": pa,
-        "over_2_5_prob": po,
-        "under_2_5_prob": pu,
+        "λ_home": λ_home,
+        "λ_away": λ_away,
+        "debug": debug,
     }
 
 
-# ------------------------- ODDS (TheOddsAPI) -------------------------
-def fetch_odds_for_league(league_name: str):
-    """Τραβάει odds *μία φορά* από TheOddsAPI για τη συγκεκριμένη λίγκα."""
-    if not USE_ODDS_API:
-        return []
+# ============================================================
+# 2. PROBABILITIES (compute_probabilities)
+# ============================================================
 
-    sport_key = LEAGUE_TO_SPORT.get(league_name)
-    if not sport_key:
-        return []
-
-    if not ODDS_API_KEY:
-        log("⚠️ Missing ODDS_API_KEY – skipping odds")
-        return []
-
-    params = {
-        "apiKey": ODDS_API_KEY,
-        "regions": "eu",
-        "markets": "h2h,totals",
-        "oddsFormat": "decimal",
-    }
-
-    try:
-        url = f"{ODDS_BASE_URL}/{sport_key}/odds"
-        res = requests.get(url, params=params, timeout=20)
-        if res.status_code != 200:
-            log(f"⚠️ Odds error [{league_name}] status={res.status_code}")
-            return []
-        return res.json()
-    except Exception as e:
-        log(f"⚠️ Odds request error for {league_name}: {e}")
-        return []
-
-
-def build_odds_index(odds_data):
+def compute_probabilities(
+    λ_home: float,
+    λ_away: float,
+    draw_bias: float = 1.0,
+) -> Dict[str, Any]:
     """
-    Index:
-      index[(home_norm, away_norm)] = {
-          'home': best_home,
-          'draw': best_draw,
-          'away': best_away,
-          'over': best_over_2_5,
-          'under': best_under_2_5
-      }
+    Υλοποίηση του production 1X2 & Over 2.5 μοντέλου.
+
+    1X2:
+      home_prob = Σ(h>a)P(h:a) + 0.5 Σ(h=a)P(h:a)
+      draw_prob = Σ(h=a)P(h:a)
+      away_prob = Σ(h<a)P(h:a) + 0.5 Σ(h=a)P(h:a)
+
+      total = home_prob + away_prob
+      home_prob /= total
+      away_prob /= total
+
+      draw_prob = clamp(draw_prob * 1.15 * draw_bias, 0.22, 0.32)
+
+      final normalization: divide όλα με το sum(home+draw+away)
+
+    Over 2.5:
+      total_goals(n) = Σ(h+a=n)P(h:a)
+      over_2_5 = Σ_{n>=3} total_goals(n)
+      under_2_5 = 1 - over_2_5
+      over_2_5 capped in [0.35, 0.72]
     """
-    index = {}
-    for ev in odds_data or []:
-        home_raw = ev.get("home_team", "")
-        away_raw = ev.get("away_team", "")
 
-        home_norm = normalize_team_name(home_raw)
-        away_norm = normalize_team_name(away_raw)
+    debug: Dict[str, Any] = {}
 
-        best_home = best_draw = best_away = None
-        best_over = best_under = None
+    pmf_home = poisson_pmf(λ_home, MAX_GOALS)
+    pmf_away = poisson_pmf(λ_away, MAX_GOALS)
 
-        for bm in ev.get("bookmakers", []):
-            for m in bm.get("markets", []):
-                mk = m.get("key")
+    debug["pmf_home"] = pmf_home
+    debug["pmf_away"] = pmf_away
 
-                if mk == "h2h":
-                    outs = m.get("outcomes", [])
-                    for o in outs:
-                        name = normalize_team_name(o.get("name", ""))
-                        price = float(o["price"])
-                        if name == home_norm:
-                            best_home = max(best_home or 0, price)
-                        elif name == away_norm:
-                            best_away = max(best_away or 0, price)
-                        elif name in ["draw", "x"]:
-                            best_draw = max(best_draw or 0, price)
+    # 6×6 score matrix
+    matrix = [[0.0] * (MAX_GOALS + 1) for _ in range(MAX_GOALS + 1)]
+    for h in range(MAX_GOALS + 1):
+        for a in range(MAX_GOALS + 1):
+            matrix[h][a] = pmf_home[h] * pmf_away[a]
 
-                elif mk == "totals":
-                    for o in m.get("outcomes", []):
-                        name = o.get("name", "").lower()
-                        try:
-                            price = float(o["price"])
-                        except Exception:
-                            continue
-                        # π.χ. "Over 2.5" ή "Over 2.5 Goals"
-                        if "over" in name and "2.5" in name:
-                            best_over = max(best_over or 0, price)
-                        if "under" in name and "2.5" in name:
-                            best_under = max(best_under or 0, price)
+    # 1X2 raw
+    home_raw = 0.0
+    away_raw = 0.0
+    draw_raw = 0.0
+    draw_mass = 0.0
 
-        index[(home_norm, away_norm)] = {
-            "home": best_home,
-            "draw": best_draw,
-            "away": best_away,
-            "over": best_over,
-            "under": best_under,
-        }
+    for h in range(MAX_GOALS + 1):
+        for a in range(MAX_GOALS + 1):
+            p = matrix[h][a]
+            if h > a:
+                home_raw += p
+            elif h < a:
+                away_raw += p
+            else:
+                draw_raw += p
+                draw_mass += p
 
-    return index
+    home_prob = home_raw + 0.5 * draw_mass
+    away_prob = away_raw + 0.5 * draw_mass
+    draw_prob = draw_raw
 
+    debug["home_raw"] = home_raw
+    debug["away_raw"] = away_raw
+    debug["draw_raw"] = draw_raw
+    debug["home_plus_half_draw"] = home_prob
+    debug["away_plus_half_draw"] = away_prob
 
-# ------------------------- MAIN PIPELINE -------------------------
-def build_fixture_blocks():
-    """
-    Κύρια ροή:
-      fixtures → team stats → λ → probabilities → fair → odds → JSON rows
-    """
-    fixtures_out = []
-
-    log(f"Using FOOTBALL_SEASON={FOOTBALL_SEASON}")
-    log(f"Window: next {WINDOW_HOURS} hours")
-
-    if not API_FOOTBALL_KEY:
-        log("❌ FOOTBALL_API_KEY is missing. Aborting fixture fetch.")
-        return []
-
-    # 1) Fixtures από όλες τις λίγκες
-    all_fixtures = []
-    for lg_name, lg_id in LEAGUES.items():
-        fx_list = fetch_fixtures(lg_id, lg_name)
-        all_fixtures.extend(fx_list)
-
-    log(f"Total raw fixtures collected: {len(all_fixtures)}")
-
-    # 2) Odds index
-    odds_index_global = {}
-    if USE_ODDS_API:
-        for lg_name in LEAGUES.keys():
-            odds_data = fetch_odds_for_league(lg_name)
-            league_index = build_odds_index(odds_data)
-            odds_index_global.update(league_index)
-        log(f"Odds index built for {len(odds_index_global)} matches")
+    # Draw No-Bet normalization (home & away only)
+    total_dnb = home_prob + away_prob
+    if total_dnb > 0:
+        home_prob /= total_dnb
+        away_prob /= total_dnb
     else:
-        log("⚠️ USE_ODDS_API = False → δεν τραβάμε odds από TheOddsAPI.")
+        home_prob = away_prob = 0.0
 
-    # 3) Loop fixtures → probabilities → fair
-    for fx in all_fixtures:
-        home_name = fx["home"]
-        away_name = fx["away"]
-        league_name = fx["league_name"]
-        league_id = fx["league_id"]
-        home_id = fx["home_id"]
-        away_id = fx["away_id"]
-        home_norm = fx["home_norm"]
-        away_norm = fx["away_norm"]
+    debug["home_dnb"] = home_prob
+    debug["away_dnb"] = away_prob
 
-        match_key = f"{home_name} – {away_name}"
+    # Draw adjustment with bias
+    draw_prob = draw_prob * 1.15 * draw_bias
+    draw_prob = clamp(draw_prob, DRAW_MIN, DRAW_MAX)
 
-        league_baseline = fetch_league_baselines(league_id)
+    debug["draw_adj"] = draw_prob
 
-        # ---- STEP 1: team stats (last 5) ----
-        home_stats = fetch_team_recent_stats(home_id, league_id)
-        away_stats = fetch_team_recent_stats(away_id, league_id)
+    # Final normalization 1X2
+    home_final, draw_final, away_final = normalize_three_way(
+        home_prob, draw_prob, away_prob
+    )
 
-        # ---- STEP 2: Expected goals (λ) ----
-        lambda_home, lambda_away = compute_expected_goals(
-            home_stats, away_stats, league_baseline
-        )
+    debug["home_final"] = home_final
+    debug["draw_final"] = draw_final
+    debug["away_final"] = away_final
 
-        # ---- STEP 3: Probabilities από το μοντέλο ----
-        context = {
-            "league_name": league_name,
-            "league_id": league_id,
-            "home": home_name,
-            "away": away_name,
-            "league_baseline": league_baseline,
-            "home_stats": home_stats,
-            "away_stats": away_stats,
-        }
+    # Over / Under 2.5
+    total_goals_prob = [0.0] * (2 * MAX_GOALS + 1)  # 0..12
 
-        probs = compute_probabilities(lambda_home, lambda_away, context)
+    for h in range(MAX_GOALS + 1):
+        for a in range(MAX_GOALS + 1):
+            tg = h + a
+            if tg < len(total_goals_prob):
+                total_goals_prob[tg] += matrix[h][a]
 
-        p_home = probs.get("home_prob")
-        p_draw = probs.get("draw_prob")
-        p_away = probs.get("away_prob")
-        p_over = probs.get("over_2_5_prob")
-        p_under = probs.get("under_2_5_prob")
+    over_2_5_raw = sum(total_goals_prob[3:])
+    over_2_5 = clamp(over_2_5_raw, OVER25_MIN, OVER25_MAX)
+    under_2_5 = 1.0 - over_2_5
 
-        # ---- STEP 4: FAIR odds από πιθανότητες ----
-        fair_1 = implied(p_home)
-        fair_x = implied(p_draw)
-        fair_2 = implied(p_away)
-        fair_over = implied(p_over)
-        fair_under = implied(p_under)
+    debug["over_2_5_raw"] = over_2_5_raw
+    debug["over_2_5_capped"] = over_2_5
+    debug["under_2_5"] = under_2_5
 
-        # ---- STEP 5: Offered odds από TheOddsAPI ----
-        offered = odds_index_global.get((home_norm, away_norm), {})
-        off_home = offered.get("home")
-        off_draw = offered.get("draw")
-        off_away = offered.get("away")
-        off_over = offered.get("over")
-        off_under = offered.get("under")
+    # Fair odds (no margin)
+    def fair_odds(p: float) -> Optional[float]:
+        return None if p <= 0 else 1.0 / p
 
-        # ---- STEP 6: Formatting ημερομηνίας/ώρας ----
-        dt = parser.isoparse(fx["date_raw"]).astimezone(datetime.timezone.utc)
-        date_str = dt.date().isoformat()
-        time_str = dt.strftime("%H:%M")
-
-        fixtures_out.append(
-            {
-                "fixture_id": fx["id"],
-                "date": date_str,
-                "time": time_str,
-                "league_id": league_id,
-                "league": league_name,
-                "home": home_name,
-                "away": away_name,
-                "model": "bombay_balanced_v1",
-                "lambda_home": round(lambda_home, 3),
-                "lambda_away": round(lambda_away, 3),
-                "fair_1": fair_1,
-                "fair_x": fair_x,
-                "fair_2": fair_2,
-                "fair_over_2_5": fair_over,
-                "fair_under_2_5": fair_under,
-                "draw_prob": round(p_draw, 3) if isinstance(p_draw, (int, float)) else None,
-                "over_2_5_prob": round(p_over, 3) if isinstance(p_over, (int, float)) else None,
-                "under_2_5_prob": round(p_under, 3) if isinstance(p_under, (int, float)) else None,
-                "offered_1": off_home,
-                "offered_x": off_draw,
-                "offered_2": off_away,
-                "offered_over_2_5": off_over,
-                "offered_under_2_5": off_under,
-            }
-        )
-
-    log(f"Thursday fixtures_out: {len(fixtures_out)}")
-    return fixtures_out
-
-
-def main():
-    fixtures = build_fixture_blocks()
-
-    now = datetime.datetime.now(datetime.timezone.utc)
-    to_dt = now + datetime.timedelta(hours=WINDOW_HOURS)
-
-    out = {
-        "generated_at": now.isoformat(),
-        "window": {
-            "from": now.date().isoformat(),
-            "to": to_dt.date().isoformat(),
-            "hours": WINDOW_HOURS,
-        },
-        "fixtures_total": len(fixtures),
-        "fixtures": fixtures,
+    odds = {
+        "home": fair_odds(home_final),
+        "draw": fair_odds(draw_final),
+        "away": fair_odds(away_final),
+        "over_2_5": fair_odds(over_2_5),
+        "under_2_5": fair_odds(under_2_5),
     }
 
-    os.makedirs("logs", exist_ok=True)
-    with open("logs/thursday_report_v3.json", "w", encoding="utf-8") as f:
-        json.dump(out, f, ensure_ascii=False, indent=2)
+    return {
+        "probs": {
+            "home": home_final,
+            "draw": draw_final,
+            "away": away_final,
+            "over_2_5": over_2_5,
+            "under_2_5": under_2_5,
+        },
+        "odds": odds,
+        "debug": debug,
+    }
 
-    log(f"Thursday v3 READY. Fixtures: {len(fixtures)}")
 
+# ============================================================
+# 3. THE ODDS API v4 INTEGRATION
+# ============================================================
+
+def fetch_theoddsapi_events(
+    api_key: str,
+    sport_key: str,
+    regions: str = "eu",
+    markets: str = "h2h,totals",
+    odds_format: str = "decimal",
+    date_format: str = "iso",
+) -> List[Dict[str, Any]]:
+    """
+    GET /v4/sports/{sport_key}/odds from The Odds API.
+
+    - sport_key π.χ. "soccer_epl", "soccer_greece_super_league"
+    - επιστρέφει λίστα από events
+    """
+    url = f"https://api.the-odds-api.com/v4/sports/{sport_key}/odds"
+    params = {
+        "apiKey": api_key,
+        "regions": regions,
+        "markets": markets,
+        "oddsFormat": odds_format,
+        "dateFormat": date_format,
+    }
+
+    r = requests.get(url, params=params, timeout=10)
+    r.raise_for_status()
+    return r.json()
+
+
+def extract_1x2_and_over25_from_event(event: Dict[str, Any]) -> Optional[Dict[str, float]]:
+    """
+    Από ένα event της The Odds API:
+
+    - διαβάζει ΟΛΟΥΣ τους bookmakers
+    - μαζεύει όλες τις τιμές για:
+        home, draw, away (h2h)
+        over_2_5, under_2_5 (totals point=2.5)
+    - επιστρέφει AVERAGE odds για κάθε αγορά.
+
+    Αν λείπει κάτι → None.
+    """
+
+    home_prices: List[float] = []
+    draw_prices: List[float] = []
+    away_prices: List[float] = []
+    over25_prices: List[float] = []
+    under25_prices: List[float] = []
+
+    home_team = (event.get("home_team") or "").lower()
+    away_team = (event.get("away_team") or "").lower()
+
+    for book in event.get("bookmakers", []):
+        for market in book.get("markets", []):
+            key = market.get("key")
+            outcomes = market.get("outcomes", [])
+
+            if key == "h2h":
+                # 3-way: home, draw, away
+                for o in outcomes:
+                    name = (o.get("name") or "").lower()
+                    price = o.get("price")
+                    if price is None:
+                        continue
+
+                    if name in ["home", home_team]:
+                        home_prices.append(price)
+                    elif name in ["draw", "tie", "x"]:
+                        draw_prices.append(price)
+                    elif name in ["away", away_team]:
+                        away_prices.append(price)
+
+            elif key == "totals":
+                for o in outcomes:
+                    point = o.get("point")
+                    name = (o.get("name") or "").lower()
+                    price = o.get("price")
+                    if price is None or point != 2.5:
+                        continue
+                    if name == "over":
+                        over25_prices.append(price)
+                    elif name == "under":
+                        under25_prices.append(price)
+
+    if not home_prices or not draw_prices or not away_prices:
+        return None
+    if not over25_prices or not under25_prices:
+        return None
+
+    def avg(xs: List[float]) -> float:
+        return sum(xs) / len(xs)
+
+    return {
+        "home": avg(home_prices),
+        "draw": avg(draw_prices),
+        "away": avg(away_prices),
+        "over_2_5": avg(over25_prices),
+        "under_2_5": avg(under25_prices),
+    }
+
+
+def theoddsapi_market_probs_no_vig(odds: Dict[str, float]) -> Dict[str, float]:
+    """
+    Μετατρέπει τις average odds σε implied probabilities
+    και τις normalizes (no vig) ξεχωριστά για 1X2 και O/U.
+    """
+
+    raw = {k: (implied_prob(v) or 0.0) for k, v in odds.items()}
+
+    # 1X2
+    s_1x2 = raw["home"] + raw["draw"] + raw["away"]
+    if s_1x2 > 0:
+        home = raw["home"] / s_1x2
+        draw = raw["draw"] / s_1x2
+        away = raw["away"] / s_1x2
+    else:
+        home = draw = away = 0.0
+
+    # O/U 2.5
+    s_ou = raw["over_2_5"] + raw["under_2_5"]
+    if s_ou > 0:
+        over25 = raw["over_2_5"] / s_ou
+        under25 = raw["under_2_5"] / s_ou
+    else:
+        over25 = under25 = 0.0
+
+    return {
+        "home": home,
+        "draw": draw,
+        "away": away,
+        "over_2_5": over25,
+        "under_2_5": under25,
+    }
+
+
+def compare_model_vs_market(
+    model_probs: Dict[str, float],
+    market_probs_nv: Dict[str, float],
+) -> Dict[str, Any]:
+    """
+    Υπολογίζει ratio model / market για edge analysis.
+    Δεν αλλάζει το μοντέλο.
+    """
+
+    def edge_ratio(m: float, b: float) -> Optional[float]:
+        if b <= 0:
+            return None
+        return m / b
+
+    edges = {
+        "home": edge_ratio(model_probs["home"], market_probs_nv["home"]),
+        "draw": edge_ratio(model_probs["draw"], market_probs_nv["draw"]),
+        "away": edge_ratio(model_probs["away"], market_probs_nv["away"]),
+        "over_2_5": edge_ratio(model_probs["over_2_5"], market_probs_nv["over_2_5"]),
+        "under_2_5": edge_ratio(model_probs["under_2_5"], market_probs_nv["under_2_5"]),
+    }
+
+    return {"edges": edges}
+
+
+# ============================================================
+# 4. MINI DEMO (μπορείς να το σβήσεις στο production)
+# ============================================================
 
 if __name__ == "__main__":
-    main()
+    # Dummy παράδειγμα για να δεις ότι τρέχει
+    eg = compute_expected_goals(
+        home_goals_scored=25,
+        home_goals_conceded=18,
+        home_games=15,
+        away_goals_scored=20,
+        away_goals_conceded=22,
+        away_games=15,
+        league_avg_home_goals=1.45,
+        league_avg_away_goals=1.20,
+        league_avg_home_goals_conceded=1.20,
+        league_avg_away_goals_conceded=1.45,
+        league_ov25_pct=0.54,
+        league_draw_pct=0.27,
+        home_recent_xg_ratio=1.05,
+        away_recent_xg_ratio=0.98,
+        home_form10_ratio=1.02,
+        away_form10_ratio=0.97,
+        home_key_injured=1,
+        away_key_injured=0,
+        home_rest_days=2,
+        away_rest_days=4,
+        h2h_draw_pct=0.50,
+    )
+
+    λ_home = eg["λ_home"]
+    λ_away = eg["λ_away"]
+
+    res = compute_probabilities(λ_home, λ_away, draw_bias=1.0)
+    print("λ_home, λ_away:", λ_home, λ_away)
+    print("probs:", res["probs"])
+    print("fair odds:", res["odds"])
