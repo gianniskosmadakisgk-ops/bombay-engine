@@ -8,16 +8,19 @@ import re
 from dateutil import parser
 
 # ============================================================
-#  THURSDAY ENGINE v3.6 (Odds matching "gated" + value_pct fields)
-#  - API-FOOTBALL fixtures + basic recent goals
-#  - Poisson
+#  THURSDAY ENGINE v3.6.1
+#  - API-FOOTBALL fixtures + recent goals stats (last 5)
+#  - Poisson model
 #  - FAIR = 1/prob (UNCHANGED)
 #  - TheOddsAPI (1 call per league)
 #  - Matching:
 #      * time window widened (now-8h ... now+WINDOW)
-#      * strong time-gate (prevents wrong-game matches)
+#      * HARD time gate (prevents wrong-game matches) BUT softer than before
 #      * token similarity + aliases
 #      * supports swapped home/away
+#  - Adds:
+#      * value_pct_* fields (for UI coloring)
+#      * better score_* (not just prob*10)
 #  - Output: logs/thursday_report_v3.json
 # ============================================================
 
@@ -33,9 +36,10 @@ USE_ODDS_API = os.getenv("USE_ODDS_API", "true").lower() == "true"
 WINDOW_HOURS = int(os.getenv("WINDOW_HOURS", "72"))
 
 # Matching controls (tweakable without code changes)
-ODDS_TIME_GATE_HOURS = float(os.getenv("ODDS_TIME_GATE_HOURS", "6"))   # HARD gate
-ODDS_TIME_SOFT_HOURS = float(os.getenv("ODDS_TIME_SOFT_HOURS", "10"))  # soft penalty range
-ODDS_SIM_THRESHOLD = float(os.getenv("ODDS_SIM_THRESHOLD", "0.62"))    # similarity threshold
+# (Softened defaults vs previous to avoid killing offered odds)
+ODDS_TIME_GATE_HOURS = float(os.getenv("ODDS_TIME_GATE_HOURS", "9"))    # HARD gate (was 6)
+ODDS_TIME_SOFT_HOURS = float(os.getenv("ODDS_TIME_SOFT_HOURS", "12"))   # soft penalty range (was 10)
+ODDS_SIM_THRESHOLD = float(os.getenv("ODDS_SIM_THRESHOLD", "0.58"))     # similarity threshold (was 0.62)
 
 LEAGUES = {
     "Premier League": 39,
@@ -418,7 +422,7 @@ def build_events_cache(odds_events):
         })
     return out
 
-def _best_odds_from_event_for_fixture(ev_raw, fx_home_norm, fx_away_norm, event_home_norm, event_away_norm, swapped: bool):
+def _best_odds_from_event_for_fixture(ev_raw, event_home_norm, event_away_norm, swapped: bool):
     best_home = best_draw = best_away = None
     best_over = best_under = None
 
@@ -435,7 +439,6 @@ def _best_odds_from_event_for_fixture(ev_raw, fx_home_norm, fx_away_norm, event_
                     if nm in ("draw", "x", "tie"):
                         best_draw = max(best_draw or 0.0, price)
                     else:
-                        # map by names with swap logic
                         if not swapped:
                             if nm == event_home_norm:
                                 best_home = max(best_home or 0.0, price)
@@ -473,10 +476,8 @@ def pick_best_odds_for_fixture(fx, league_events_cache):
     if not league_events_cache:
         return {}, {"matched": False, "reason": "no_odds_events"}
 
-    fx_h = fx["home_norm"]
-    fx_a = fx["away_norm"]
-    fx_ht = token_set(fx_h)
-    fx_at = token_set(fx_a)
+    fx_ht = token_set(fx["home_norm"])
+    fx_at = token_set(fx["away_norm"])
     fx_time = fx.get("commence_utc")
 
     best = None
@@ -491,7 +492,7 @@ def pick_best_odds_for_fixture(fx, league_events_cache):
         else:
             diff_h = None
 
-        # HARD TIME GATE to avoid wrong match
+        # HARD time gate to avoid wrong match
         if diff_h is not None and diff_h > ODDS_TIME_GATE_HOURS:
             continue
 
@@ -524,7 +525,7 @@ def pick_best_odds_for_fixture(fx, league_events_cache):
         return {}, {"matched": False, "reason": f"low_similarity(score={best_score:.2f})"}
 
     odds = _best_odds_from_event_for_fixture(
-        best["raw"], fx_h, fx_a, best["home_norm"], best["away_norm"], best_swap
+        best["raw"], best["home_norm"], best["away_norm"], best_swap
     )
 
     debug = {
@@ -535,14 +536,7 @@ def pick_best_odds_for_fixture(fx, league_events_cache):
     }
     return odds, debug
 
-# ------------------------- SCORES -------------------------
-def score_1_10(p: float) -> float:
-    s = round((p or 0.0) * 10.0, 1)
-    if s < 1.0: s = 1.0
-    if s > 10.0: s = 10.0
-    return s
-
-# value pct helper (only when both exist)
+# ------------------------- value pct helper -------------------------
 def value_pct(offered, fair):
     if offered is None or fair is None:
         return None
@@ -553,13 +547,35 @@ def value_pct(offered, fair):
     except Exception:
         return None
 
+# ------------------------- BETTER SCORES -------------------------
+def clamp_1_10(x: float) -> float:
+    x = round(float(x), 1)
+    if x < 1.0: return 1.0
+    if x > 10.0: return 10.0
+    return x
+
+def score_draw(draw_prob: float, lam_h: float, lam_a: float) -> float:
+    closeness = 1.0 - min(1.0, abs(lam_h - lam_a) / 1.25)  # 0..1
+    s = (draw_prob * 0.70 + closeness * 0.30) * 10.0
+    return clamp_1_10(s)
+
+def score_over(over_prob: float, lam_sum: float) -> float:
+    lam_boost = min(1.0, max(0.0, (lam_sum - 2.2) / 1.6))  # 0..1
+    s = (over_prob * 0.70 + lam_boost * 0.30) * 10.0
+    return clamp_1_10(s)
+
+def score_under(under_prob: float, lam_sum: float) -> float:
+    lam_boost = min(1.0, max(0.0, (2.6 - lam_sum) / 1.6))  # 0..1
+    s = (under_prob * 0.70 + lam_boost * 0.30) * 10.0
+    return clamp_1_10(s)
+
 # ------------------------- MAIN PIPELINE -------------------------
 def build_fixture_blocks():
     fixtures_out = []
     now = datetime.datetime.now(datetime.timezone.utc)
     to_dt = now + datetime.timedelta(hours=WINDOW_HOURS)
 
-    odds_from = now - datetime.timedelta(hours=8)  # widened
+    odds_from = now - datetime.timedelta(hours=8)
 
     log(f"Using FOOTBALL_SEASON={FOOTBALL_SEASON}")
     log(f"Window: next {WINDOW_HOURS} hours")
@@ -627,6 +643,8 @@ def build_fixture_blocks():
         off_o = offered.get("over")
         off_u = offered.get("under")
 
+        lam_sum = lam_h + lam_a
+
         fixtures_out.append(
             {
                 "fixture_id": fx["id"],
@@ -636,7 +654,7 @@ def build_fixture_blocks():
                 "league": league_name,
                 "home": fx["home"],
                 "away": fx["away"],
-                "model": "bombay_balanced_v3_6",
+                "model": "bombay_balanced_v3_6_1",
 
                 "lambda_home": round(lam_h, 3),
                 "lambda_away": round(lam_a, 3),
@@ -662,17 +680,17 @@ def build_fixture_blocks():
                 "offered_over_2_5": off_o,
                 "offered_under_2_5": off_u,
 
-                # value pct (for UI coloring; GPT doesn't need to compute)
+                # value pct (for UI coloring)
                 "value_pct_1": value_pct(off_1, fair_1),
                 "value_pct_x": value_pct(off_x, fair_x),
                 "value_pct_2": value_pct(off_2, fair_2),
                 "value_pct_over": value_pct(off_o, fair_over),
                 "value_pct_under": value_pct(off_u, fair_under),
 
-                # scores
-                "score_draw": score_1_10(p_draw),
-                "score_over": score_1_10(p_over),
-                "score_under": score_1_10(p_under),
+                # scores (better)
+                "score_draw": score_draw(p_draw, lam_h, lam_a),
+                "score_over": score_over(p_over, lam_sum),
+                "score_under": score_under(p_under, lam_sum),
 
                 # debug
                 "odds_match": match_debug,
@@ -699,7 +717,7 @@ def main():
     with open("logs/thursday_report_v3.json", "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, indent=2)
 
-    log(f"✅ Thursday v3.6 READY. Fixtures: {len(fixtures)}")
+    log(f"✅ Thursday v3.6.1 READY. Fixtures: {len(fixtures)}")
 
 if __name__ == "__main__":
     main()
