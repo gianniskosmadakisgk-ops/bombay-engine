@@ -19,34 +19,35 @@ MAX_DRAWS = int(os.getenv("MAX_DRAWS", "7"))
 MAX_OVERS = int(os.getenv("MAX_OVERS", "7"))
 MAX_KELLY = int(os.getenv("MAX_KELLY", "6"))
 
-# ------------------------- FILTERS -------------------------
-MIN_DRAW_PROB = float(os.getenv("MIN_DRAW_PROB", "0.28"))
-MIN_DRAW_ODDS = float(os.getenv("MIN_DRAW_ODDS", "2.70"))
-DRAW_STAKE = float(os.getenv("DRAW_STAKE", "30"))
+# ------------------------- SELECTION RULES (production) -------------------------
+# Minimum edges (value)
+MIN_EDGE_DRAWS = float(os.getenv("MIN_EDGE_DRAWS", "0.03"))   # 3%
+MIN_EDGE_OVERS = float(os.getenv("MIN_EDGE_OVERS", "0.03"))   # 3%
+MIN_EDGE_KELLY = float(os.getenv("MIN_EDGE_KELLY", "0.015"))  # 1.5%
 
-MIN_OVER_PROB = float(os.getenv("MIN_OVER_PROB", "0.64"))
-MAX_FAIR_OVER = float(os.getenv("MAX_FAIR_OVER", "1.78"))
+# Draw quality gates
+MIN_DRAW_PROB = float(os.getenv("MIN_DRAW_PROB", "0.22"))
+MIN_DRAW_ODDS = float(os.getenv("MIN_DRAW_ODDS", "2.60"))
+MAX_LAM_DIFF_DRAW = float(os.getenv("MAX_LAM_DIFF_DRAW", "0.35"))  # closeness gate
 
-# Optional quality gate via value_pct fields (from Thursday)
-MIN_VALUE_PCT_DRAWS = float(os.getenv("MIN_VALUE_PCT_DRAWS", "0"))   # set 3..5 to tighten
-MIN_VALUE_PCT_OVERS = float(os.getenv("MIN_VALUE_PCT_OVERS", "0"))   # set 2..4 to tighten
+# Over quality gates
+MIN_OVER_PROB = float(os.getenv("MIN_OVER_PROB", "0.55"))
+MIN_Z_TOTAL_OVER = float(os.getenv("MIN_Z_TOTAL_OVER", "0.65"))
+MIN_LAM_TOTAL_OVER = float(os.getenv("MIN_LAM_TOTAL_OVER", "2.75"))
+MAX_FAIR_OVER = float(os.getenv("MAX_FAIR_OVER", "1.90"))
 
-# ------------------------- KELLY (SAFE + not flat) -------------------------
-KELLY_FRACTION = float(os.getenv("KELLY_FRACTION", "0.30"))
-KELLY_MIN_EDGE = float(os.getenv("KELLY_MIN_EDGE", "0.12"))
-KELLY_MAX_ODDS = float(os.getenv("KELLY_MAX_ODDS", "4.00"))
+# Stakes (flat for singles)
+DRAW_STAKE = float(os.getenv("DRAW_STAKE", "30.0"))
+
+# Kelly caps
+KELLY_MAX_ODDS = float(os.getenv("KELLY_MAX_ODDS", "4.0"))
 KELLY_MIN_PROB = float(os.getenv("KELLY_MIN_PROB", "0.18"))
 
-# stake shaping
-KELLY_MIN_STAKE = float(os.getenv("KELLY_MIN_STAKE", "3.0"))
-KELLY_ROUND_TO = float(os.getenv("KELLY_ROUND_TO", "1.0"))  # round to 1€ by default
-
-# ------------------------- LEAGUE PRIORITIES -------------------------
+# ------------------------- LEAGUE PRIORITIES (light bump) -------------------------
 DRAW_PRIORITY_LEAGUES = {
     "Ligue 1", "Serie A", "La Liga", "Championship",
     "Serie B", "Ligue 2", "Liga Portugal 2", "Swiss Super League",
 }
-
 OVER_PRIORITY_LEAGUES = {
     "Bundesliga", "Eredivisie", "Jupiler Pro League", "Superliga",
     "Allsvenskan", "Eliteserien", "Swiss Super League", "Liga Portugal 1",
@@ -64,22 +65,21 @@ def safe_float(v, default=None):
         return default
 
 def compute_draw_score(draw_prob, league):
-    score = (draw_prob or 0.0) * 100.0
+    s = (draw_prob or 0.0) * 100.0
     if league in DRAW_PRIORITY_LEAGUES:
-        score *= 1.05
-    return score
+        s *= 1.05
+    return s
 
 def compute_over_score(over_prob, league):
-    score = (over_prob or 0.0) * 100.0
+    s = (over_prob or 0.0) * 100.0
     if league in OVER_PRIORITY_LEAGUES:
-        score *= 1.05
-    return score
+        s *= 1.05
+    return s
 
-def classify_over_stake(over_prob, fair_over, league):
+def classify_over_stake(over_prob, fair_over, z_total, league):
+    # Tiering: probability + price quality + confidence
     score = compute_over_score(over_prob, league)
-    if over_prob >= 0.70 and fair_over <= 1.55 and score >= 70:
-        return "monster", 24.0
-    if over_prob >= 0.67 and fair_over <= 1.65 and score >= 67:
+    if over_prob >= 0.62 and fair_over <= 1.65 and z_total >= 0.90 and score >= 62:
         return "premium", 16.0
     return "standard", 8.0
 
@@ -106,6 +106,7 @@ def load_thursday_fixtures():
     fixtures = data.get("fixtures", []) or []
     return fixtures, data
 
+# ------------------------- FUNBET SYSTEMS -------------------------
 def funbet_draw(draw_singles):
     picks = sorted(draw_singles, key=lambda x: x["score"], reverse=True)[:7]
     n = len(picks)
@@ -132,11 +133,47 @@ def funbet_over(over_singles):
     unit, total = compute_system_stake(BANKROLL_FUN_OVER, cols)
     return {"system": sys, "columns": cols, "unit": unit, "total_stake": total, "picks": picks}
 
-def _round_to(x: float, step: float) -> float:
-    if step <= 0:
-        return float(x)
-    return round(x / step) * step
+# ------------------------- EDGE HELPERS -------------------------
+def edge_from_prob_and_odds(p: float, offered: float):
+    if p is None or offered is None or offered <= 1.0:
+        return None
+    return (offered * p) - 1.0  # e.g. 0.03 = +3%
 
+# ------------------------- KELLY (scaled by edge buckets) -------------------------
+def scaled_kelly_fraction(p: float, offered: float, edge: float):
+    if p is None or offered is None:
+        return 0.0
+    if offered <= 1.0:
+        return 0.0
+
+    b = offered - 1.0
+    q = 1.0 - p
+    f_star = (b * p - q) / b
+    if f_star <= 0:
+        return 0.0
+
+    # Scaling by edge bucket (from your Gemini spec)
+    if edge < 0.015:
+        k = 0.0
+    elif edge < 0.03:
+        k = 0.25
+    elif edge < 0.06:
+        k = 0.50
+    else:
+        k = 0.75
+
+    f = f_star * k
+
+    # hard caps (tight, production-safe)
+    if offered <= 2.5:
+        cap = 0.05
+    else:
+        cap = 0.03
+    f = min(f, cap)
+
+    return max(0.0, f)
+
+# ------------------------- MAIN PICK GENERATION -------------------------
 def generate_picks(fixtures):
     draw_singles = []
     over_singles = []
@@ -148,146 +185,117 @@ def generate_picks(fixtures):
         league = f.get("league")
         match_label = f"{home} – {away}"
 
-        # fair
-        fair_1 = safe_float(f.get("fair_1"))
-        fair_x = safe_float(f.get("fair_x"))
-        fair_2 = safe_float(f.get("fair_2"))
-        fair_over = safe_float(f.get("fair_over_2_5"))
+        # probs
+        p_draw = safe_float(f.get("draw_prob"))
+        p_over = safe_float(f.get("over_2_5_prob"))
+        p_home = safe_float(f.get("home_prob"))
+        p_away = safe_float(f.get("away_prob"))
 
-        # probs (prefer explicit model probs)
-        draw_prob = safe_float(f.get("draw_prob"), 0.0) or 0.0
-        over_prob = safe_float(f.get("over_2_5_prob"), 0.0) or 0.0
-        home_prob = safe_float(f.get("home_prob"), None)
-        away_prob = safe_float(f.get("away_prob"), None)
+        # fair
+        fair_x = safe_float(f.get("fair_x"))
+        fair_over = safe_float(f.get("fair_over_2_5"))
+        fair_1 = safe_float(f.get("fair_1"))
+        fair_2 = safe_float(f.get("fair_2"))
 
         # offered
-        offered_1 = safe_float(f.get("offered_1"))
         offered_x = safe_float(f.get("offered_x"))
-        offered_2 = safe_float(f.get("offered_2"))
         offered_over = safe_float(f.get("offered_over_2_5"))
+        offered_1 = safe_float(f.get("offered_1"))
+        offered_2 = safe_float(f.get("offered_2"))
 
-        # value% from Thursday (if exists)
-        value_pct_x = safe_float(f.get("value_pct_x"))
-        value_pct_over = safe_float(f.get("value_pct_over"))
-
-        draw_score = compute_draw_score(draw_prob, league)
-        over_score = compute_over_score(over_prob, league)
+        # lambda diagnostics
+        lam_h = safe_float(f.get("lambda_home"))
+        lam_a = safe_float(f.get("lambda_away"))
+        lam_total = safe_float(f.get("lambda_total"))
+        z_total = safe_float(f.get("z_total"), 0.0) or 0.0
 
         # ---------------- DRAW SINGLES ----------------
-        if (
-            draw_prob >= MIN_DRAW_PROB
-            and offered_x is not None and offered_x >= MIN_DRAW_ODDS
-            and fair_x is not None
-            and (value_pct_x is None or value_pct_x >= MIN_VALUE_PCT_DRAWS)
-        ):
-            draw_singles.append(
-                {
+        if p_draw is not None and offered_x is not None and fair_x is not None:
+            edge = edge_from_prob_and_odds(p_draw, offered_x)
+            lam_diff = abs((lam_h or 0.0) - (lam_a or 0.0))
+            if (
+                edge is not None and edge >= MIN_EDGE_DRAWS
+                and p_draw >= MIN_DRAW_PROB
+                and offered_x >= MIN_DRAW_ODDS
+                and lam_diff <= MAX_LAM_DIFF_DRAW
+            ):
+                draw_singles.append({
                     "match": match_label,
                     "league": league,
-                    "prob": round(draw_prob, 3),
+                    "prob": round(p_draw, 3),
                     "fair": fair_x,
                     "odds": offered_x,
-                    "score": round(draw_score, 1),
-                    "stake": float(DRAW_STAKE),
-                }
-            )
+                    "edge": round(edge * 100.0, 1),
+                    "score": round(compute_draw_score(p_draw, league), 1),
+                    "stake": DRAW_STAKE,
+                })
 
         # ---------------- OVER SINGLES ----------------
-        if (
-            fair_over is not None
-            and over_prob >= MIN_OVER_PROB
-            and fair_over <= MAX_FAIR_OVER
-            and offered_over is not None and offered_over > 1.01
-            and (value_pct_over is None or value_pct_over >= MIN_VALUE_PCT_OVERS)
-        ):
-            tier, stake = classify_over_stake(over_prob, fair_over, league)
-            over_singles.append(
-                {
+        if p_over is not None and offered_over is not None and fair_over is not None:
+            edge = edge_from_prob_and_odds(p_over, offered_over)
+            if (
+                edge is not None and edge >= MIN_EDGE_OVERS
+                and p_over >= MIN_OVER_PROB
+                and z_total >= MIN_Z_TOTAL_OVER
+                and (lam_total is None or lam_total >= MIN_LAM_TOTAL_OVER)
+                and fair_over <= MAX_FAIR_OVER
+                and offered_over > 1.01
+            ):
+                tier, stake = classify_over_stake(p_over, fair_over, z_total, league)
+                over_singles.append({
                     "match": match_label,
                     "league": league,
-                    "prob": round(over_prob, 3),
+                    "prob": round(p_over, 3),
                     "fair": fair_over,
                     "odds": offered_over,
-                    "score": round(over_score, 1),
+                    "edge": round(edge * 100.0, 1),
+                    "z_total": round(z_total, 3),
+                    "score": round(compute_over_score(p_over, league), 1),
                     "tier": tier,
                     "stake": float(stake),
-                }
-            )
+                })
 
-        # ---------------- KELLY (ONLY 1 & 2, NOT FLAT) ----------------
-        def add_kelly_candidate(market_label, fair, offered, prob_model):
-            if fair is None or offered is None or prob_model is None:
+        # ---------------- KELLY (ONLY 1 & 2, scaled, not flat) ----------------
+        def add_kelly(market_label, p, fair, offered):
+            if p is None or fair is None or offered is None:
                 return
             if offered > KELLY_MAX_ODDS:
                 return
-            if prob_model < KELLY_MIN_PROB:
+            if p < KELLY_MIN_PROB:
+                return
+            edge = edge_from_prob_and_odds(p, offered)
+            if edge is None or edge < MIN_EDGE_KELLY:
                 return
 
-            edge_ratio = (offered / fair) - 1.0
-            if edge_ratio < KELLY_MIN_EDGE:
-                return
-
-            p = prob_model
-            q = 1.0 - p
-            b = offered - 1.0
-            if b <= 0:
-                return
-
-            f_full = (b * p - q) / b
-            if f_full <= 0:
-                return
-
-            f = f_full * KELLY_FRACTION
-
-            # edge-based cap (prevents flat 0.03 everywhere, αλλά παραμένει safe)
-            edge_pct = edge_ratio * 100.0
-            # base cap 2.0% up to max 5.0% depending on edge, odds
-            cap = 0.02 + min(0.03, max(0.0, (edge_pct - 12.0) / 50.0))
-            if offered <= 2.5:
-                cap = min(0.05, cap + 0.01)
-            cap = min(0.05, max(0.015, cap))
-
-            f = min(f, cap)
+            f = scaled_kelly_fraction(p, offered, edge)
             if f <= 0:
                 return
 
-            raw = BANKROLL_KELLY * f
-            stake = max(KELLY_MIN_STAKE, _round_to(raw, KELLY_ROUND_TO))
+            stake = max(3.0, round(BANKROLL_KELLY * f, 1))
+            kelly_candidates.append({
+                "match": match_label,
+                "league": league,
+                "market": market_label,
+                "prob": round(p, 3),
+                "fair": fair,
+                "odds": offered,
+                "edge": round(edge * 100.0, 1),
+                "stake": stake,
+                "f_fraction": round(f, 4),
+            })
 
-            kelly_candidates.append(
-                {
-                    "match": match_label,
-                    "league": league,
-                    "market": market_label,
-                    "prob": round(prob_model, 3),
-                    "fair": fair,
-                    "odds": offered,
-                    "edge": round(edge_pct, 1),
-                    "stake": float(stake),
-                    "f_fraction": round(f, 4),
-                }
-            )
+        add_kelly("Home", p_home, fair_1, offered_1)
+        add_kelly("Away", p_away, fair_2, offered_2)
 
-        # prefer direct probs, fallback to 1/fair
-        if home_prob is None and fair_1 and fair_1 > 0:
-            home_prob = 1.0 / fair_1
-        if away_prob is None and fair_2 and fair_2 > 0:
-            away_prob = 1.0 / fair_2
-
-        if offered_1 is not None and fair_1 is not None:
-            add_kelly_candidate("Home", fair_1, offered_1, home_prob)
-        if offered_2 is not None and fair_2 is not None:
-            add_kelly_candidate("Away", fair_2, offered_2, away_prob)
-
-    # sort + not-forced caps
-    draw_singles = sorted(draw_singles, key=lambda d: d["score"], reverse=True)[:MAX_DRAWS]
-    over_singles = sorted(over_singles, key=lambda o: o["score"], reverse=True)[:MAX_OVERS]
-    kelly_candidates = sorted(kelly_candidates, key=lambda k: k["edge"], reverse=True)[:MAX_KELLY]
+    # "not forced" caps — παίρνεις μόνο τα καλύτερα
+    draw_singles = sorted(draw_singles, key=lambda d: (d["edge"], d["score"]), reverse=True)[:MAX_DRAWS]
+    over_singles = sorted(over_singles, key=lambda o: (o["edge"], o["z_total"], o["score"]), reverse=True)[:MAX_OVERS]
+    kelly_candidates = sorted(kelly_candidates, key=lambda k: (k["edge"], k["f_fraction"]), reverse=True)[:MAX_KELLY]
 
     return draw_singles, over_singles, kelly_candidates
 
 def main():
-    log("🚀 Running Friday Shortlist v3.3 (best-not-forced, Kelly not flat)")
+    log("🚀 Running Friday Shortlist v3.3 (edge+confidence, scaled Kelly, not forced caps)")
 
     fixtures, th_report = load_thursday_fixtures()
     log(f"Loaded {len(fixtures)} fixtures from {THURSDAY_REPORT_PATH}")
