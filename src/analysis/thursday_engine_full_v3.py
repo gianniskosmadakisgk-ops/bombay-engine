@@ -5,21 +5,18 @@ import requests
 import datetime
 import unicodedata
 import re
-from statistics import mean, pstdev
 from dateutil import parser
 
 # ============================================================
-#  THURSDAY ENGINE v3.7 (Production Poisson + Dixon-Coles + Shrinkage + Sanity)
-#
-#  Goals:
-#   - Stable lambdas (no crazy fair odds like <1.15)
-#   - Dixon–Coles low-score correction -> more realistic draws (0-0, 1-1)
-#   - Sanity rules on probabilities (cap favorites, draw floor)
-#   - Over/Under scoring uses probability + z-score of lambda_total within league window
-#   - Odds matching: gated by time + similarity (prevents wrong match)
-#   - Adds value_pct_* fields for UI/Friday selection
-#
-#  Output: logs/thursday_report_v3.json (compatible)
+#  THURSDAY ENGINE v3.9 (Production Fair Odds Fix)
+#  - API-FOOTBALL fixtures + recent goals
+#  - Multiplicative Poisson model (Att/Def factors)
+#  - Empirical Bayes Shrinkage on team rates (K=8 default)
+#  - Dixon-Coles low-score correction (rho=-0.13 default)
+#  - Sanity caps (min fair odd floor, min draw prob)
+#  - FAIR = 1/prob (unchanged)
+#  - TheOddsAPI (1 call per league) + robust matching (as before)
+#  - Output: logs/thursday_report_v3.json (same schema)
 # ============================================================
 
 API_FOOTBALL_KEY = os.getenv("FOOTBALL_API_KEY")
@@ -33,22 +30,19 @@ FOOTBALL_SEASON = os.getenv("FOOTBALL_SEASON", "2025")
 USE_ODDS_API = os.getenv("USE_ODDS_API", "true").lower() == "true"
 WINDOW_HOURS = int(os.getenv("WINDOW_HOURS", "72"))
 
-# ---- Dixon-Coles + sanity controls (tweakable without code change)
-DC_RHO = float(os.getenv("DC_RHO", "0.12"))                 # typical 0.10 - 0.13
-DRAW_PROB_FLOOR = float(os.getenv("DRAW_PROB_FLOOR", "0.18"))  # keep draw alive
-FAV_PROB_CAP = float(os.getenv("FAV_PROB_CAP", "0.78"))        # avoids fair < ~1.28
+# Matching controls
+ODDS_TIME_GATE_HOURS = float(os.getenv("ODDS_TIME_GATE_HOURS", "6"))   # HARD gate
+ODDS_TIME_SOFT_HOURS = float(os.getenv("ODDS_TIME_SOFT_HOURS", "10"))  # soft penalty range
+ODDS_SIM_THRESHOLD = float(os.getenv("ODDS_SIM_THRESHOLD", "0.62"))    # similarity threshold
 
-# ---- Lambda shrinkage controls
-MIN_STATS_MATCHES = int(os.getenv("MIN_STATS_MATCHES", "6"))
-SHRINK_K = float(os.getenv("SHRINK_K", "8.0"))  # higher => more shrinkage to league avg
-LAMBDA_MIN = float(os.getenv("LAMBDA_MIN", "0.30"))
+# Model controls (new)
+SHRINKAGE_K = float(os.getenv("SHRINKAGE_K", "8"))             # Empirical Bayes strength
+DC_RHO = float(os.getenv("DC_RHO", "-0.13"))                   # Dixon-Coles rho
+LAMBDA_MIN = float(os.getenv("LAMBDA_MIN", "0.40"))
 LAMBDA_MAX_HOME = float(os.getenv("LAMBDA_MAX_HOME", "3.00"))
-LAMBDA_MAX_AWAY = float(os.getenv("LAMBDA_MAX_AWAY", "2.80"))
-
-# ---- Odds matching controls
-ODDS_TIME_GATE_HOURS = float(os.getenv("ODDS_TIME_GATE_HOURS", "6"))
-ODDS_TIME_SOFT_HOURS = float(os.getenv("ODDS_TIME_SOFT_HOURS", "10"))
-ODDS_SIM_THRESHOLD = float(os.getenv("ODDS_SIM_THRESHOLD", "0.62"))
+LAMBDA_MAX_AWAY = float(os.getenv("LAMBDA_MAX_AWAY", "3.00"))
+MIN_FAIR_ODD = float(os.getenv("MIN_FAIR_ODD", "1.25"))        # prob cap = 0.80
+MIN_DRAW_PROB = float(os.getenv("MIN_DRAW_PROB", "0.18"))      # buffer for X
 
 LEAGUES = {
     "Premier League": 39,
@@ -88,6 +82,7 @@ def safe_float(v, default=None):
         return default
 
 def implied(p: float):
+    # FAIR = 1/prob (SPEC – DO NOT CHANGE)
     return 1.0 / p if p and p > 0 else None
 
 # ------------------------- NAME NORMALIZATION -------------------------
@@ -102,6 +97,7 @@ def normalize_team_name(raw: str) -> str:
         return ""
     s = _strip_accents(raw).lower().strip()
     s = s.replace("&", "and")
+
     s = re.sub(r"[^a-z0-9\s]+", " ", s)
     s = re.sub(r"\s+", " ", s).strip()
 
@@ -196,93 +192,252 @@ def fetch_fixtures(league_id: int, league_name: str):
     log(f"→ {league_name}: {len(out)} fixtures within window")
     return out
 
-# ------------------------- LEAGUE BASELINES -------------------------
-def fetch_league_baselines(league_id: int):
-    overrides = {
-        39: {"avg_goals_per_match": 2.9, "avg_draw_rate": 0.24, "avg_over25_rate": 0.58, "home_advantage": 0.18},
-        40: {"avg_goals_per_match": 2.5, "avg_draw_rate": 0.28, "avg_over25_rate": 0.52, "home_advantage": 0.16},
-        78: {"avg_goals_per_match": 3.1, "avg_draw_rate": 0.25, "avg_over25_rate": 0.60, "home_advantage": 0.16},
-        135: {"avg_goals_per_match": 2.5, "avg_draw_rate": 0.30, "avg_over25_rate": 0.52, "home_advantage": 0.17},
-        140: {"avg_goals_per_match": 2.6, "avg_draw_rate": 0.27, "avg_over25_rate": 0.55, "home_advantage": 0.18},
-    }
-    base = {"avg_goals_per_match": 2.6, "avg_draw_rate": 0.26, "avg_over25_rate": 0.55, "home_advantage": 0.18}
-    if league_id in overrides:
-        base.update(overrides[league_id])
-    return base
-
-# ------------------------- TEAM STATS (API-FOOTBALL /teams/statistics) -------------------------
-def _football_get(path: str, params: dict):
-    url = f"{API_FOOTBALL_BASE}/{path}"
-    try:
-        res = requests.get(url, headers=HEADERS_FOOTBALL, params=params, timeout=25)
-        if res.status_code != 200:
-            return None
-        return res.json()
-    except Exception:
-        return None
-
-def fetch_team_statistics(team_id: int, league_id: int, season: str):
-    r = _football_get("teams/statistics", {"team": team_id, "league": league_id, "season": season})
-    if not r or not r.get("response"):
-        return None
-
-    resp = r["response"]
-    played = resp.get("fixtures", {}).get("played", {})
-    goals_for = resp.get("goals", {}).get("for", {}).get("average", {})
-    goals_against = resp.get("goals", {}).get("against", {}).get("average", {})
-
-    ph = int(safe_float(played.get("home"), 0.0) or 0)
-    pa = int(safe_float(played.get("away"), 0.0) or 0)
-
-    gf_h = safe_float(goals_for.get("home"), None)
-    gf_a = safe_float(goals_for.get("away"), None)
-    ga_h = safe_float(goals_against.get("home"), None)
-    ga_a = safe_float(goals_against.get("away"), None)
-
-    return {
-        "played_home": ph,
-        "played_away": pa,
-        "gf_home_pg": gf_h,
-        "ga_home_pg": ga_h,
-        "gf_away_pg": gf_a,
-        "ga_away_pg": ga_a,
-        "season": season,
-    }
-
-def get_team_stats(team_id: int, league_id: int):
-    ck = (team_id, league_id, FOOTBALL_SEASON)
+# ------------------------- TEAM RECENT GOALS (API-FOOTBALL) -------------------------
+def fetch_team_recent_stats(team_id: int, league_id: int):
+    ck = (team_id, league_id)
     if ck in TEAM_STATS_CACHE:
         return TEAM_STATS_CACHE[ck]
 
     if not API_FOOTBALL_KEY:
-        TEAM_STATS_CACHE[ck] = {"ok": False, "reason": "missing_api_key"}
+        TEAM_STATS_CACHE[ck] = {}
         return TEAM_STATS_CACHE[ck]
 
-    cur = fetch_team_statistics(team_id, league_id, FOOTBALL_SEASON)
-    sample = 0
-    if cur:
-        sample = (cur.get("played_home", 0) or 0) + (cur.get("played_away", 0) or 0)
+    url = f"{API_FOOTBALL_BASE}/fixtures"
+    params = {"team": team_id, "league": league_id, "season": FOOTBALL_SEASON, "last": 5}
 
-    used = cur
-    used_reason = "current_season"
-
-    if (not used) or sample < MIN_STATS_MATCHES:
-        try:
-            prev_season = str(int(FOOTBALL_SEASON) - 1)
-        except Exception:
-            prev_season = None
-        if prev_season:
-            prev = fetch_team_statistics(team_id, league_id, prev_season)
-            if prev:
-                used = prev
-                used_reason = "fallback_prev_season"
-
-    if not used:
-        TEAM_STATS_CACHE[ck] = {"ok": False, "reason": "no_stats"}
+    try:
+        r = requests.get(url, headers=HEADERS_FOOTBALL, params=params, timeout=25).json()
+    except Exception as e:
+        log(f"⚠️ Error fetching team stats team_id={team_id}: {e}")
+        TEAM_STATS_CACHE[ck] = {}
         return TEAM_STATS_CACHE[ck]
 
-    TEAM_STATS_CACHE[ck] = {"ok": True, "reason": used_reason, **used}
-    return TEAM_STATS_CACHE[ck]
+    resp = r.get("response") or []
+    if not resp:
+        TEAM_STATS_CACHE[ck] = {}
+        return TEAM_STATS_CACHE[ck]
+
+    gf = ga = m = 0
+    for fx in resp:
+        m += 1
+        g_home = fx["goals"]["home"] or 0
+        g_away = fx["goals"]["away"] or 0
+        is_home = fx["teams"]["home"]["id"] == team_id
+        if is_home:
+            gf += g_home
+            ga += g_away
+        else:
+            gf += g_away
+            ga += g_home
+
+    stats = {
+        "matches_count": m,
+        "avg_goals_for": (gf / m) if m else None,
+        "avg_goals_against": (ga / m) if m else None,
+    }
+    TEAM_STATS_CACHE[ck] = stats
+    return stats
+
+# ------------------------- LEAGUE BASELINES -------------------------
+def fetch_league_baselines(league_id: int):
+    # You can override these with real calibrated values later.
+    overrides = {
+        39: {"avg_goals_per_match": 2.9, "home_advantage": 0.18, "avg_draw_rate": 0.24, "avg_over25_rate": 0.58},
+        40: {"avg_goals_per_match": 2.5, "home_advantage": 0.16, "avg_draw_rate": 0.28, "avg_over25_rate": 0.52},
+        78: {"avg_goals_per_match": 3.1, "home_advantage": 0.17, "avg_draw_rate": 0.25, "avg_over25_rate": 0.60},
+        135: {"avg_goals_per_match": 2.5, "home_advantage": 0.15, "avg_draw_rate": 0.30, "avg_over25_rate": 0.52},
+        140: {"avg_goals_per_match": 2.6, "home_advantage": 0.16, "avg_draw_rate": 0.27, "avg_over25_rate": 0.55},
+    }
+    base = {"avg_goals_per_match": 2.6, "home_advantage": 0.16, "avg_draw_rate": 0.26, "avg_over25_rate": 0.55}
+    if league_id in overrides:
+        base.update(overrides[league_id])
+    return base
+
+# ------------------------- POISSON HELPERS -------------------------
+def poisson_pmf(k: int, lam: float) -> float:
+    if lam <= 0:
+        return 0.0
+    return math.exp(-lam) * (lam ** k) / math.factorial(k)
+
+def _clamp(x, lo, hi):
+    return max(lo, min(hi, x))
+
+# ------------------------- NEW: MULTIPLICATIVE LAMBDAS + SHRINKAGE -------------------------
+def compute_expected_goals(home_stats: dict, away_stats: dict, league_baseline: dict):
+    """
+    Multiplicative Poisson (production style):
+    - league_avg_team = avg_goals_per_match / 2
+    - shrink GF/GA to league_avg_team with K
+    - att = GF_shrunk / league_avg_team
+    - def = GA_shrunk / league_avg_team
+    - lambda_home = league_avg_team * att_home * def_away * home_adv_factor
+    - lambda_away = league_avg_team * att_away * def_home
+    """
+    avg_match = safe_float(league_baseline.get("avg_goals_per_match"), 2.6) or 2.6
+    league_avg_team = max(0.65, avg_match / 2.0)
+
+    home_adv = safe_float(league_baseline.get("home_advantage"), 0.16) or 0.16
+    home_adv_factor = 1.0 + home_adv
+
+    def get_rates(stats):
+        n = int(stats.get("matches_count") or 0)
+        gf_mle = safe_float(stats.get("avg_goals_for"), None)
+        ga_mle = safe_float(stats.get("avg_goals_against"), None)
+
+        # defaults if missing
+        if gf_mle is None:
+            gf_mle = league_avg_team
+        if ga_mle is None:
+            ga_mle = league_avg_team
+
+        # Empirical Bayes shrinkage
+        k = max(0.0, SHRINKAGE_K)
+        denom = (n + k) if (n + k) > 0 else 1.0
+
+        gf_shrunk = (n * gf_mle + k * league_avg_team) / denom
+        ga_shrunk = (n * ga_mle + k * league_avg_team) / denom
+
+        att = gf_shrunk / league_avg_team
+        dff = ga_shrunk / league_avg_team
+
+        return {
+            "n": n,
+            "gf_mle": gf_mle,
+            "ga_mle": ga_mle,
+            "gf_shrunk": gf_shrunk,
+            "ga_shrunk": ga_shrunk,
+            "att": att,
+            "def": dff,
+        }
+
+    h = get_rates(home_stats or {})
+    a = get_rates(away_stats or {})
+
+    lam_h = league_avg_team * h["att"] * a["def"] * home_adv_factor
+    lam_a = league_avg_team * a["att"] * h["def"]
+
+    lam_h = _clamp(lam_h, LAMBDA_MIN, LAMBDA_MAX_HOME)
+    lam_a = _clamp(lam_a, LAMBDA_MIN, LAMBDA_MAX_AWAY)
+    return lam_h, lam_a
+
+# ------------------------- NEW: DC-ADJUSTED PROBS -------------------------
+def compute_probabilities(lambda_home: float, lambda_away: float):
+    """
+    Builds 0..6 matrix (6 holds tail >6) and applies Dixon-Coles on (0,0),(1,0),(0,1),(1,1),
+    then renormalizes and derives 1X2 and O/U 2.5.
+    """
+    max_goals = 6
+
+    # PMFs with tail bucket at 6
+    pmf_h = [poisson_pmf(k, lambda_home) for k in range(max_goals)]
+    pmf_a = [poisson_pmf(k, lambda_away) for k in range(max_goals)]
+
+    tail_h = max(0.0, 1.0 - sum(pmf_h))
+    tail_a = max(0.0, 1.0 - sum(pmf_a))
+
+    pmf_h.append(tail_h)  # index 6
+    pmf_a.append(tail_a)  # index 6
+
+    # joint matrix
+    mat = [[0.0 for _ in range(max_goals + 1)] for __ in range(max_goals + 1)]
+    for i in range(max_goals + 1):
+        for j in range(max_goals + 1):
+            mat[i][j] = pmf_h[i] * pmf_a[j]
+
+    # Dixon-Coles adjustment (only low scores)
+    rho = DC_RHO
+    lamH = lambda_home
+    lamA = lambda_away
+
+    def tau(x, y):
+        if x == 0 and y == 0:
+            return 1.0 - lamH * lamA * rho
+        if x == 1 and y == 0:
+            return 1.0 + lamA * rho
+        if x == 0 and y == 1:
+            return 1.0 + lamH * rho
+        if x == 1 and y == 1:
+            return 1.0 - (lamH + lamA) * rho
+        return 1.0
+
+    for (x, y) in [(0, 0), (1, 0), (0, 1), (1, 1)]:
+        mat[x][y] *= tau(x, y)
+
+    # renormalize matrix
+    s = sum(sum(row) for row in mat)
+    if s <= 0:
+        # fallback
+        return {
+            "home_prob": 0.40,
+            "draw_prob": 0.26,
+            "away_prob": 0.34,
+            "over_2_5_prob": 0.55,
+            "under_2_5_prob": 0.45,
+        }
+    mat = [[v / s for v in row] for row in mat]
+
+    # derive 1X2 + totals
+    ph = pd = pa = 0.0
+    po = 0.0
+
+    for i in range(max_goals + 1):
+        for j in range(max_goals + 1):
+            p = mat[i][j]
+            if i > j:
+                ph += p
+            elif i == j:
+                pd += p
+            else:
+                pa += p
+
+            if (i + j) >= 3:
+                po += p
+
+    # safety: enforce draw floor, then cap max prob from MIN_FAIR_ODD
+    eps = 1e-6
+    max_p = 1.0 / max(1e-9, MIN_FAIR_ODD)
+
+    ph = max(eps, ph)
+    pd = max(eps, pd)
+    pa = max(eps, pa)
+
+    # enforce draw min
+    if pd < MIN_DRAW_PROB:
+        delta = MIN_DRAW_PROB - pd
+        pd = MIN_DRAW_PROB
+        rest = max(eps, ph + pa)
+        scale = max(eps, (1.0 - pd) / rest)
+        ph *= scale
+        pa *= scale
+
+    # cap overly confident probs (prevents fair < MIN_FAIR_ODD)
+    # simple cap then renormalize
+    ph = min(ph, max_p)
+    pd = min(pd, max_p)
+    pa = min(pa, max_p)
+    tot = ph + pd + pa
+    ph, pd, pa = ph / tot, pd / tot, pa / tot
+
+    # re-apply draw min if cap+norm broke it
+    if pd < MIN_DRAW_PROB:
+        delta = MIN_DRAW_PROB - pd
+        pd = MIN_DRAW_PROB
+        rest = max(eps, ph + pa)
+        scale = max(eps, (1.0 - pd) / rest)
+        ph *= scale
+        pa *= scale
+
+    # over/under safe
+    po = max(eps, min(1.0 - eps, po))
+    pu = 1.0 - po
+
+    return {
+        "home_prob": ph,
+        "draw_prob": pd,
+        "away_prob": pa,
+        "over_2_5_prob": po,
+        "under_2_5_prob": pu,
+    }
 
 # ------------------------- ODDS (TheOddsAPI) -------------------------
 def _odds_request(sport_key: str, params: dict):
@@ -346,10 +501,12 @@ def build_events_cache(odds_events):
         a = normalize_team_name(a_raw)
         if not h or not a:
             continue
+
         try:
             ct = parser.isoparse(ev.get("commence_time")).astimezone(datetime.timezone.utc)
         except Exception:
             ct = None
+
         out.append({
             "home_norm": h,
             "away_norm": a,
@@ -360,7 +517,7 @@ def build_events_cache(odds_events):
         })
     return out
 
-def _best_odds_from_event(ev_raw, event_home_norm, event_away_norm, swapped: bool):
+def _best_odds_from_event_for_fixture(ev_raw, event_home_norm, event_away_norm, swapped: bool):
     best_home = best_draw = best_away = None
     best_over = best_under = None
 
@@ -402,7 +559,13 @@ def _best_odds_from_event(ev_raw, event_home_norm, event_away_norm, swapped: boo
                     elif "under" in name and ("2.5" in name or point == 2.5):
                         best_under = max(best_under or 0.0, price)
 
-    return {"home": best_home, "draw": best_draw, "away": best_away, "over": best_over, "under": best_under}
+    return {
+        "home": best_home,
+        "draw": best_draw,
+        "away": best_away,
+        "over": best_over,
+        "under": best_under,
+    }
 
 def pick_best_odds_for_fixture(fx, league_events_cache):
     if not league_events_cache:
@@ -421,11 +584,11 @@ def pick_best_odds_for_fixture(fx, league_events_cache):
 
     for ev in league_events_cache:
         ct = ev["commence_time"]
-        diff_h = None
         if fx_time and ct:
             diff_h = abs((ct - fx_time).total_seconds()) / 3600.0
+        else:
+            diff_h = None
 
-        # HARD time gate
         if diff_h is not None and diff_h > ODDS_TIME_GATE_HOURS:
             continue
 
@@ -453,10 +616,11 @@ def pick_best_odds_for_fixture(fx, league_events_cache):
 
     if best is None:
         return {}, {"matched": False, "reason": f"time_gate_no_candidates(>{ODDS_TIME_GATE_HOURS}h)"}
+
     if best_score < ODDS_SIM_THRESHOLD:
         return {}, {"matched": False, "reason": f"low_similarity(score={best_score:.2f})"}
 
-    odds = _best_odds_from_event(best["raw"], best["home_norm"], best["away_norm"], best_swap)
+    odds = _best_odds_from_event_for_fixture(best["raw"], best["home_norm"], best["away_norm"], best_swap)
 
     debug = {
         "matched": True,
@@ -466,7 +630,13 @@ def pick_best_odds_for_fixture(fx, league_events_cache):
     }
     return odds, debug
 
-# ------------------------- VALUE % -------------------------
+# ------------------------- SCORES -------------------------
+def score_1_10(p: float) -> float:
+    s = round((p or 0.0) * 10.0, 1)
+    if s < 1.0: s = 1.0
+    if s > 10.0: s = 10.0
+    return s
+
 def value_pct(offered, fair):
     if offered is None or fair is None:
         return None
@@ -477,208 +647,19 @@ def value_pct(offered, fair):
     except Exception:
         return None
 
-# ------------------------- LAMBDA MODEL (shrinkage + tempo) -------------------------
-def shrink(v: float, n: float, prior: float, k: float = SHRINK_K) -> float:
-    # Bayesian-style shrinkage: weighted average of observed vs prior
-    # n: sample size (matches)
-    if v is None:
-        return prior
-    n = max(0.0, float(n or 0.0))
-    w = n / (n + k) if (n + k) > 0 else 0.0
-    return w * float(v) + (1.0 - w) * float(prior)
-
-def compute_expected_goals(home_stats: dict, away_stats: dict, league_baseline: dict):
-    """
-    Production xG:
-      λ_home = atk_home * def_away * league_avg_home
-      λ_away = atk_away * def_home * league_avg_away
-    with shrinkage to league priors and soft tempo adjustment.
-    """
-    league_avg = safe_float(league_baseline.get("avg_goals_per_match"), 2.6) or 2.6
-    home_adv = safe_float(league_baseline.get("home_advantage"), 0.18) or 0.18
-    lg_over = safe_float(league_baseline.get("avg_over25_rate"), 0.55) or 0.55
-
-    denom = max(0.60, league_avg / 2.0)  # baseline goals per team
-    league_avg_home = denom * (1.0 + 0.20)  # small structural home bias
-    league_avg_away = denom * (1.0 - 0.05)  # small away drag
-
-    # sample sizes
-    h_n = float((home_stats.get("played_home", 0) or 0) + (home_stats.get("played_away", 0) or 0))
-    a_n = float((away_stats.get("played_home", 0) or 0) + (away_stats.get("played_away", 0) or 0))
-
-    # observed per-game
-    h_gf_home = safe_float(home_stats.get("gf_home_pg"), None)
-    h_ga_home = safe_float(home_stats.get("ga_home_pg"), None)
-    a_gf_away = safe_float(away_stats.get("gf_away_pg"), None)
-    a_ga_away = safe_float(away_stats.get("ga_away_pg"), None)
-
-    # shrink to priors
-    h_gf_home = shrink(h_gf_home, h_n, league_avg_home)
-    h_ga_home = shrink(h_ga_home, h_n, denom)
-    a_gf_away = shrink(a_gf_away, a_n, league_avg_away)
-    a_ga_away = shrink(a_ga_away, a_n, denom)
-
-    # strengths (multiplicative)
-    atk_home = max(0.40, h_gf_home / max(0.40, league_avg_home))
-    def_away = max(0.40, a_ga_away / max(0.40, denom))  # higher conceded => weaker defense => boosts home goals
-
-    atk_away = max(0.40, a_gf_away / max(0.40, league_avg_away))
-    def_home = max(0.40, h_ga_home / max(0.40, denom))
-
-    lam_h = atk_home * def_away * league_avg_home
-    lam_a = atk_away * def_home * league_avg_away
-
-    # home advantage (final)
-    lam_h *= (1.0 + home_adv)
-
-    # tempo adjustment (soft)
-    # over_bias = min(0.15, 0.05 * (league_ov25 - 0.52))
-    over_bias = min(0.15, 0.05 * ((lg_over or 0.55) - 0.52))
-    if over_bias > 0:
-        lam_h *= (1.0 + over_bias)
-        lam_a *= (1.0 + over_bias)
-
-    # clamps
-    lam_h = max(LAMBDA_MIN, min(LAMBDA_MAX_HOME, lam_h))
-    lam_a = max(LAMBDA_MIN, min(LAMBDA_MAX_AWAY, lam_a))
-
-    return lam_h, lam_a
-
-# ------------------------- POISSON + DIXON-COLES -------------------------
-def poisson_pmf(k: int, lam: float) -> float:
-    if lam <= 0:
-        return 0.0
-    return math.exp(-lam) * (lam ** k) / math.factorial(k)
-
-def poisson_probs_0_6_plus_tail(lam: float):
-    # returns probs for [0..6] and tail bucket [>=7] at index 7
-    p = [poisson_pmf(i, lam) for i in range(7)]
-    tail = max(0.0, 1.0 - sum(p))
-    p.append(tail)
-    return p  # len=8
-
-def dc_tau(x: int, y: int, lam_h: float, lam_a: float, rho: float):
-    # Dixon–Coles correction term for low scores
-    if x == 0 and y == 0:
-        return 1.0 - (lam_h * lam_a * rho)
-    if x == 1 and y == 0:
-        return 1.0 + (lam_a * rho)
-    if x == 0 and y == 1:
-        return 1.0 + (lam_h * rho)
-    if x == 1 and y == 1:
-        return 1.0 - ((lam_h + lam_a) * rho)
-    return 1.0
-
-def compute_probabilities_dc(lam_h: float, lam_a: float):
-    # Build 8x8 score matrix using buckets 0..6 and tail(7= >=7)
-    ph = pd = pa = 0.0
-    po = 0.0
-
-    pH = poisson_probs_0_6_plus_tail(lam_h)
-    pA = poisson_probs_0_6_plus_tail(lam_a)
-
-    for x in range(8):
-        for y in range(8):
-            base = pH[x] * pA[y]
-
-            # apply DC only for true low scores (0/1), not tail bucket
-            tau = 1.0
-            if x <= 1 and y <= 1:
-                tau = dc_tau(x, y, lam_h, lam_a, DC_RHO)
-
-            p = base * tau
-            # safeguard if tau goes negative (can happen if extreme λ and rho)
-            if p < 0:
-                p = 0.0
-
-            # interpret tail as 7 for comparisons (good enough for production)
-            xg = 7 if x == 7 else x
-            yg = 7 if y == 7 else y
-
-            if xg > yg:
-                ph += p
-            elif xg == yg:
-                pd += p
-            else:
-                pa += p
-
-            if (xg + yg) >= 3:
-                po += p
-
-    tot = ph + pd + pa
-    if tot <= 0:
-        ph, pd, pa = 0.40, 0.20, 0.40
-        tot = 1.0
-    else:
-        ph, pd, pa = ph / tot, pd / tot, pa / tot
-
-    # --- Sanity: draw floor & favorite cap ---
-    # cap favorites
-    ph = min(ph, FAV_PROB_CAP)
-    pa = min(pa, FAV_PROB_CAP)
-
-    # enforce draw floor
-    if pd < DRAW_PROB_FLOOR:
-        need = DRAW_PROB_FLOOR - pd
-        pd = DRAW_PROB_FLOOR
-        rest = max(1e-12, ph + pa)
-        # take proportionally from ph/pa
-        take_h = need * (ph / rest)
-        take_a = need * (pa / rest)
-        ph = max(1e-6, ph - take_h)
-        pa = max(1e-6, pa - take_a)
-
-    # renormalize after rules
-    s = ph + pd + pa
-    ph, pd, pa = ph / s, pd / s, pa / s
-
-    # clamp over (soft only)
-    po = max(1e-6, min(1.0 - 1e-6, po))
-    pu = 1.0 - po
-
-    return {
-        "home_prob": ph,
-        "draw_prob": pd,
-        "away_prob": pa,
-        "over_2_5_prob": po,
-        "under_2_5_prob": pu,
-    }
-
-# ------------------------- SCORES (prob + zscore / closeness) -------------------------
-def clamp_1_10(x: float) -> float:
-    x = round(float(x), 1)
-    if x < 1.0: return 1.0
-    if x > 10.0: return 10.0
-    return x
-
-def score_draw(draw_prob: float, lam_h: float, lam_a: float) -> float:
-    closeness = 1.0 - min(1.0, abs(lam_h - lam_a) / 1.20)  # 0..1
-    s = (draw_prob * 7.0 + closeness * 3.0) * 10.0 / 1.0
-    return clamp_1_10(s)
-
-def score_over(over_prob: float, z_total: float) -> float:
-    z = max(0.0, min(1.0, z_total / 1.5))  # scale 0..~1
-    s = (over_prob * 7.0 + z * 3.0) * 10.0 / 1.0
-    return clamp_1_10(s)
-
-def score_under(under_prob: float, z_total: float) -> float:
-    z = max(0.0, min(1.0, (-z_total) / 1.5))
-    s = (under_prob * 7.0 + z * 3.0) * 10.0 / 1.0
-    return clamp_1_10(s)
-
 # ------------------------- MAIN PIPELINE -------------------------
 def build_fixture_blocks():
     fixtures_out = []
     now = datetime.datetime.now(datetime.timezone.utc)
     to_dt = now + datetime.timedelta(hours=WINDOW_HOURS)
 
-    odds_from = now - datetime.timedelta(hours=8)  # widened
+    odds_from = now - datetime.timedelta(hours=8)
 
     log(f"Using FOOTBALL_SEASON={FOOTBALL_SEASON}")
     log(f"Window: next {WINDOW_HOURS} hours")
     log(f"USE_ODDS_API={USE_ODDS_API}")
-    log(f"DC_RHO={DC_RHO} | DRAW_PROB_FLOOR={DRAW_PROB_FLOOR} | FAV_PROB_CAP={FAV_PROB_CAP}")
     log(f"ODDS_TIME_GATE_HOURS={ODDS_TIME_GATE_HOURS} | ODDS_SIM_THRESHOLD={ODDS_SIM_THRESHOLD}")
+    log(f"MODEL: ShrinkageK={SHRINKAGE_K} | DC_RHO={DC_RHO} | MIN_FAIR_ODD={MIN_FAIR_ODD} | MIN_DRAW_PROB={MIN_DRAW_PROB}")
 
     if not API_FOOTBALL_KEY:
         log("❌ FOOTBALL_API_KEY is missing. Aborting fixture fetch.")
@@ -690,7 +671,6 @@ def build_fixture_blocks():
 
     log(f"Total raw fixtures collected: {len(all_fixtures)}")
 
-    # odds cache per league
     odds_cache_by_league = {}
     if USE_ODDS_API:
         total_events = 0
@@ -702,81 +682,17 @@ def build_fixture_blocks():
     else:
         log("⚠️ USE_ODDS_API=False → skipping TheOddsAPI.")
 
-    # First pass: compute lambdas + probs; collect lambda_total per league for z-scoring
-    temp_rows = []
-    lam_totals_by_league = {}
-
     matched_cnt = 0
-    stats_fallback_cnt = 0
-    stats_missing_cnt = 0
-
     for fx in all_fixtures:
         league_id = fx["league_id"]
         league_name = fx["league_name"]
-        lb = fetch_league_baselines(league_id)
 
-        hs = get_team_stats(fx["home_id"], league_id)
-        aw = get_team_stats(fx["away_id"], league_id)
+        league_baseline = fetch_league_baselines(league_id)
+        home_stats = fetch_team_recent_stats(fx["home_id"], league_id)
+        away_stats = fetch_team_recent_stats(fx["away_id"], league_id)
 
-        if not hs.get("ok") or not aw.get("ok"):
-            stats_missing_cnt += 1
-        if hs.get("reason") == "fallback_prev_season" or aw.get("reason") == "fallback_prev_season":
-            stats_fallback_cnt += 1
-
-        lam_h, lam_a = compute_expected_goals(hs, aw, lb)
-        probs = compute_probabilities_dc(lam_h, lam_a)
-
-        offered = {}
-        match_debug = {"matched": False, "reason": "odds_off"}
-        if USE_ODDS_API:
-            league_cache = odds_cache_by_league.get(league_name, [])
-            offered, match_debug = pick_best_odds_for_fixture(fx, league_cache)
-            if match_debug.get("matched"):
-                matched_cnt += 1
-
-        dt = fx["commence_utc"]
-        lam_sum = lam_h + lam_a
-
-        lam_totals_by_league.setdefault(league_name, []).append(lam_sum)
-
-        temp_rows.append({
-            "fx": fx,
-            "lb": lb,
-            "hs": hs,
-            "aw": aw,
-            "lam_h": lam_h,
-            "lam_a": lam_a,
-            "lam_sum": lam_sum,
-            "probs": probs,
-            "offered": offered,
-            "match_debug": match_debug,
-            "dt": dt,
-        })
-
-    # league z-score params
-    league_z = {}
-    for lg, arr in lam_totals_by_league.items():
-        if not arr:
-            league_z[lg] = (0.0, 1.0)
-            continue
-        m = mean(arr)
-        sd = pstdev(arr) if len(arr) >= 2 else 0.35
-        if sd < 0.15:
-            sd = 0.15
-        league_z[lg] = (m, sd)
-
-    # Second pass: build output with scores + value_pct
-    for row in temp_rows:
-        fx = row["fx"]
-        league_name = fx["league_name"]
-        probs = row["probs"]
-        offered = row["offered"]
-        match_debug = row["match_debug"]
-        dt = row["dt"]
-
-        lam_h = row["lam_h"]
-        lam_a = row["lam_a"]
-        lam_sum = row["lam_sum"]
+        lam_h, lam_a = compute_expected_goals(home_stats, away_stats, league_baseline)
+        probs = compute_probabilities(lam_h, lam_a)
 
         p_home = probs["home_prob"]
         p_draw = probs["draw_prob"]
@@ -790,68 +706,75 @@ def build_fixture_blocks():
         fair_over = implied(p_over)
         fair_under = implied(p_under)
 
+        offered = {}
+        match_debug = {"matched": False, "reason": "odds_off"}
+        if USE_ODDS_API:
+            league_cache = odds_cache_by_league.get(league_name, [])
+            offered, match_debug = pick_best_odds_for_fixture(fx, league_cache)
+            if match_debug.get("matched"):
+                matched_cnt += 1
+
+        dt = fx["commence_utc"]
+
         off_1 = offered.get("home")
         off_x = offered.get("draw")
         off_2 = offered.get("away")
         off_o = offered.get("over")
         off_u = offered.get("under")
 
-        m, sd = league_z.get(league_name, (0.0, 1.0))
-        z_total = (lam_sum - m) / sd if sd > 0 else 0.0
-
         fixtures_out.append(
             {
                 "fixture_id": fx["id"],
                 "date": dt.date().isoformat(),
                 "time": dt.strftime("%H:%M"),
-                "league_id": fx["league_id"],
+                "league_id": league_id,
                 "league": league_name,
                 "home": fx["home"],
                 "away": fx["away"],
-                "model": "bombay_production_v3_7_dc",
+                "model": "bombay_multiplicative_dc_v3_9",
 
                 "lambda_home": round(lam_h, 3),
                 "lambda_away": round(lam_a, 3),
-                "lambda_total": round(lam_sum, 3),
-                "z_total": round(z_total, 3),
 
+                # probs
                 "home_prob": round(p_home, 3),
                 "draw_prob": round(p_draw, 3),
                 "away_prob": round(p_away, 3),
                 "over_2_5_prob": round(p_over, 3),
                 "under_2_5_prob": round(p_under, 3),
 
+                # fair
                 "fair_1": fair_1,
                 "fair_x": fair_x,
                 "fair_2": fair_2,
                 "fair_over_2_5": fair_over,
                 "fair_under_2_5": fair_under,
 
+                # offered
                 "offered_1": off_1,
                 "offered_x": off_x,
                 "offered_2": off_2,
                 "offered_over_2_5": off_o,
                 "offered_under_2_5": off_u,
 
+                # value pct
                 "value_pct_1": value_pct(off_1, fair_1),
                 "value_pct_x": value_pct(off_x, fair_x),
                 "value_pct_2": value_pct(off_2, fair_2),
                 "value_pct_over": value_pct(off_o, fair_over),
                 "value_pct_under": value_pct(off_u, fair_under),
 
-                "score_draw": score_draw(p_draw, lam_h, lam_a),
-                "score_over": score_over(p_over, z_total),
-                "score_under": score_under(p_under, z_total),
+                # scores (kept for UI compat)
+                "score_draw": score_1_10(p_draw),
+                "score_over": score_1_10(p_over),
+                "score_under": score_1_10(p_under),
 
-                "stats_home": {"ok": row["hs"].get("ok"), "reason": row["hs"].get("reason"), "season": row["hs"].get("season")},
-                "stats_away": {"ok": row["aw"].get("ok"), "reason": row["aw"].get("reason"), "season": row["aw"].get("season")},
-
+                # debug
                 "odds_match": match_debug,
             }
         )
 
     log(f"Thursday fixtures_out: {len(fixtures_out)} | odds matched: {matched_cnt}")
-    log(f"Stats: fallback_prev_season={stats_fallback_cnt} | missing_stats={stats_missing_cnt}")
     return fixtures_out
 
 def main():
@@ -871,7 +794,7 @@ def main():
     with open("logs/thursday_report_v3.json", "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, indent=2)
 
-    log(f"✅ Thursday v3.7 READY. Fixtures: {len(fixtures)}")
+    log(f"✅ Thursday v3.9 READY. Fixtures: {len(fixtures)}")
 
 if __name__ == "__main__":
     main()
