@@ -17,14 +17,19 @@ MAX_FUN_EXPOSURE_PCT = 0.20
 # Kelly (SAFE)
 KELLY_FRACTION = 0.30
 KELLY_MIN_EDGE = 0.15
-KELLY_MAX_ODDS = 4.0          # ✅ HARD CAP όπως είπες
+KELLY_MAX_ODDS = 4.0          # HARD CAP
 KELLY_MAX_PICKS = 6
 KELLY_MIN_PROB = 0.18
 
-# Draw engine
-MIN_DRAW_PROB = 0.38
+# Draw engine (REALISTIC for poisson + blend)
+MIN_DRAW_PROB = 0.26
 MIN_DRAW_ODDS = 2.80
 DRAW_STAKE = 30.0
+
+# Value draw fallback (prevents "0 draws" weeks)
+VALUE_DRAW_MIN_PROB = 0.22
+VALUE_DRAW_MIN_ODDS = 2.60
+VALUE_DRAW_MIN_EDGE = 0.08    # +8% vs fair
 
 # Over engine
 MIN_OVER_PROB = 0.65
@@ -53,13 +58,13 @@ def safe_float(v, default=None):
         return default
 
 def compute_draw_score(draw_prob, league):
-    score = draw_prob * 100.0
+    score = (draw_prob or 0.0) * 100.0
     if league in DRAW_PRIORITY_LEAGUES:
         score *= 1.05
     return score
 
 def compute_over_score(over_prob, league):
-    score = over_prob * 100.0
+    score = (over_prob or 0.0) * 100.0
     if league in OVER_PRIORITY_LEAGUES:
         score *= 1.05
     return score
@@ -126,20 +131,43 @@ def generate_picks(fixtures):
     over_singles = []
     kelly_candidates = []
 
+    # debug counters
+    dbg = {
+        "fixtures_seen": 0,
+        "missing_offered_x": 0,
+        "missing_offered_over": 0,
+        "kelly_missing_offered_1": 0,
+        "kelly_missing_offered_2": 0,
+        "draw_core_pass": 0,
+        "draw_value_pass": 0,
+        "over_pass": 0,
+        "kelly_pass": 0,
+    }
+
     for f in fixtures:
+        dbg["fixtures_seen"] += 1
+
         home = f.get("home")
         away = f.get("away")
         league = f.get("league")
         match_label = f"{home} – {away}"
 
+        # fair
         fair_1 = safe_float(f.get("fair_1"))
         fair_x = safe_float(f.get("fair_x"))
         fair_2 = safe_float(f.get("fair_2"))
         fair_over = safe_float(f.get("fair_over_2_5"))
 
-        # probs
-        draw_prob = safe_float(f.get("draw_prob"), 0.0) or 0.0
-        over_prob = safe_float(f.get("over_2_5_prob"), 0.0) or 0.0
+        # probs (prefer direct model probs if available)
+        draw_prob = safe_float(f.get("draw_prob"), None)
+        over_prob = safe_float(f.get("over_2_5_prob"), None)
+        home_prob = safe_float(f.get("home_prob"), None)
+        away_prob = safe_float(f.get("away_prob"), None)
+
+        if draw_prob is None:
+            draw_prob = 0.0
+        if over_prob is None:
+            over_prob = 0.0
 
         # offered
         offered_1 = safe_float(f.get("offered_1"))
@@ -152,51 +180,74 @@ def generate_picks(fixtures):
         over_score = compute_over_score(over_prob, league)
 
         # ---------------- DRAW SINGLES ----------------
-        if (
-            draw_prob >= MIN_DRAW_PROB
-            and offered_x is not None
-            and offered_x >= MIN_DRAW_ODDS
-            and fair_x is not None
-        ):
-            draw_singles.append(
-                {
-                    "match": match_label,
-                    "league": league,
-                    "fair": fair_x,
-                    "prob": round(draw_prob, 3),
-                    "score": round(draw_score, 1),
-                    "odds": offered_x,
-                    "stake": DRAW_STAKE,
-                }
+        if offered_x is None:
+            dbg["missing_offered_x"] += 1
+        else:
+            core_draw_ok = (
+                draw_prob >= MIN_DRAW_PROB
+                and offered_x >= MIN_DRAW_ODDS
+                and fair_x is not None
             )
 
+            value_draw_ok = False
+            if (not core_draw_ok) and fair_x and offered_x:
+                edge = (offered_x / fair_x) - 1.0
+                value_draw_ok = (
+                    draw_prob >= VALUE_DRAW_MIN_PROB
+                    and offered_x >= VALUE_DRAW_MIN_ODDS
+                    and edge >= VALUE_DRAW_MIN_EDGE
+                )
+
+            if core_draw_ok:
+                dbg["draw_core_pass"] += 1
+            if value_draw_ok:
+                dbg["draw_value_pass"] += 1
+
+            if core_draw_ok or value_draw_ok:
+                draw_singles.append(
+                    {
+                        "match": match_label,
+                        "league": league,
+                        "fair": fair_x,
+                        "prob": round(draw_prob, 3),
+                        "score": round(draw_score, 1),
+                        "odds": offered_x,
+                        "stake": DRAW_STAKE,
+                    }
+                )
+
         # ---------------- OVER SINGLES ----------------
-        if (
-            fair_over is not None
-            and over_prob >= MIN_OVER_PROB
-            and fair_over <= MAX_FAIR_OVER
-            and offered_over is not None
-            and offered_over > 1.01
-        ):
-            tier, stake = classify_over_stake(over_prob, fair_over, league)
-            over_singles.append(
-                {
-                    "match": match_label,
-                    "league": league,
-                    "fair": fair_over,
-                    "prob": round(over_prob, 3),
-                    "score": round(over_score, 1),
-                    "odds": offered_over,
-                    "tier": tier,
-                    "stake": float(stake),
-                }
-            )
+        if offered_over is None:
+            dbg["missing_offered_over"] += 1
+        else:
+            if (
+                fair_over is not None
+                and over_prob >= MIN_OVER_PROB
+                and fair_over <= MAX_FAIR_OVER
+                and offered_over > 1.01
+            ):
+                tier, stake = classify_over_stake(over_prob, fair_over, league)
+                over_singles.append(
+                    {
+                        "match": match_label,
+                        "league": league,
+                        "fair": fair_over,
+                        "prob": round(over_prob, 3),
+                        "score": round(over_score, 1),
+                        "odds": offered_over,
+                        "tier": tier,
+                        "stake": float(stake),
+                    }
+                )
+                dbg["over_pass"] += 1
 
         # ---------------- KELLY (ONLY 1 & 2, MAX ODDS 4.0) ----------------
         def add_kelly_candidate(market_label, fair, offered, prob_model):
             if fair is None or offered is None:
                 return
             if offered > KELLY_MAX_ODDS:
+                return
+            if prob_model is None:
                 return
             if prob_model < KELLY_MIN_PROB:
                 return
@@ -217,13 +268,11 @@ def generate_picks(fixtures):
 
             f = f_full * KELLY_FRACTION
 
-            # odds-dependent cap (keep it tight)
+            # odds-dependent cap (tight)
             if offered <= 2.5:
                 cap = 0.05
-            elif offered <= 4.0:
-                cap = 0.03
             else:
-                cap = 0.01
+                cap = 0.03  # since max odds is 4.0, keep it here
 
             f = min(f, cap)
             if f <= 0:
@@ -245,21 +294,29 @@ def generate_picks(fixtures):
                     "f_fraction": round(f, 4),
                 }
             )
+            dbg["kelly_pass"] += 1
 
-        # probs for 1/2 derived from fair (fair = 1/p)
-        p_home = (1.0 / fair_1) if fair_1 and fair_1 > 0 else 0.0
-        p_away = (1.0 / fair_2) if fair_2 and fair_2 > 0 else 0.0
+        # prefer direct probs, fall back to 1/fair if missing (backward compat)
+        if home_prob is None and fair_1 and fair_1 > 0:
+            home_prob = 1.0 / fair_1
+        if away_prob is None and fair_2 and fair_2 > 0:
+            away_prob = 1.0 / fair_2
 
-        if offered_1 is not None and fair_1 is not None:
-            add_kelly_candidate("Home", fair_1, offered_1, p_home)
-        if offered_2 is not None and fair_2 is not None:
-            add_kelly_candidate("Away", fair_2, offered_2, p_away)
+        if offered_1 is None:
+            dbg["kelly_missing_offered_1"] += 1
+        else:
+            add_kelly_candidate("Home", fair_1, offered_1, home_prob)
+
+        if offered_2 is None:
+            dbg["kelly_missing_offered_2"] += 1
+        else:
+            add_kelly_candidate("Away", fair_2, offered_2, away_prob)
 
     draw_singles = sorted(draw_singles, key=lambda d: d["score"], reverse=True)[:10]
     over_singles = sorted(over_singles, key=lambda o: o["score"], reverse=True)[:10]
     kelly_candidates = sorted(kelly_candidates, key=lambda k: k["edge"], reverse=True)[:KELLY_MAX_PICKS]
 
-    return draw_singles, over_singles, kelly_candidates
+    return draw_singles, over_singles, kelly_candidates, dbg
 
 def main():
     log("🚀 Running Friday Shortlist v3 (units, no extra odds calls)")
@@ -267,7 +324,7 @@ def main():
     fixtures, th_report = load_thursday_fixtures()
     log(f"Loaded {len(fixtures)} fixtures from {THURSDAY_REPORT_PATH}")
 
-    draw_singles, over_singles, kelly_picks = generate_picks(fixtures)
+    draw_singles, over_singles, kelly_picks, debug = generate_picks(fixtures)
 
     fb_draw = funbet_draw(draw_singles)
     fb_over = funbet_over(over_singles)
@@ -296,6 +353,7 @@ def main():
         "funbet_over": fb_over,
         "kelly": kelly_picks,
         "bankrolls": bankrolls,
+        "debug": debug,  # ✅ important: see why you got few/zero picks
     }
 
     os.makedirs(os.path.dirname(FRIDAY_REPORT_PATH), exist_ok=True)
@@ -303,6 +361,7 @@ def main():
         json.dump(output, f, ensure_ascii=False, indent=2)
 
     log(f"✅ Friday Shortlist v3 saved → {FRIDAY_REPORT_PATH}")
+    log(f"   Debug: {output['debug']}")
 
 if __name__ == "__main__":
     main()
