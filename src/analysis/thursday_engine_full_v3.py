@@ -8,15 +8,14 @@ import re
 from dateutil import parser
 
 # ============================================================
-#  THURSDAY ENGINE v3.10 (Production Fair Odds Fix + TSI Prior)
+#  THURSDAY ENGINE v3.10 (Production Fair Odds + Robustness Fix)
 #  - API-FOOTBALL fixtures + recent goals
 #  - Multiplicative Poisson model (Att/Def factors)
 #  - Empirical Bayes Shrinkage on team rates (K=8 default)
-#  - Dixon-Coles low-score correction (rho=-0.13 default)
+#  - Dixon-Coles low-score correction (STANDARD tau; rho=-0.13 default)
 #  - Sanity caps (min fair odd floor, min draw prob)
 #  - FAIR = 1/prob (unchanged)
 #  - TheOddsAPI (1 call per league) + robust matching (as before)
-#  - NEW: Team Strength Prior (TSI) via points-per-match (PPM) (soft!)
 #  - Output: logs/thursday_report_v3.json (same schema)
 # ============================================================
 
@@ -39,18 +38,17 @@ ODDS_SIM_THRESHOLD = float(os.getenv("ODDS_SIM_THRESHOLD", "0.62"))    # similar
 # Model controls
 SHRINKAGE_K = float(os.getenv("SHRINKAGE_K", "8"))             # Empirical Bayes strength
 DC_RHO = float(os.getenv("DC_RHO", "-0.13"))                   # Dixon-Coles rho
+
 LAMBDA_MIN = float(os.getenv("LAMBDA_MIN", "0.40"))
 LAMBDA_MAX_HOME = float(os.getenv("LAMBDA_MAX_HOME", "3.00"))
 LAMBDA_MAX_AWAY = float(os.getenv("LAMBDA_MAX_AWAY", "3.00"))
+
 MIN_FAIR_ODD = float(os.getenv("MIN_FAIR_ODD", "1.25"))        # prob cap = 0.80
 MIN_DRAW_PROB = float(os.getenv("MIN_DRAW_PROB", "0.18"))      # buffer for X
 
-# NEW: Team Strength Prior (TSI) controls
-TSI_POWER = float(os.getenv("TSI_POWER", "0.12"))     # 0.10–0.15 typical
-TSI_CLAMP_LO = float(os.getenv("TSI_CLAMP_LO", "0.90"))
-TSI_CLAMP_HI = float(os.getenv("TSI_CLAMP_HI", "1.10"))
-TSI_SOURCE = os.getenv("TSI_SOURCE", "points")        # "points" only for now
-TSI_LOOKBACK = int(os.getenv("TSI_LOOKBACK", "20"))   # last N fixtures for PPM
+# If you want: set USE_DYNAMIC_LEAGUE_BASELINES=true to compute baselines from recent finished fixtures.
+USE_DYNAMIC_LEAGUE_BASELINES = os.getenv("USE_DYNAMIC_LEAGUE_BASELINES", "false").lower() == "true"
+BASELINES_LAST_N = int(os.getenv("BASELINES_LAST_N", "180"))  # how many finished fixtures to sample (best-effort)
 
 LEAGUES = {
     "Premier League": 39,
@@ -77,7 +75,6 @@ LEAGUE_TO_SPORT = {
 }
 
 TEAM_STATS_CACHE = {}
-TEAM_PPM_CACHE = {}
 
 def log(msg: str):
     print(msg, flush=True)
@@ -205,8 +202,15 @@ def fetch_fixtures(league_id: int, league_name: str):
     return out
 
 # ------------------------- TEAM RECENT GOALS (API-FOOTBALL) -------------------------
-def fetch_team_recent_stats(team_id: int, league_id: int):
-    ck = (team_id, league_id)
+def fetch_team_recent_stats(team_id: int, league_id: int, want_home_context: bool = None):
+    """
+    If want_home_context:
+      True  => try compute rates from recent HOME games for this team
+      False => try compute rates from recent AWAY games for this team
+      None  => overall last games
+    Best-effort: fetch last 10 and filter; fallback to overall if not enough.
+    """
+    ck = (team_id, league_id, want_home_context)
     if ck in TEAM_STATS_CACHE:
         return TEAM_STATS_CACHE[ck]
 
@@ -215,7 +219,7 @@ def fetch_team_recent_stats(team_id: int, league_id: int):
         return TEAM_STATS_CACHE[ck]
 
     url = f"{API_FOOTBALL_BASE}/fixtures"
-    params = {"team": team_id, "league": league_id, "season": FOOTBALL_SEASON, "last": 5}
+    params = {"team": team_id, "league": league_id, "season": FOOTBALL_SEASON, "last": 10}
 
     try:
         r = requests.get(url, headers=HEADERS_FOOTBALL, params=params, timeout=25).json()
@@ -224,13 +228,28 @@ def fetch_team_recent_stats(team_id: int, league_id: int):
         TEAM_STATS_CACHE[ck] = {}
         return TEAM_STATS_CACHE[ck]
 
-    resp = r.get("response") or []
-    if not resp:
+    resp_all = r.get("response") or []
+    if not resp_all:
         TEAM_STATS_CACHE[ck] = {}
         return TEAM_STATS_CACHE[ck]
 
+    # filter by venue context if requested
+    resp = []
+    if want_home_context is None:
+        resp = resp_all
+    else:
+        for fx in resp_all:
+            is_home = fx["teams"]["home"]["id"] == team_id
+            if want_home_context and is_home:
+                resp.append(fx)
+            if (want_home_context is False) and (not is_home):
+                resp.append(fx)
+        # if too few, fallback to overall
+        if len(resp) < 3:
+            resp = resp_all
+
     gf = ga = m = 0
-    for fx in resp:
+    for fx in resp[:5]:
         m += 1
         g_home = fx["goals"]["home"] or 0
         g_away = fx["goals"]["away"] or 0
@@ -250,65 +269,95 @@ def fetch_team_recent_stats(team_id: int, league_id: int):
     TEAM_STATS_CACHE[ck] = stats
     return stats
 
-# ------------------------- NEW: TEAM STRENGTH PRIOR (PPM) -------------------------
-def fetch_team_points_ppm(team_id: int, league_id: int):
-    ck = (team_id, league_id)
-    if ck in TEAM_PPM_CACHE:
-        return TEAM_PPM_CACHE[ck]
-
-    if not API_FOOTBALL_KEY:
-        TEAM_PPM_CACHE[ck] = None
-        return None
-
-    url = f"{API_FOOTBALL_BASE}/fixtures"
-    params = {"team": team_id, "league": league_id, "season": FOOTBALL_SEASON, "last": TSI_LOOKBACK}
-
-    try:
-        r = requests.get(url, headers=HEADERS_FOOTBALL, params=params, timeout=25).json()
-    except Exception:
-        TEAM_PPM_CACHE[ck] = None
-        return None
-
-    resp = r.get("response") or []
-    if not resp:
-        TEAM_PPM_CACHE[ck] = None
-        return None
-
-    pts = 0
-    m = 0
-    for fx in resp:
-        m += 1
-        home_id = fx["teams"]["home"]["id"]
-        away_id = fx["teams"]["away"]["id"]
-        g_home = fx["goals"]["home"] or 0
-        g_away = fx["goals"]["away"] or 0
-
-        if g_home == g_away:
-            if team_id in (home_id, away_id):
-                pts += 1
-        else:
-            winner = home_id if g_home > g_away else away_id
-            if team_id == winner:
-                pts += 3
-
-    ppm = (pts / m) if m else None
-    TEAM_PPM_CACHE[ck] = ppm
-    return ppm
-
 # ------------------------- LEAGUE BASELINES -------------------------
-def fetch_league_baselines(league_id: int):
-    # You can override these with real calibrated values later.
+def fetch_league_baselines_static(league_id: int):
+    # Static fallback (better than nothing). You can override later.
     overrides = {
         39: {"avg_goals_per_match": 2.9, "home_advantage": 0.18, "avg_draw_rate": 0.24, "avg_over25_rate": 0.58},
         40: {"avg_goals_per_match": 2.5, "home_advantage": 0.16, "avg_draw_rate": 0.28, "avg_over25_rate": 0.52},
         78: {"avg_goals_per_match": 3.1, "home_advantage": 0.17, "avg_draw_rate": 0.25, "avg_over25_rate": 0.60},
         135: {"avg_goals_per_match": 2.5, "home_advantage": 0.15, "avg_draw_rate": 0.30, "avg_over25_rate": 0.52},
         140: {"avg_goals_per_match": 2.6, "home_advantage": 0.16, "avg_draw_rate": 0.27, "avg_over25_rate": 0.55},
+        94: {"avg_goals_per_match": 2.55, "home_advantage": 0.15, "avg_draw_rate": 0.28, "avg_over25_rate": 0.54},
+        61: {"avg_goals_per_match": 2.70, "home_advantage": 0.16, "avg_draw_rate": 0.26, "avg_over25_rate": 0.55},
+        62: {"avg_goals_per_match": 2.35, "home_advantage": 0.15, "avg_draw_rate": 0.29, "avg_over25_rate": 0.49},
+        136: {"avg_goals_per_match": 2.45, "home_advantage": 0.15, "avg_draw_rate": 0.30, "avg_over25_rate": 0.50},
     }
     base = {"avg_goals_per_match": 2.6, "home_advantage": 0.16, "avg_draw_rate": 0.26, "avg_over25_rate": 0.55}
     if league_id in overrides:
         base.update(overrides[league_id])
     return base
+
+def fetch_league_baselines_dynamic(league_id: int):
+    """
+    Best-effort compute:
+      - avg_goals_per_match
+      - home_advantage from home goals share (simple)
+      - avg_draw_rate
+      - avg_over25_rate
+    Using recent finished fixtures in league/season.
+    If fails, fallback to static.
+    """
+    if not API_FOOTBALL_KEY:
+        return fetch_league_baselines_static(league_id)
+
+    url = f"{API_FOOTBALL_BASE}/fixtures"
+    params = {"league": league_id, "season": FOOTBALL_SEASON, "status": "FT", "last": BASELINES_LAST_N}
+
+    try:
+        r = requests.get(url, headers=HEADERS_FOOTBALL, params=params, timeout=25).json()
+    except Exception:
+        return fetch_league_baselines_static(league_id)
+
+    resp = r.get("response") or []
+    if not resp or len(resp) < 40:
+        return fetch_league_baselines_static(league_id)
+
+    total = 0
+    home_goals = 0
+    away_goals = 0
+    draws = 0
+    overs = 0
+
+    for fx in resp:
+        hg = fx.get("goals", {}).get("home")
+        ag = fx.get("goals", {}).get("away")
+        if hg is None or ag is None:
+            continue
+        total += 1
+        home_goals += int(hg)
+        away_goals += int(ag)
+        if int(hg) == int(ag):
+            draws += 1
+        if (int(hg) + int(ag)) >= 3:
+            overs += 1
+
+    if total < 30:
+        return fetch_league_baselines_static(league_id)
+
+    avg_goals_per_match = (home_goals + avg_goals_per_match if False else (home_goals + away_goals) / total)  # keep simple
+    avg_goals_per_match = (home_goals + away_goals) / total
+
+    # home advantage proxy: (home goals per game - away goals per game) / avg total per game
+    hgpg = home_goals / total
+    agpg = away_goals / total
+    if avg_goals_per_match > 0:
+        ha = (hgpg - agpg) / avg_goals_per_match
+    else:
+        ha = 0.16
+    ha = _clamp(ha, 0.05, 0.25)
+
+    return {
+        "avg_goals_per_match": float(round(avg_goals_per_match, 3)),
+        "home_advantage": float(round(ha, 3)),
+        "avg_draw_rate": float(round(draws / total, 3)),
+        "avg_over25_rate": float(round(overs / total, 3)),
+    }
+
+def fetch_league_baselines(league_id: int):
+    if USE_DYNAMIC_LEAGUE_BASELINES:
+        return fetch_league_baselines_dynamic(league_id)
+    return fetch_league_baselines_static(league_id)
 
 # ------------------------- POISSON HELPERS -------------------------
 def poisson_pmf(k: int, lam: float) -> float:
@@ -352,15 +401,11 @@ def compute_expected_goals(home_stats: dict, away_stats: dict, league_baseline: 
         att = gf_shrunk / league_avg_team
         dff = ga_shrunk / league_avg_team
 
-        return {
-            "n": n,
-            "gf_mle": gf_mle,
-            "ga_mle": ga_mle,
-            "gf_shrunk": gf_shrunk,
-            "ga_shrunk": ga_shrunk,
-            "att": att,
-            "def": dff,
-        }
+        # extra safety: keep factors sane
+        att = _clamp(att, 0.55, 1.85)
+        dff = _clamp(dff, 0.55, 1.85)
+
+        return {"n": n, "gf_shrunk": gf_shrunk, "ga_shrunk": ga_shrunk, "att": att, "def": dff}
 
     h = get_rates(home_stats or {})
     a = get_rates(away_stats or {})
@@ -372,20 +417,24 @@ def compute_expected_goals(home_stats: dict, away_stats: dict, league_baseline: 
     lam_a = _clamp(lam_a, LAMBDA_MIN, LAMBDA_MAX_AWAY)
     return lam_h, lam_a
 
-# ------------------------- DC-ADJUSTED PROBS -------------------------
+# ------------------------- DC-ADJUSTED PROBS (STANDARD) -------------------------
 def compute_probabilities(lambda_home: float, lambda_away: float):
     """
-    Builds 0..6 matrix (6 holds tail >6) and applies Dixon-Coles on (0,0),(1,0),(0,1),(1,1),
-    then renormalizes and derives 1X2 and O/U 2.5.
+    Builds 0..6 matrix (index 6 holds tail >5 effectively) and applies Dixon-Coles on:
+      (0,0),(1,0),(0,1),(1,1)
+    Standard DC taus:
+      tau(0,0)=1 - λH*λA*ρ
+      tau(1,0)=1 + λA*ρ
+      tau(0,1)=1 + λH*ρ
+      tau(1,1)=1 - ρ
+    Then renormalizes and derives 1X2 and O/U 2.5.
     """
     max_goals = 6
-
     pmf_h = [poisson_pmf(k, lambda_home) for k in range(max_goals)]
     pmf_a = [poisson_pmf(k, lambda_away) for k in range(max_goals)]
 
     tail_h = max(0.0, 1.0 - sum(pmf_h))
     tail_a = max(0.0, 1.0 - sum(pmf_a))
-
     pmf_h.append(tail_h)
     pmf_a.append(tail_a)
 
@@ -400,13 +449,13 @@ def compute_probabilities(lambda_home: float, lambda_away: float):
 
     def tau(x, y):
         if x == 0 and y == 0:
-            return 1.0 - lamH * lamA * rho
+            return 1.0 - (lamH * lamA * rho)
         if x == 1 and y == 0:
-            return 1.0 + lamA * rho
+            return 1.0 + (lamA * rho)
         if x == 0 and y == 1:
-            return 1.0 + lamH * rho
+            return 1.0 + (lamH * rho)
         if x == 1 and y == 1:
-            return 1.0 - (lamH + lamA) * rho
+            return 1.0 - rho  # STANDARD DC
         return 1.0
 
     for (x, y) in [(0, 0), (1, 0), (0, 1), (1, 1)]:
@@ -421,7 +470,6 @@ def compute_probabilities(lambda_home: float, lambda_away: float):
             "over_2_5_prob": 0.55,
             "under_2_5_prob": 0.45,
         }
-
     mat = [[v / s for v in row] for row in mat]
 
     ph = pd = pa = 0.0
@@ -447,6 +495,7 @@ def compute_probabilities(lambda_home: float, lambda_away: float):
     pd = max(eps, pd)
     pa = max(eps, pa)
 
+    # enforce draw floor
     if pd < MIN_DRAW_PROB:
         pd = MIN_DRAW_PROB
         rest = max(eps, ph + pa)
@@ -454,12 +503,14 @@ def compute_probabilities(lambda_home: float, lambda_away: float):
         ph *= scale
         pa *= scale
 
+    # cap overly confident probs (prevents fair < MIN_FAIR_ODD)
     ph = min(ph, max_p)
     pd = min(pd, max_p)
     pa = min(pa, max_p)
     tot = ph + pd + pa
     ph, pd, pa = ph / tot, pd / tot, pa / tot
 
+    # re-apply draw min if needed
     if pd < MIN_DRAW_PROB:
         pd = MIN_DRAW_PROB
         rest = max(eps, ph + pa)
@@ -699,7 +750,7 @@ def build_fixture_blocks():
     log(f"USE_ODDS_API={USE_ODDS_API}")
     log(f"ODDS_TIME_GATE_HOURS={ODDS_TIME_GATE_HOURS} | ODDS_SIM_THRESHOLD={ODDS_SIM_THRESHOLD}")
     log(f"MODEL: ShrinkageK={SHRINKAGE_K} | DC_RHO={DC_RHO} | MIN_FAIR_ODD={MIN_FAIR_ODD} | MIN_DRAW_PROB={MIN_DRAW_PROB}")
-    log(f"TSI: source={TSI_SOURCE} lookback={TSI_LOOKBACK} power={TSI_POWER} clamp=[{TSI_CLAMP_LO},{TSI_CLAMP_HI}]")
+    log(f"BASELINES: dynamic={USE_DYNAMIC_LEAGUE_BASELINES} lastN={BASELINES_LAST_N}")
 
     if not API_FOOTBALL_KEY:
         log("❌ FOOTBALL_API_KEY is missing. Aborting fixture fetch.")
@@ -728,27 +779,12 @@ def build_fixture_blocks():
         league_name = fx["league_name"]
 
         league_baseline = fetch_league_baselines(league_id)
-        home_stats = fetch_team_recent_stats(fx["home_id"], league_id)
-        away_stats = fetch_team_recent_stats(fx["away_id"], league_id)
 
-        # base lambdas
+        # context-aware team stats
+        home_stats = fetch_team_recent_stats(fx["home_id"], league_id, want_home_context=True)
+        away_stats = fetch_team_recent_stats(fx["away_id"], league_id, want_home_context=False)
+
         lam_h, lam_a = compute_expected_goals(home_stats, away_stats, league_baseline)
-
-        # NEW: TSI strength prior (soft)
-        ts_home = fetch_team_points_ppm(fx["home_id"], league_id) if TSI_SOURCE == "points" else None
-        ts_away = fetch_team_points_ppm(fx["away_id"], league_id) if TSI_SOURCE == "points" else None
-        tsi_mult_home = None
-        tsi_mult_away = None
-
-        if ts_home is not None and ts_away is not None and ts_home > 0 and ts_away > 0:
-            ratio = ts_home / ts_away
-            strength_h = _clamp(ratio ** TSI_POWER, TSI_CLAMP_LO, TSI_CLAMP_HI)
-            strength_a = 1.0 / strength_h
-            tsi_mult_home = strength_h
-            tsi_mult_away = strength_a
-            lam_h = _clamp(lam_h * strength_h, LAMBDA_MIN, LAMBDA_MAX_HOME)
-            lam_a = _clamp(lam_a * strength_a, LAMBDA_MIN, LAMBDA_MAX_AWAY)
-
         probs = compute_probabilities(lam_h, lam_a)
 
         p_home = probs["home_prob"]
@@ -788,52 +824,41 @@ def build_fixture_blocks():
                 "league": league_name,
                 "home": fx["home"],
                 "away": fx["away"],
-                "model": "bombay_multiplicative_dc_tsi_v3_10",
+                "model": "bombay_multiplicative_dc_v3_10",
 
                 "lambda_home": round(lam_h, 3),
                 "lambda_away": round(lam_a, 3),
 
-                # NEW debug (TSI)
-                "tsi_home_ppm": None if ts_home is None else round(ts_home, 3),
-                "tsi_away_ppm": None if ts_away is None else round(ts_away, 3),
-                "tsi_mult_home": None if tsi_mult_home is None else round(tsi_mult_home, 4),
-                "tsi_mult_away": None if tsi_mult_away is None else round(tsi_mult_away, 4),
-
-                # probs
                 "home_prob": round(p_home, 3),
                 "draw_prob": round(p_draw, 3),
                 "away_prob": round(p_away, 3),
                 "over_2_5_prob": round(p_over, 3),
                 "under_2_5_prob": round(p_under, 3),
 
-                # fair
                 "fair_1": fair_1,
                 "fair_x": fair_x,
                 "fair_2": fair_2,
                 "fair_over_2_5": fair_over,
                 "fair_under_2_5": fair_under,
 
-                # offered
                 "offered_1": off_1,
                 "offered_x": off_x,
                 "offered_2": off_2,
                 "offered_over_2_5": off_o,
                 "offered_under_2_5": off_u,
 
-                # value pct
                 "value_pct_1": value_pct(off_1, fair_1),
                 "value_pct_x": value_pct(off_x, fair_x),
                 "value_pct_2": value_pct(off_2, fair_2),
                 "value_pct_over": value_pct(off_o, fair_over),
                 "value_pct_under": value_pct(off_u, fair_under),
 
-                # scores (UI compat)
                 "score_draw": score_1_10(p_draw),
                 "score_over": score_1_10(p_over),
                 "score_under": score_1_10(p_under),
 
-                # debug
                 "odds_match": match_debug,
+                "league_baseline": league_baseline,  # helpful debugging
             }
         )
 
