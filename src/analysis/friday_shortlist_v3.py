@@ -1,6 +1,5 @@
 import os
 import json
-import math
 from datetime import datetime
 
 THURSDAY_REPORT_PATH = "logs/thursday_report_v3.json"
@@ -20,7 +19,7 @@ MAX_DRAWS = int(os.getenv("MAX_DRAWS", "7"))
 MAX_OVERS = int(os.getenv("MAX_OVERS", "7"))
 MAX_KELLY = int(os.getenv("MAX_KELLY", "6"))
 
-# ------------------------- SELECTION DEFAULTS (calibrated) -------------------------
+# ------------------------- SELECTION DEFAULTS -------------------------
 MIN_EDGE = float(os.getenv("MIN_EDGE", "0.01"))  # 1% noise floor
 
 # Draw filters
@@ -37,6 +36,12 @@ MAX_FAIR_OVER = float(os.getenv("MAX_FAIR_OVER", "1.82"))  # optional sanity
 
 # Portfolio risk
 PORTFOLIO_CAP = float(os.getenv("PORTFOLIO_CAP", "0.20"))  # 20% of bankroll exposure cap
+
+# NEW: extra risk adjustment vs high odds (your rule)
+# stake_multiplier = min(1.0, ODDS_RISK_K / odds)
+ODDS_RISK_K = float(os.getenv("ODDS_RISK_K", "2.0"))   # at odds=2 => 1.0 ; odds=5 => 0.4 ; odds=10 => 0.2
+MIN_KELLY_STAKE = float(os.getenv("MIN_KELLY_STAKE", "2.0"))
+MAX_KELLY_STAKE = float(os.getenv("MAX_KELLY_STAKE", "45.0"))  # hard cap per pick, safety
 
 # ------------------------- LEAGUE PRIORITIES -------------------------
 DRAW_PRIORITY_LEAGUES = {
@@ -103,37 +108,31 @@ def load_thursday_fixtures():
 
 def funbet_draw(draw_singles):
     picks = sorted(draw_singles, key=lambda x: x["score"], reverse=True)[:7]
-    n = len([p for p in picks if p.get("stake", 0.0) > 0])
+    n = len(picks)
     if n < 3:
         return {"system": None, "columns": 0, "unit": 0.0, "total_stake": 0.0, "picks": []}
-
     if n == 3: sys, cols = "3/3", 1
     elif n == 4: sys, cols = "3/4", 4
     elif n == 5: sys, cols = "3/5", 10
     elif n == 6: sys, cols = "4/6", 15
     else: sys, cols = "4/7", 35
-
     unit, total = compute_system_stake(BANKROLL_FUN_DRAW, cols)
-    picks_paid = [p for p in picks if p.get("stake", 0.0) > 0][:7]
-    return {"system": sys, "columns": cols, "unit": unit, "total_stake": total, "picks": picks_paid}
+    return {"system": sys, "columns": cols, "unit": unit, "total_stake": total, "picks": picks}
 
 def funbet_over(over_singles):
     picks = sorted(over_singles, key=lambda x: x["score"], reverse=True)[:7]
-    n = len([p for p in picks if p.get("stake", 0.0) > 0])
+    n = len(picks)
     if n < 3:
         return {"system": None, "columns": 0, "unit": 0.0, "total_stake": 0.0, "picks": []}
-
     if n == 3: sys, cols = "3/3", 1
     elif n == 4: sys, cols = "2/4", 6
     elif n == 5: sys, cols = "2/5", 10
     elif n == 6: sys, cols = "3/6", 20
     else: sys, cols = "3/7", 35
-
     unit, total = compute_system_stake(BANKROLL_FUN_OVER, cols)
-    picks_paid = [p for p in picks if p.get("stake", 0.0) > 0][:7]
-    return {"system": sys, "columns": cols, "unit": unit, "total_stake": total, "picks": picks_paid}
+    return {"system": sys, "columns": cols, "unit": unit, "total_stake": total, "picks": picks}
 
-# ------------------------- EDGE-BANDED KELLY + ODDS PENALTY -------------------------
+# ------------------------- EDGE-BANDED KELLY -------------------------
 def kelly_fraction(p: float, odds: float) -> float:
     if p is None or odds is None or odds <= 1.0:
         return 0.0
@@ -148,6 +147,7 @@ def edge_value(p: float, odds: float) -> float:
     return (p * odds) - 1.0
 
 def band_multiplier(edge: float) -> float:
+    # edge in decimal (0.03 = 3%)
     if edge <= 0.01:
         return 0.00
     if edge <= 0.03:
@@ -156,12 +156,14 @@ def band_multiplier(edge: float) -> float:
         return 0.25
     return 0.50
 
-def odds_penalty(odds: float) -> float:
-    # higher odds => smaller stake (smooth)
-    # 1.50 -> ~1.00, 2.00 -> ~0.85, 3.00 -> ~0.70, 5.00 -> ~0.55
+def odds_risk_multiplier(odds: float) -> float:
+    """
+    Your rule: higher odds => smaller stake.
+    Simple monotonic multiplier: min(1, K/odds)
+    """
     if odds is None or odds <= 1.0:
         return 0.0
-    return max(0.50, min(1.00, 1.15 - 0.15 * math.log(max(1.01, odds))))
+    return min(1.0, max(0.05, ODDS_RISK_K / odds))
 
 def generate_picks(fixtures):
     draw_singles = []
@@ -174,7 +176,6 @@ def generate_picks(fixtures):
         league = f.get("league")
         match_label = f"{home} – {away}"
 
-        # model probs (Thursday)
         p_home = safe_float(f.get("home_prob"), None)
         p_draw = safe_float(f.get("draw_prob"), None)
         p_away = safe_float(f.get("away_prob"), None)
@@ -184,13 +185,11 @@ def generate_picks(fixtures):
         lam_a = safe_float(f.get("lambda_away"), None)
         lam_total = (lam_h + lam_a) if (lam_h is not None and lam_a is not None) else None
 
-        # fair
         fair_x = safe_float(f.get("fair_x"), None)
         fair_over = safe_float(f.get("fair_over_2_5"), None)
         fair_1 = safe_float(f.get("fair_1"), None)
         fair_2 = safe_float(f.get("fair_2"), None)
 
-        # offered
         offered_x = safe_float(f.get("offered_x"), None)
         offered_over = safe_float(f.get("offered_over_2_5"), None)
         offered_1 = safe_float(f.get("offered_1"), None)
@@ -199,12 +198,11 @@ def generate_picks(fixtures):
         draw_score = compute_draw_score(p_draw or 0.0, league)
         over_score = compute_over_score(p_over or 0.0, league)
 
-        # ---------------- DRAW SINGLES (include model-only candidates) ----------------
-        if p_draw is not None:
+        # ---------------- DRAW SINGLES ----------------
+        if p_draw is not None and offered_x is not None and offered_x > 1.0:
+            e = edge_value(p_draw, offered_x)
             lam_diff = abs(lam_h - lam_a) if (lam_h is not None and lam_a is not None) else 999.0
-            if p_draw >= DRAW_MIN_PROB and lam_diff <= DRAW_LAMBDA_DIFF_MAX:
-                e = edge_value(p_draw, offered_x) if (offered_x is not None and offered_x > 1.0) else None
-                ok_edge = (e is not None and e >= DRAW_MIN_EDGE)
+            if (p_draw >= DRAW_MIN_PROB and e >= DRAW_MIN_EDGE and lam_diff <= DRAW_LAMBDA_DIFF_MAX):
                 draw_singles.append({
                     "match": match_label,
                     "league": league,
@@ -212,16 +210,19 @@ def generate_picks(fixtures):
                     "prob": round(p_draw, 3),
                     "score": round(draw_score, 1),
                     "odds": offered_x,
-                    "stake": float(DRAW_STAKE) if ok_edge else 0.0,
-                    "edge": round(e * 100.0, 1) if e is not None else None,
-                    "model_only": (offered_x is None),
+                    "stake": float(DRAW_STAKE),
+                    "edge": round(e * 100.0, 1),
                 })
 
-        # ---------------- OVER SINGLES (include model-only candidates) ----------------
-        if p_over is not None:
-            if (lam_total is None or lam_total >= OVER_LAMBDA_TOTAL_MIN) and (fair_over is None or fair_over <= MAX_FAIR_OVER):
-                e = edge_value(p_over, offered_over) if (offered_over is not None and offered_over > 1.0) else None
-                ok_edge = (e is not None and e >= OVER_MIN_EDGE and p_over >= OVER_MIN_PROB)
+        # ---------------- OVER SINGLES ----------------
+        if p_over is not None and offered_over is not None and offered_over > 1.0:
+            e = edge_value(p_over, offered_over)
+            if (
+                p_over >= OVER_MIN_PROB
+                and e >= OVER_MIN_EDGE
+                and (lam_total is None or lam_total >= OVER_LAMBDA_TOTAL_MIN)
+                and (fair_over is None or fair_over <= MAX_FAIR_OVER)
+            ):
                 tier, stake = classify_over_stake(p_over, fair_over, league)
                 over_singles.append({
                     "match": match_label,
@@ -231,9 +232,8 @@ def generate_picks(fixtures):
                     "score": round(over_score, 1),
                     "odds": offered_over,
                     "tier": tier,
-                    "stake": float(stake) if ok_edge else 0.0,
-                    "edge": round(e * 100.0, 1) if e is not None else None,
-                    "model_only": (offered_over is None),
+                    "stake": float(stake),
+                    "edge": round(e * 100.0, 1),
                 })
 
         # ---------------- KELLY (HOME/AWAY) ----------------
@@ -252,11 +252,8 @@ def generate_picks(fixtures):
                 return
 
             f_raw = f_full * mult
-            f_raw = f_raw * odds_penalty(offered)  # NEW
 
-            if f_raw <= 0:
-                return
-
+            # store for later portfolio scaling + odds risk adjustment
             kelly_candidates.append({
                 "match": match_label,
                 "league": league,
@@ -286,9 +283,20 @@ def generate_picks(fixtures):
     kelly_picks = []
     for k in kelly_candidates:
         f_final = k["f_raw"] * scale
-        stake = round(BANKROLL_KELLY * f_final, 1)
-        if stake < 3.0:
-            stake = 3.0
+
+        # NEW: odds-risk adjustment (higher odds => lower stake)
+        orm = odds_risk_multiplier(k["odds"])
+        f_final_adj = f_final * orm
+
+        stake = BANKROLL_KELLY * f_final_adj
+
+        # safety caps
+        if stake < MIN_KELLY_STAKE:
+            stake = MIN_KELLY_STAKE
+        if stake > MAX_KELLY_STAKE:
+            stake = MAX_KELLY_STAKE
+
+        stake = round(stake, 1)
 
         kelly_picks.append({
             "match": k["match"],
@@ -299,13 +307,14 @@ def generate_picks(fixtures):
             "odds": k["odds"],
             "edge": k["edge"],
             "stake": stake,
-            "f_fraction": round(f_final, 5),
+            "f_fraction": round(f_final_adj, 5),
+            "odds_risk_mult": round(orm, 3),
         })
 
     return draw_singles, over_singles, kelly_picks
 
 def main():
-    log("🚀 Running Friday Shortlist v3.7 (Edge-Banded Kelly + Odds Penalty + Model-only candidates)")
+    log("🚀 Running Friday Shortlist v3.7 (Edge-Banded Kelly + Portfolio Cap + Odds Risk Adjust)")
 
     fixtures, th_report = load_thursday_fixtures()
     log(f"Loaded {len(fixtures)} fixtures from {THURSDAY_REPORT_PATH}")
@@ -315,15 +324,15 @@ def main():
     fb_draw = funbet_draw(draw_singles)
     fb_over = funbet_over(over_singles)
 
-    draw_open = sum(d.get("stake", 0.0) for d in draw_singles if d.get("stake", 0.0) > 0)
-    over_open = sum(o.get("stake", 0.0) for o in over_singles if o.get("stake", 0.0) > 0)
+    draw_open = sum(d["stake"] for d in draw_singles)
+    over_open = sum(o["stake"] for o in over_singles)
     fun_draw_open = fb_draw["total_stake"]
     fun_over_open = fb_over["total_stake"]
     kelly_open = sum(k["stake"] for k in kelly_picks)
 
     bankrolls = {
-        "draw": {"bank_start": BANKROLL_DRAW, "week_start": BANKROLL_DRAW, "open": round(draw_open, 1), "after_open": round(BANKROLL_DRAW - draw_open, 1), "picks": len([d for d in draw_singles if d.get("stake",0)>0])},
-        "over": {"bank_start": BANKROLL_OVER, "week_start": BANKROLL_OVER, "open": round(over_open, 1), "after_open": round(BANKROLL_OVER - over_open, 1), "picks": len([o for o in over_singles if o.get("stake",0)>0])},
+        "draw": {"bank_start": BANKROLL_DRAW, "week_start": BANKROLL_DRAW, "open": round(draw_open, 1), "after_open": round(BANKROLL_DRAW - draw_open, 1), "picks": len(draw_singles)},
+        "over": {"bank_start": BANKROLL_OVER, "week_start": BANKROLL_OVER, "open": round(over_open, 1), "after_open": round(BANKROLL_OVER - over_open, 1), "picks": len(over_singles)},
         "fun_draw": {"bank_start": BANKROLL_FUN_DRAW, "week_start": BANKROLL_FUN_DRAW, "open": round(fun_draw_open, 1), "after_open": round(BANKROLL_FUN_DRAW - fun_draw_open, 1), "picks": len(fb_draw["picks"])},
         "fun_over": {"bank_start": BANKROLL_FUN_OVER, "week_start": BANKROLL_FUN_OVER, "open": round(fun_over_open, 1), "after_open": round(BANKROLL_FUN_OVER - fun_over_open, 1), "picks": len(fb_over["picks"])},
         "kelly": {"bank_start": BANKROLL_KELLY, "week_start": BANKROLL_KELLY, "open": round(kelly_open, 1), "after_open": round(BANKROLL_KELLY - kelly_open, 1), "picks": len(kelly_picks)},
