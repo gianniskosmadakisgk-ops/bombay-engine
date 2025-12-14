@@ -3,7 +3,7 @@ import json
 from datetime import datetime
 
 FRIDAY_REPORT_PATH = "logs/friday_shortlist_v3.json"
-TUESDAY_RESULTS_PATH = "logs/tuesday_results.json"     # optional
+TUESDAY_RESULTS_PATH = "logs/tuesday_results.json"   # optional input
 TUESDAY_RECAP_PATH = "logs/tuesday_recap_v3.json"
 
 def log(msg: str):
@@ -19,6 +19,14 @@ def key_of(match, market):
     return f"{(match or '').strip()}||{(market or '').strip()}"
 
 def result_map(results_json):
+    """
+    Expected schema (simple):
+    {
+      "matches": [
+        {"match": "...", "market": "...", "result": "WIN|LOSS|VOID"}
+      ]
+    }
+    """
     m = {}
     if not results_json:
         return m
@@ -31,44 +39,86 @@ def result_map(results_json):
 
 def settle_single(stake, odds, res):
     """
-    Simple settlement:
-      WIN: profit = stake*(odds-1)
-      LOSS: -stake
+    Settlement:
+      WIN: + stake*(odds-1)
+      LOSS: - stake
       VOID: 0
     """
+    stake = float(stake or 0.0)
+    odds = float(odds or 0.0)
     if res == "WIN":
         return round(stake * (odds - 1.0), 2)
     if res == "LOSS":
         return round(-stake, 2)
     return 0.0
 
+def settle_double(double_obj, rmap):
+    """
+    Double settles ONLY if both legs have explicit results in tuesday_results.json.
+    - If any leg is LOSS => LOSS
+    - If any leg is VOID and no LOSS => treat as NOT_SETTLED (you can later define rules)
+    - If both WIN => WIN (profit by combo_odds)
+    Returns (status, p_l)
+    """
+    if not double_obj:
+        return None, None
+
+    legs = double_obj.get("legs", []) or []
+    if len(legs) != 2:
+        return "NOT_SETTLED", None
+
+    leg_results = []
+    for leg in legs:
+        k = key_of(leg.get("match"), leg.get("market"))
+        leg_results.append(rmap.get(k, "PENDING"))
+
+    if "PENDING" in leg_results:
+        return "PENDING", None
+
+    if "LOSS" in leg_results:
+        return "LOSS", settle_single(double_obj.get("stake"), 0.0, "LOSS")
+
+    if "VOID" in leg_results:
+        return "NOT_SETTLED_VOID_RULE", None
+
+    # both WIN
+    combo_odds = float(double_obj.get("combo_odds") or 0.0)
+    stake = float(double_obj.get("stake") or 0.0)
+    if combo_odds <= 1.0:
+        return "NOT_SETTLED_BAD_ODDS", None
+    pl = round(stake * (combo_odds - 1.0), 2)
+    return "WIN", pl
+
 def main():
     friday = load_json(FRIDAY_REPORT_PATH)
     if not friday:
         raise FileNotFoundError(f"Missing Friday report: {FRIDAY_REPORT_PATH}")
 
-    results = load_json(TUESDAY_RESULTS_PATH)  # may be None
+    results = load_json(TUESDAY_RESULTS_PATH)  # optional
     rmap = result_map(results)
 
     core = friday.get("core", {}) or {}
     fun = friday.get("funbet", {}) or {}
 
-    # -------- CORE recap --------
+    # ---------------- CORE recap ----------------
     core_singles = core.get("singles", []) or []
     core_double = core.get("double", None)
 
     core_rows = []
     core_pl = 0.0
-    core_w = core_l = core_v = 0
+    core_w = core_l = core_v = core_pending = 0
 
     for p in core_singles:
         match = p.get("match")
         market = p.get("market")
         stake = float(p.get("stake") or 0.0)
         odds = float(p.get("odds") or 0.0)
+
         res = rmap.get(key_of(match, market), "PENDING")
-        pl = 0.0
-        if res != "PENDING":
+        pl = None
+        if res == "PENDING":
+            core_pending += 1
+        else:
             pl = settle_single(stake, odds, res)
             core_pl += pl
             if res == "WIN": core_w += 1
@@ -82,37 +132,40 @@ def main():
             "odds": odds,
             "stake": stake,
             "result": res,
-            "p_l": pl if res != "PENDING" else None,
+            "p_l": pl,
         })
 
-    # Double is informational unless you also pass it in results as TWO legs + a synthetic “Double” market.
+    # Double
     double_row = None
+    double_pl = None
     if core_double:
+        status, pl = settle_double(core_double, rmap)
+        double_pl = pl
         double_row = {
             "type": "Double",
             "combo_odds": core_double.get("combo_odds"),
             "stake": core_double.get("stake"),
             "legs": core_double.get("legs", []),
-            "result": "PENDING" if not results else "NOT_SETTLED_BY_DEFAULT",
+            "result": status,
+            "p_l": pl,
         }
+        if pl is not None:
+            core_pl += pl
 
-    # -------- FUN recap --------
+    core_settled = bool(results) and (core_pending == 0) and (double_row is None or double_row["result"] != "PENDING")
+
+    # ---------------- FUN recap ----------------
     fun_picks = fun.get("picks", []) or []
-    fun_system = fun.get("system")
-    fun_unit = float(fun.get("unit") or 0.0)
-    fun_cols = int(fun.get("columns") or 0)
-    fun_total = float(fun.get("total_stake") or 0.0)
-
     fun_rows = []
-    fun_w = fun_l = fun_v = 0
-    # We do NOT try to compute complex system payout without explicit line-by-line results.
-    # We only track pick hit rate + pending.
+    fun_w = fun_l = fun_v = fun_pending = 0
+
     for p in fun_picks:
         match = p.get("match")
         market = p.get("market")
         odds = float(p.get("odds") or 0.0)
         res = rmap.get(key_of(match, market), "PENDING")
-        if res == "WIN": fun_w += 1
+        if res == "PENDING": fun_pending += 1
+        elif res == "WIN": fun_w += 1
         elif res == "LOSS": fun_l += 1
         elif res == "VOID": fun_v += 1
 
@@ -123,6 +176,10 @@ def main():
             "odds": odds,
             "result": res,
         })
+
+    # NOTE: Δεν κάνουμε settlement συστήματος χωρίς line-by-line κουπόνια.
+    # (Το “picks hit-rate” είναι αρκετό για πρώτο κύκλο.)
+    fun_settled = bool(results) and (fun_pending == 0)
 
     recap = {
         "timestamp": datetime.utcnow().isoformat(),
@@ -135,33 +192,35 @@ def main():
             "after_open": core.get("after_open"),
             "picks": core_rows,
             "double": double_row,
-            "settled": bool(results),
+            "settled": core_settled,
             "wins": core_w,
             "losses": core_l,
             "voids": core_v,
-            "p_l_total": round(core_pl, 2) if results else None,
+            "pending": core_pending,
+            "p_l_total": round(core_pl, 2) if bool(results) else None,
         },
 
         "fun_recap": {
             "bankroll_start": fun.get("bankroll"),
             "open": fun.get("open"),
             "after_open": fun.get("after_open"),
-            "system": fun_system,
-            "columns": fun_cols,
-            "unit": fun_unit,
-            "total_stake": fun_total,
+            "system": fun.get("system"),
+            "columns": fun.get("columns"),
+            "unit": fun.get("unit"),
+            "total_stake": fun.get("total_stake"),
             "picks": fun_rows,
-            "settled": bool(results),
+            "settled": fun_settled,
             "wins": fun_w,
             "losses": fun_l,
             "voids": fun_v,
-            "note": "System payout requires explicit line settlement input. This recap tracks pick outcomes only unless you extend results schema.",
+            "pending": fun_pending,
+            "note": "Δεν γίνεται payout settlement συστήματος χωρίς explicit lines/results schema. Προς το παρόν κρατάμε hit-rate ανά pick.",
         },
 
         "weekly_summary": {
             "core_open": core.get("open"),
             "fun_open": fun.get("open"),
-            "core_p_l": round(core_pl, 2) if results else None,
+            "core_p_l": round(core_pl, 2) if bool(results) else None,
             "fun_p_l": None,
         },
     }
