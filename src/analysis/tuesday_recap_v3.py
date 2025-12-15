@@ -1,69 +1,17 @@
+# =========================
+# FILE: src/analysis/tuesday_recap_v3.py
+# =========================
 import os
 import json
-import re
-import unicodedata
 from datetime import datetime
 
 FRIDAY_REPORT_PATH = "logs/friday_shortlist_v3.json"
-TUESDAY_RESULTS_PATH = "logs/tuesday_results.json"     # optional
+TUESDAY_RESULTS_PATH = "logs/tuesday_results.json"   # optional input from you
 TUESDAY_RECAP_PATH = "logs/tuesday_recap_v3.json"
 
-# ---------- Normalization helpers ----------
-def strip_accents(s: str) -> str:
-    if not s:
-        return ""
-    s = unicodedata.normalize("NFKD", s)
-    return "".join(ch for ch in s if not unicodedata.combining(ch))
+def log(msg: str):
+    print(msg, flush=True)
 
-def norm_spaces(s: str) -> str:
-    s = re.sub(r"\s+", " ", s or "").strip()
-    return s
-
-def normalize_match(match: str) -> str:
-    """
-    Canonicalize match string:
-    - lowercase
-    - remove accents
-    - normalize dashes (–, —, -) to " - "
-    - collapse spaces
-    """
-    s = strip_accents(match or "").lower()
-    s = s.replace("–", "-").replace("—", "-")
-    s = re.sub(r"\s*-\s*", " - ", s)
-    s = re.sub(r"[^a-z0-9\s\-]", " ", s)   # kill punctuation
-    return norm_spaces(s)
-
-def normalize_market(market: str) -> str:
-    """
-    Map different labels to same canonical market.
-    """
-    s = strip_accents(market or "").lower().strip()
-
-    # unify common variants
-    s = s.replace("o2.5", "over 2.5").replace("u2.5", "under 2.5")
-    s = s.replace("over2.5", "over 2.5").replace("under2.5", "under 2.5")
-    s = s.replace("over 2,5", "over 2.5").replace("under 2,5", "under 2.5")
-
-    aliases = {
-        "1": "home",
-        "home": "home",
-        "h": "home",
-        "2": "away",
-        "away": "away",
-        "a": "away",
-        "x": "draw",
-        "draw": "draw",
-        "d": "draw",
-        "over 2.5": "over 2.5",
-        "under 2.5": "under 2.5",
-    }
-    s = norm_spaces(s)
-    return aliases.get(s, s)
-
-def key_of(match, market):
-    return f"{normalize_match(match)}||{normalize_market(market)}"
-
-# ---------- IO ----------
 def load_json(path):
     if not os.path.exists(path):
         return None
@@ -72,21 +20,19 @@ def load_json(path):
 
 def result_map(results_json):
     """
-    results_json schema expected:
-    {
-      "matches": [
-        {"match": "...", "market": "...", "result": "WIN|LOSS|VOID"}
-      ]
-    }
+    Primary key: pick_id (fixture_id:market_code)
+    Example pick_id: "123456:O25"
     """
     m = {}
     if not results_json:
         return m
+
     for r in results_json.get("matches", []) or []:
-        k = key_of(r.get("match"), r.get("market"))
+        pid = (r.get("pick_id") or "").strip()
         res = (r.get("result") or "").upper().strip()
-        if res in ("WIN", "LOSS", "VOID"):
-            m[k] = res
+        if pid and res in ("WIN", "LOSS", "VOID"):
+            m[pid] = res
+
     return m
 
 def settle_single(stake, odds, res):
@@ -116,30 +62,38 @@ def main():
     core_w = core_l = core_v = 0
 
     for p in core_singles:
-        match = p.get("match")
-        market = p.get("market")
+        pid = (p.get("pick_id") or "").strip()
         stake = float(p.get("stake") or 0.0)
         odds = float(p.get("odds") or 0.0)
 
-        res = rmap.get(key_of(match, market), "PENDING")
+        res = rmap.get(pid, "PENDING") if pid else "PENDING"
         pl = None
+
         if res != "PENDING":
             pl = settle_single(stake, odds, res)
             core_pl += pl
-            if res == "WIN": core_w += 1
-            elif res == "LOSS": core_l += 1
-            elif res == "VOID": core_v += 1
+            if res == "WIN":
+                core_w += 1
+            elif res == "LOSS":
+                core_l += 1
+            elif res == "VOID":
+                core_v += 1
 
         core_rows.append({
-            "match": match,
+            "pick_id": pid or None,
+            "fixture_id": p.get("fixture_id"),
+            "market_code": p.get("market_code"),
+
+            "match": p.get("match"),
             "league": p.get("league"),
-            "market": market,
+            "market": p.get("market"),
             "odds": odds,
             "stake": stake,
             "result": res,
             "p_l": pl,
         })
 
+    # Double stays informational unless you extend results schema to settle combos
     double_row = None
     if core_double:
         double_row = {
@@ -156,19 +110,25 @@ def main():
     fun_w = fun_l = fun_v = 0
 
     for p in fun_picks:
-        match = p.get("match")
-        market = p.get("market")
+        pid = (p.get("pick_id") or "").strip()
         odds = float(p.get("odds") or 0.0)
 
-        res = rmap.get(key_of(match, market), "PENDING")
-        if res == "WIN": fun_w += 1
-        elif res == "LOSS": fun_l += 1
-        elif res == "VOID": fun_v += 1
+        res = rmap.get(pid, "PENDING") if pid else "PENDING"
+        if res == "WIN":
+            fun_w += 1
+        elif res == "LOSS":
+            fun_l += 1
+        elif res == "VOID":
+            fun_v += 1
 
         fun_rows.append({
-            "match": match,
+            "pick_id": pid or None,
+            "fixture_id": p.get("fixture_id"),
+            "market_code": p.get("market_code"),
+
+            "match": p.get("match"),
             "league": p.get("league"),
-            "market": market,
+            "market": p.get("market"),
             "odds": odds,
             "result": res,
         })
@@ -206,7 +166,7 @@ def main():
             "wins": fun_w,
             "losses": fun_l,
             "voids": fun_v,
-            "note": "Fun payout δεν υπολογίζεται χωρίς settlement ανά στήλη. Εδώ κρατάμε outcomes ανά pick.",
+            "note": "Fun payout δεν υπολογίζεται χωρίς line-by-line settlement του συστήματος. Εδώ κρατάμε outcomes ανά pick.",
         },
 
         "weekly_summary": {
@@ -221,7 +181,7 @@ def main():
     with open(TUESDAY_RECAP_PATH, "w", encoding="utf-8") as f:
         json.dump(recap, f, ensure_ascii=False, indent=2)
 
-    print(f"✅ Tuesday Recap saved → {TUESDAY_RECAP_PATH}", flush=True)
+    log(f"✅ Tuesday Recap saved → {TUESDAY_RECAP_PATH}")
 
 if __name__ == "__main__":
     main()
