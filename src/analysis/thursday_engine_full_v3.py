@@ -8,7 +8,7 @@ import re
 from dateutil import parser
 
 # ============================================================
-#  BOMBAY THURSDAY ENGINE v3 (STABILIZED + MIS DRY-RUN)
+#  BOMBAY THURSDAY ENGINE v3 (STABILIZED) + MIS CUT (DEFAULT ON)
 #  - Fetch fixtures (API-FOOTBALL) within WINDOW_HOURS
 #  - Base model: multiplicative Poisson + shrinkage + Dixon-Coles
 #  - Odds: TheOddsAPI (1 call per league) + robust matching
@@ -16,13 +16,13 @@ from dateutil import parser
 #      * Hard probability caps
 #      * Favorite protection (market-driven floor)
 #      * Fair odds deviation guard (snap-to-market within 1.35x)
-#      * Over/Under blockers based on lambdas + low-tempo caps
-#      * Draw normalization based on lambda gap + league draw baseline
+#      * Over/Under blockers + low-tempo caps
+#      * Draw normalization
 #
-#  - MIS LAYER (DRY RUN by default):
-#      * Computes MIS score per fixture
-#      * Adds "mis" object in each fixture JSON
-#      * DOES NOT remove fixtures unless MIS_CUT_ENABLED=true
+#  - MIS LAYER (DEFAULT ON):
+#      * scores odds matching quality + market availability
+#      * assigns status: reject / fun_only / core_allowed / elite
+#      * by default: CUT reject fixtures from final output
 #
 #  - Output: logs/thursday_report_v3.json
 # ============================================================
@@ -51,44 +51,45 @@ LAMBDA_MIN = float(os.getenv("LAMBDA_MIN", "0.40"))
 LAMBDA_MAX_HOME = float(os.getenv("LAMBDA_MAX_HOME", "3.00"))
 LAMBDA_MAX_AWAY = float(os.getenv("LAMBDA_MAX_AWAY", "3.00"))
 
-# --- Stabilization (your rules) ---
+# --- Stabilization ---
 CAP_OVER = float(os.getenv("CAP_OVER", "0.70"))
 CAP_UNDER = float(os.getenv("CAP_UNDER", "0.75"))
 CAP_DRAW_MAX = float(os.getenv("CAP_DRAW_MAX", "0.32"))
 CAP_DRAW_MIN = float(os.getenv("CAP_DRAW_MIN", "0.20"))
 CAP_OUTCOME_MIN = float(os.getenv("CAP_OUTCOME_MIN", "0.05"))
 
-FAIR_SNAP_RATIO = float(os.getenv("FAIR_SNAP_RATIO", "1.35"))  # offered/1.35 .. offered*1.35
+FAIR_SNAP_RATIO = float(os.getenv("FAIR_SNAP_RATIO", "1.35"))
 
 LOW_TEMPO_LEAGUES = set(
     [x.strip() for x in os.getenv("LOW_TEMPO_LEAGUES", "Serie B,Ligue 2").split(",") if x.strip()]
 )
 LOW_TEMPO_OVER_CAP = float(os.getenv("LOW_TEMPO_OVER_CAP", "0.65"))
 
-# Over blockers
 OVER_BLOCK_LTOTAL = float(os.getenv("OVER_BLOCK_LTOTAL", "2.4"))
 OVER_BLOCK_LMIN = float(os.getenv("OVER_BLOCK_LMIN", "0.9"))
-# Under blockers
+
 UNDER_BLOCK_LTOTAL = float(os.getenv("UNDER_BLOCK_LTOTAL", "3.0"))
 UNDER_BLOCK_BOTH_GT = float(os.getenv("UNDER_BLOCK_BOTH_GT", "1.4"))
 
-# Draw normalization
 DRAW_LAMBDA_GAP_MAX = float(os.getenv("DRAW_LAMBDA_GAP_MAX", "0.40"))
 DRAW_IF_GAP_CAP = float(os.getenv("DRAW_IF_GAP_CAP", "0.26"))
 DRAW_LEAGUE_PLUS = float(os.getenv("DRAW_LEAGUE_PLUS", "0.03"))
 
-# Baselines
 USE_DYNAMIC_LEAGUE_BASELINES = os.getenv("USE_DYNAMIC_LEAGUE_BASELINES", "false").lower() == "true"
 BASELINES_LAST_N = int(os.getenv("BASELINES_LAST_N", "180"))
 
-# ------------------------------------------------------------
-# MIS flags (DRY RUN default)
-# ------------------------------------------------------------
-MIS_DRY_RUN = os.getenv("MIS_DRY_RUN", "true").lower() == "true"
-MIS_CUT_ENABLED = os.getenv("MIS_CUT_ENABLED", "false").lower() == "true"
-MIS_REJECT_BELOW = int(os.getenv("MIS_REJECT_BELOW", "55"))
-MIS_CORE_BELOW = int(os.getenv("MIS_CORE_BELOW", "65"))
-MIS_ELITE_AT = int(os.getenv("MIS_ELITE_AT", "75"))
+# --- MIS CONTROLS (DEFAULT ON) ---
+MIS_ENABLED = os.getenv("MIS_ENABLED", "true").lower() == "true"
+MIS_CUT_REJECT = os.getenv("MIS_CUT_REJECT", "true").lower() == "true"
+
+# Quality thresholds (tune later)
+MIS_MIN_MATCH_SCORE = float(os.getenv("MIS_MIN_MATCH_SCORE", "0.68"))      # similarity score
+MIS_MAX_TIME_DIFF_H = float(os.getenv("MIS_MAX_TIME_DIFF_H", "3.0"))       # odds time diff
+MIS_MIN_MARKETS_ANY = int(os.getenv("MIS_MIN_MARKETS_ANY", "2"))           # at least N offered markets
+MIS_MIN_1X2_MARKETS = int(os.getenv("MIS_MIN_1X2_MARKETS", "2"))           # at least 2 of (1,X,2) offered
+MIS_ELITE_SCORE = float(os.getenv("MIS_ELITE_SCORE", "82"))                # elite if score>=
+MIS_CORE_SCORE = float(os.getenv("MIS_CORE_SCORE", "70"))                  # core_allowed if score>=
+MIS_FUN_SCORE = float(os.getenv("MIS_FUN_SCORE", "58"))                    # fun_only if score>= else reject
 
 LEAGUES = {
     "Premier League": 39,
@@ -402,7 +403,7 @@ def compute_expected_goals(home_stats: dict, away_stats: dict, league_baseline: 
         att = _clamp(att, 0.55, 1.85)
         dff = _clamp(dff, 0.55, 1.85)
 
-        return {"n": n, "att": att, "def": dff, "gf_shrunk": gf_shrunk, "ga_shrunk": ga_shrunk}
+        return {"n": n, "att": att, "def": dff}
 
     h = get_rates(home_stats or {})
     a = get_rates(away_stats or {})
@@ -466,7 +467,6 @@ def compute_probabilities(lambda_home: float, lambda_away: float):
 
     po = _clamp(po, 1e-6, 1.0 - 1e-6)
     pu = 1.0 - po
-
     return {"home_prob": ph, "draw_prob": pd, "away_prob": pa, "over_2_5_prob": po, "under_2_5_prob": pu}
 
 # ------------------------- ODDS (TheOddsAPI) -------------------------
@@ -571,9 +571,9 @@ def _best_odds_from_event(ev_raw, event_home_norm, event_away_norm, swapped: boo
                     if point is not None and abs(point - 2.5) > 1e-6:
                         continue
                     name = (o.get("name") or "").lower()
-                    if "over" in name and ("2.5" in name or point == 2.5):
+                    if "over" in name:
                         best_over = max(best_over or 0.0, price)
-                    elif "under" in name and ("2.5" in name or point == 2.5):
+                    elif "under" in name:
                         best_under = max(best_under or 0.0, price)
 
     return {"home": best_home, "draw": best_draw, "away": best_away, "over": best_over, "under": best_under}
@@ -629,7 +629,12 @@ def pick_best_odds_for_fixture(fx, league_events_cache):
         return {}, {"matched": False, "reason": f"low_similarity(score={best_score:.2f})"}
 
     odds = _best_odds_from_event(best["raw"], best["home_norm"], best["away_norm"], best_swap)
-    debug = {"matched": True, "score": round(best_score, 3), "swap": best_swap, "time_diff_h": None if best_diff is None else round(best_diff, 2)}
+    debug = {
+        "matched": True,
+        "score": round(best_score, 3),
+        "swap": best_swap,
+        "time_diff_h": None if best_diff is None else round(best_diff, 2),
+    }
     return odds, debug
 
 # ------------------------- VALUE% -------------------------
@@ -730,10 +735,8 @@ def stabilize_probs(
     ph, pd, pa = _renorm_1x2(ph2, pd2, pa2)
 
     ltot = (lam_h or 0) + (lam_a or 0)
-
     if ltot < OVER_BLOCK_LTOTAL or (lam_h or 0) < OVER_BLOCK_LMIN or (lam_a or 0) < OVER_BLOCK_LMIN:
         po = min(po, min(CAP_OVER, 0.66))
-
     if league_name in LOW_TEMPO_LEAGUES:
         po = min(po, LOW_TEMPO_OVER_CAP)
 
@@ -761,107 +764,81 @@ def stabilize_probs(
     return ph, pd, pa, po, pu
 
 # ============================================================
-#  MIS (DRY RUN)
+#  MIS (MATCH INTEGRITY SCORE)
+#  Uses ONLY: odds_match debug + offered market availability + time diff
 # ============================================================
-def compute_mis(
-    league_name: str,
-    lam_h: float,
-    lam_a: float,
-    ph: float,
-    pd: float,
-    pa: float,
-    po: float,
-    pu: float,
-    off_1,
-    off_x,
-    off_2,
-    fair_1,
-    fair_x,
-    fair_2,
-):
-    ltotal = (lam_h or 0.0) + (lam_a or 0.0)
-    gap = abs((lam_h or 0.0) - (lam_a or 0.0))
+def compute_mis(match_debug: dict, offered: dict):
+    # offered markets count
+    offered_keys = ["home", "draw", "away", "over", "under"]
+    offered_cnt = sum(1 for k in offered_keys if safe_float(offered.get(k), None) is not None)
 
-    # A) Tempo (0-25)
-    if ltotal < 2.1:
-        tempo = 5
-    elif ltotal < 2.4:
-        tempo = 12
-    elif ltotal < 2.8:
-        tempo = 18
-    else:
-        tempo = 25
-    if league_name in LOW_TEMPO_LEAGUES:
-        tempo = max(0, tempo - 5)
+    one_x_two_cnt = sum(
+        1 for k in ["home", "draw", "away"] if safe_float(offered.get(k), None) is not None
+    )
 
-    # B) Balance (0-20)
-    if gap > 0.9:
-        balance = 4
-    elif gap > 0.6:
-        balance = 10
-    elif gap > 0.4:
-        balance = 15
-    else:
-        balance = 20
+    matched = bool(match_debug.get("matched"))
+    sim = safe_float(match_debug.get("score"), 0.0) or 0.0
+    tdiff = safe_float(match_debug.get("time_diff_h"), None)
 
-    # C) Market sanity (0-20) using implied probs distance when odds exist
-    def _imp(o):
-        try:
-            o = float(o)
-            return (1.0 / o) if o and o > 1.0 else None
-        except Exception:
-            return None
-
-    sanity = 20
-    imp_off1 = _imp(off_1); imp_off2 = _imp(off_2)
-    imp_f1 = _imp(fair_1); imp_f2 = _imp(fair_2)
-
-    if imp_off1 is not None and imp_f1 is not None and abs(imp_f1 - imp_off1) > 0.12:
-        sanity -= 8
-    if imp_off2 is not None and imp_f2 is not None and abs(imp_f2 - imp_off2) > 0.12:
-        sanity -= 8
-    sanity = max(0, sanity)
-
-    # D) Draw logic (0-20)
-    draw_logic = 20
-    if pd is not None and (pd < 0.20 or pd > 0.32):
-        draw_logic -= 10
-    if gap < 0.35 and (pd is not None and pd < 0.23):
-        draw_logic -= 10
-    if league_name in LOW_TEMPO_LEAGUES and (pd is not None and pd < 0.25):
-        draw_logic -= 10
-    draw_logic = max(0, draw_logic)
-
-    # E) Volatility (0-15)
-    vol = 15
-    if po is not None and po > 0.62 and tempo < 15:
-        vol -= 7
-    if ph is not None and pd is not None and ph > 0.60 and pd > 0.28:
-        vol -= 6
-    vol = max(0, vol)
-
-    score = int(round(tempo + balance + sanity + draw_logic + vol))
-    return {
-        "score": score,
-        "tempo": tempo,
-        "balance": balance,
-        "market_sanity": sanity,
-        "draw_logic": draw_logic,
-        "volatility": vol,
+    # gating flags
+    gates = {
+        "odds_matched": matched,
+        "sim_ok": (sim >= MIS_MIN_MATCH_SCORE),
+        "time_ok": (tdiff is None or tdiff <= MIS_MAX_TIME_DIFF_H),
+        "markets_any_ok": (offered_cnt >= MIS_MIN_MARKETS_ANY),
+        "markets_1x2_ok": (one_x_two_cnt >= MIS_MIN_1X2_MARKETS),
     }
 
-def mis_status(score: int):
-    if score < MIS_REJECT_BELOW:
-        return "reject"
-    if score < MIS_CORE_BELOW:
-        return "fun_only"
-    if score >= MIS_ELITE_AT:
-        return "elite"
-    return "core_allowed"
+    # score (0..100)
+    score = 0.0
+    score += 45.0 if matched else 0.0
+    score += _clamp(sim, 0.0, 1.0) * 35.0
+    score += _clamp(offered_cnt / 5.0, 0.0, 1.0) * 15.0
+    score += 5.0 if (tdiff is None or tdiff <= 1.5) else (3.0 if tdiff <= MIS_MAX_TIME_DIFF_H else 0.0)
+
+    score = round(_clamp(score, 0.0, 100.0), 1)
+
+    # status
+    if not (gates["odds_matched"] and gates["sim_ok"] and gates["time_ok"] and gates["markets_any_ok"]):
+        status = "reject"
+    else:
+        if score >= MIS_ELITE_SCORE and gates["markets_1x2_ok"]:
+            status = "elite"
+        elif score >= MIS_CORE_SCORE and gates["markets_1x2_ok"]:
+            status = "core_allowed"
+        elif score >= MIS_FUN_SCORE:
+            status = "fun_only"
+        else:
+            status = "reject"
+
+    return {
+        "enabled": MIS_ENABLED,
+        "cut_reject": MIS_CUT_REJECT,
+        "score": score,
+        "status": status,
+        "inputs": {
+            "matched": matched,
+            "match_score": round(sim, 3),
+            "time_diff_h": tdiff,
+            "offered_markets_count": offered_cnt,
+            "offered_1x2_count": one_x_two_cnt,
+        },
+        "gates": gates,
+        "thresholds": {
+            "min_match_score": MIS_MIN_MATCH_SCORE,
+            "max_time_diff_h": MIS_MAX_TIME_DIFF_H,
+            "min_markets_any": MIS_MIN_MARKETS_ANY,
+            "min_1x2_markets": MIS_MIN_1X2_MARKETS,
+            "elite_score": MIS_ELITE_SCORE,
+            "core_score": MIS_CORE_SCORE,
+            "fun_score": MIS_FUN_SCORE,
+        },
+    }
 
 # ------------------------- MAIN PIPELINE -------------------------
 def build_fixture_blocks():
     fixtures_out = []
+    rejected = []
     now = datetime.datetime.now(datetime.timezone.utc)
     to_dt = now + datetime.timedelta(hours=WINDOW_HOURS)
     odds_from = now - datetime.timedelta(hours=8)
@@ -870,11 +847,11 @@ def build_fixture_blocks():
     log(f"Window: next {WINDOW_HOURS} hours | USE_ODDS_API={USE_ODDS_API}")
     log(f"MODEL: ShrinkageK={SHRINKAGE_K} | DC_RHO={DC_RHO}")
     log(f"STABILIZE: snap_ratio={FAIR_SNAP_RATIO} caps(over={CAP_OVER}, under={CAP_UNDER}, draw=[{CAP_DRAW_MIN},{CAP_DRAW_MAX}])")
-    log(f"MIS: dry_run={MIS_DRY_RUN} cut_enabled={MIS_CUT_ENABLED} thresholds reject<{MIS_REJECT_BELOW} core<{MIS_CORE_BELOW} elite>={MIS_ELITE_AT}")
+    log(f"MIS: enabled={MIS_ENABLED} cut_reject={MIS_CUT_REJECT} minMatchScore={MIS_MIN_MATCH_SCORE}")
 
     if not API_FOOTBALL_KEY:
         log("❌ FOOTBALL_API_KEY is missing. Aborting.")
-        return []
+        return [], []
 
     all_fixtures = []
     for lg_name, lg_id in LEAGUES.items():
@@ -893,13 +870,6 @@ def build_fixture_blocks():
         log(f"Odds events fetched total: {total_events}")
     else:
         log("⚠️ USE_ODDS_API=False → skipping odds.")
-
-    # MIS counters
-    mis_total = 0
-    mis_reject = 0
-    mis_fun = 0
-    mis_core = 0
-    mis_elite = 0
 
     for fx in all_fixtures:
         league_id = fx["league_id"]
@@ -949,95 +919,80 @@ def build_fixture_blocks():
         fair_over = implied(po)
         fair_under = implied(pu)
 
-        # MIS computed always (dry run just means "do not cut")
-        mis = compute_mis(
-            league_name=league_name,
-            lam_h=lam_h, lam_a=lam_a,
-            ph=ph, pd=pd, pa=pa, po=po, pu=pu,
-            off_1=off_1, off_x=off_x, off_2=off_2,
-            fair_1=fair_1, fair_x=fair_x, fair_2=fair_2
-        )
-        mis["status"] = mis_status(mis["score"])
-
-        mis_total += 1
-        if mis["status"] == "reject":
-            mis_reject += 1
-        elif mis["status"] == "fun_only":
-            mis_fun += 1
-        elif mis["status"] == "elite":
-            mis_elite += 1
-        else:
-            mis_core += 1
-
-        # Optional cut (OFF by default)
-        if MIS_CUT_ENABLED and mis["status"] == "reject":
-            continue
+        # MIS
+        mis = None
+        if MIS_ENABLED:
+            mis = compute_mis(
+                match_debug if isinstance(match_debug, dict) else {},
+                {"home": off_1, "draw": off_x, "away": off_2, "over": off_o, "under": off_u},
+            )
 
         dt = fx["commence_utc"]
 
-        fixtures_out.append(
-            {
-                "fixture_id": fx["id"],
-                "date": dt.date().isoformat(),
-                "time": dt.strftime("%H:%M"),
-                "league_id": league_id,
-                "league": league_name,
-                "home": fx["home"],
-                "away": fx["away"],
-                "model": "bombay_multiplicative_dc_v3_stabilized",
+        row = {
+            "fixture_id": fx["id"],
+            "date": dt.date().isoformat(),
+            "time": dt.strftime("%H:%M"),
+            "league_id": league_id,
+            "league": league_name,
+            "home": fx["home"],
+            "away": fx["away"],
+            "model": "bombay_multiplicative_dc_v3_stabilized_mis",
 
-                "lambda_home": round(lam_h, 3),
-                "lambda_away": round(lam_a, 3),
+            "lambda_home": round(lam_h, 3),
+            "lambda_away": round(lam_a, 3),
 
-                "home_prob": round(ph, 3),
-                "draw_prob": round(pd, 3),
-                "away_prob": round(pa, 3),
-                "over_2_5_prob": round(po, 3),
-                "under_2_5_prob": round(pu, 3),
+            "home_prob": round(ph, 3),
+            "draw_prob": round(pd, 3),
+            "away_prob": round(pa, 3),
+            "over_2_5_prob": round(po, 3),
+            "under_2_5_prob": round(pu, 3),
 
-                "fair_1": fair_1,
-                "fair_x": fair_x,
-                "fair_2": fair_2,
-                "fair_over_2_5": fair_over,
-                "fair_under_2_5": fair_under,
+            "fair_1": fair_1,
+            "fair_x": fair_x,
+            "fair_2": fair_2,
+            "fair_over_2_5": fair_over,
+            "fair_under_2_5": fair_under,
 
-                "offered_1": off_1,
-                "offered_x": off_x,
-                "offered_2": off_2,
-                "offered_over_2_5": off_o,
-                "offered_under_2_5": off_u,
+            "offered_1": off_1,
+            "offered_x": off_x,
+            "offered_2": off_2,
+            "offered_over_2_5": off_o,
+            "offered_under_2_5": off_u,
 
-                "value_pct_1": value_pct(off_1, fair_1),
-                "value_pct_x": value_pct(off_x, fair_x),
-                "value_pct_2": value_pct(off_2, fair_2),
-                "value_pct_over": value_pct(off_o, fair_over),
-                "value_pct_under": value_pct(off_u, fair_under),
+            "value_pct_1": value_pct(off_1, fair_1),
+            "value_pct_x": value_pct(off_x, fair_x),
+            "value_pct_2": value_pct(off_2, fair_2),
+            "value_pct_over": value_pct(off_o, fair_over),
+            "value_pct_under": value_pct(off_u, fair_under),
 
-                "odds_match": match_debug,
-                "league_baseline": league_baseline,
-                "stabilization": {
-                    "snap_ratio": FAIR_SNAP_RATIO,
-                    "caps": {
-                        "over": CAP_OVER,
-                        "under": CAP_UNDER,
-                        "draw_min": CAP_DRAW_MIN,
-                        "draw_max": CAP_DRAW_MAX,
-                        "outcome_min": CAP_OUTCOME_MIN,
-                    },
-                    "low_tempo_league": (league_name in LOW_TEMPO_LEAGUES),
+            "odds_match": match_debug,
+            "league_baseline": league_baseline,
+            "stabilization": {
+                "snap_ratio": FAIR_SNAP_RATIO,
+                "caps": {
+                    "over": CAP_OVER,
+                    "under": CAP_UNDER,
+                    "draw_min": CAP_DRAW_MIN,
+                    "draw_max": CAP_DRAW_MAX,
+                    "outcome_min": CAP_OUTCOME_MIN,
                 },
+                "low_tempo_league": (league_name in LOW_TEMPO_LEAGUES),
+            },
+            "mis": mis,
+        }
 
-                # ✅ MIS block
-                "mis": mis,
-            }
-        )
+        if MIS_ENABLED and MIS_CUT_REJECT and (mis or {}).get("status") == "reject":
+            rejected.append(row)
+            continue
 
-    log(f"Thursday fixtures_out: {len(fixtures_out)} | odds matched: {matched_cnt}")
-    log(f"MIS summary: reject={mis_reject} fun_only={mis_fun} core_allowed={mis_core} elite={mis_elite} total={mis_total}")
-    return fixtures_out
+        fixtures_out.append(row)
+
+    log(f"Thursday fixtures_out: {len(fixtures_out)} | rejected: {len(rejected)} | odds matched: {matched_cnt}")
+    return fixtures_out, rejected
 
 def main():
-    fixtures = build_fixture_blocks()
+    fixtures, rejected = build_fixture_blocks()
     now = datetime.datetime.now(datetime.timezone.utc)
     to_dt = now + datetime.timedelta(hours=WINDOW_HOURS)
 
@@ -1045,23 +1000,20 @@ def main():
         "generated_at": now.isoformat(),
         "window": {"from": now.date().isoformat(), "to": to_dt.date().isoformat(), "hours": WINDOW_HOURS},
         "fixtures_total": len(fixtures),
-        "fixtures": fixtures,
+        "fixtures_rejected": len(rejected),
         "mis": {
-            "dry_run": MIS_DRY_RUN,
-            "cut_enabled": MIS_CUT_ENABLED,
-            "thresholds": {
-                "reject_below": MIS_REJECT_BELOW,
-                "core_below": MIS_CORE_BELOW,
-                "elite_at": MIS_ELITE_AT,
-            },
+            "enabled": MIS_ENABLED,
+            "cut_reject": MIS_CUT_REJECT,
         },
+        "fixtures": fixtures,
+        "rejected": rejected,  # keep for debugging / audit
     }
 
     os.makedirs("logs", exist_ok=True)
     with open("logs/thursday_report_v3.json", "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, indent=2)
 
-    log(f"✅ Thursday v3 STABILIZED + MIS READY. Fixtures: {len(fixtures)}")
+    log(f"✅ Thursday v3 (MIS CUT) READY. Fixtures: {len(fixtures)} | Rejected: {len(rejected)}")
 
 if __name__ == "__main__":
     main()
