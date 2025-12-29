@@ -8,22 +8,15 @@ import re
 from dateutil import parser
 
 # ============================================================
-#  BOMBAY THURSDAY ENGINE v3 (STABILIZED) + MIS CUT (DEFAULT ON)
+#  BOMBAY THURSDAY ENGINE v3.2 (LEAGUE-SLIM + SCORE v2 + TEMPO)
 #  - Fetch fixtures (API-FOOTBALL) within WINDOW_HOURS
 #  - Base model: multiplicative Poisson + shrinkage + Dixon-Coles
 #  - Odds: TheOddsAPI (1 call per league) + robust matching
-#  - STABILIZATION LAYER:
-#      * Hard probability caps
-#      * Favorite protection (market-driven floor)
-#      * Fair odds deviation guard (snap-to-market within 1.35x)
-#      * Over/Under blockers + low-tempo caps
-#      * Draw normalization
-#
-#  - MIS LAYER (DEFAULT ON):
-#      * scores odds matching quality + market availability
-#      * assigns status: reject / fun_only / core_allowed / elite
-#      * by default: CUT reject fixtures from final output
-#
+#  - STABILIZATION LAYER (as before)
+#  - NEW:
+#      * League Slim (Tier1 + FanOnly) to reduce chaos & API hits
+#      * Score v2 for Presenter (prob + value_pct, not only prob)
+#      * Tempo proxy (lambda_total / league_avg_goals_per_match)
 #  - Output: logs/thursday_report_v3.json
 # ============================================================
 
@@ -38,6 +31,64 @@ FOOTBALL_SEASON = os.getenv("FOOTBALL_SEASON", "2025")
 USE_ODDS_API = os.getenv("USE_ODDS_API", "true").lower() == "true"
 WINDOW_HOURS = int(os.getenv("WINDOW_HOURS", "72"))
 
+# -------------------- LEAGUE SLIM (default selection) --------------------
+# Tier-1 (core) + Fan-only (extras).
+# You can override via env:
+#   LEAGUES_TIER1="Premier League,La Liga,Serie A,Bundesliga,Ligue 1,Eredivisie,Belgium Pro League"
+#   LEAGUES_FANONLY="Serie B,Ligue 2"
+LEAGUES_TIER1 = [x.strip() for x in os.getenv(
+    "LEAGUES_TIER1",
+    "Premier League,La Liga,Serie A,Bundesliga,Ligue 1,Eredivisie,Belgium Pro League"
+).split(",") if x.strip()]
+
+LEAGUES_FANONLY = [x.strip() for x in os.getenv(
+    "LEAGUES_FANONLY",
+    "Serie B,Ligue 2"
+).split(",") if x.strip()]
+
+# Master league dictionary (API-Football ids).
+# NOTE: Eredivisie=88, Belgium Pro League=144 are defaults.
+LEAGUES_ALL = {
+    "Premier League": 39,
+    "La Liga": 140,
+    "Serie A": 135,
+    "Bundesliga": 78,
+    "Ligue 1": 61,
+
+    "Eredivisie": 88,            # Netherlands
+    "Belgium Pro League": 144,   # Belgium First Division A
+
+    "Serie B": 136,
+    "Ligue 2": 62,
+
+    # Optional (keep available but not selected by default)
+    "Championship": 40,
+    "Liga Portugal 1": 94,
+}
+
+# Selected leagues = Tier1 + FanOnly (dedup, keep order)
+_LEAGUES_SEL_NAMES = []
+for nm in (LEAGUES_TIER1 + LEAGUES_FANONLY):
+    if nm in LEAGUES_ALL and nm not in _LEAGUES_SEL_NAMES:
+        _LEAGUES_SEL_NAMES.append(nm)
+
+LEAGUES_SELECTED = {nm: LEAGUES_ALL[nm] for nm in _LEAGUES_SEL_NAMES}
+
+# TheOddsAPI sport keys
+LEAGUE_TO_SPORT = {
+    "Premier League": "soccer_epl",
+    "La Liga": "soccer_spain_la_liga",
+    "Serie A": "soccer_italy_serie_a",
+    "Serie B": "soccer_italy_serie_b",
+    "Bundesliga": "soccer_germany_bundesliga",
+    "Ligue 1": "soccer_france_ligue_one",
+    "Ligue 2": "soccer_france_ligue_two",
+    "Liga Portugal 1": "soccer_portugal_primeira_liga",
+    "Championship": "soccer_efl_champ",
+    "Eredivisie": "soccer_netherlands_eredivisie",
+    "Belgium Pro League": "soccer_belgium_first_div",
+}
+
 # Odds matching controls
 ODDS_TIME_GATE_HOURS = float(os.getenv("ODDS_TIME_GATE_HOURS", "6"))
 ODDS_TIME_SOFT_HOURS = float(os.getenv("ODDS_TIME_SOFT_HOURS", "10"))
@@ -51,69 +102,35 @@ LAMBDA_MIN = float(os.getenv("LAMBDA_MIN", "0.40"))
 LAMBDA_MAX_HOME = float(os.getenv("LAMBDA_MAX_HOME", "3.00"))
 LAMBDA_MAX_AWAY = float(os.getenv("LAMBDA_MAX_AWAY", "3.00"))
 
-# --- Stabilization ---
+# --- Stabilization (your rules) ---
 CAP_OVER = float(os.getenv("CAP_OVER", "0.70"))
 CAP_UNDER = float(os.getenv("CAP_UNDER", "0.75"))
 CAP_DRAW_MAX = float(os.getenv("CAP_DRAW_MAX", "0.32"))
 CAP_DRAW_MIN = float(os.getenv("CAP_DRAW_MIN", "0.20"))
 CAP_OUTCOME_MIN = float(os.getenv("CAP_OUTCOME_MIN", "0.05"))
 
-FAIR_SNAP_RATIO = float(os.getenv("FAIR_SNAP_RATIO", "1.35"))
+FAIR_SNAP_RATIO = float(os.getenv("FAIR_SNAP_RATIO", "1.35"))  # offered/1.35 .. offered*1.35
 
 LOW_TEMPO_LEAGUES = set(
     [x.strip() for x in os.getenv("LOW_TEMPO_LEAGUES", "Serie B,Ligue 2").split(",") if x.strip()]
 )
 LOW_TEMPO_OVER_CAP = float(os.getenv("LOW_TEMPO_OVER_CAP", "0.65"))
 
+# Over blockers
 OVER_BLOCK_LTOTAL = float(os.getenv("OVER_BLOCK_LTOTAL", "2.4"))
 OVER_BLOCK_LMIN = float(os.getenv("OVER_BLOCK_LMIN", "0.9"))
-
+# Under blockers
 UNDER_BLOCK_LTOTAL = float(os.getenv("UNDER_BLOCK_LTOTAL", "3.0"))
 UNDER_BLOCK_BOTH_GT = float(os.getenv("UNDER_BLOCK_BOTH_GT", "1.4"))
 
+# Draw normalization
 DRAW_LAMBDA_GAP_MAX = float(os.getenv("DRAW_LAMBDA_GAP_MAX", "0.40"))
 DRAW_IF_GAP_CAP = float(os.getenv("DRAW_IF_GAP_CAP", "0.26"))
 DRAW_LEAGUE_PLUS = float(os.getenv("DRAW_LEAGUE_PLUS", "0.03"))
 
+# Baselines
 USE_DYNAMIC_LEAGUE_BASELINES = os.getenv("USE_DYNAMIC_LEAGUE_BASELINES", "false").lower() == "true"
 BASELINES_LAST_N = int(os.getenv("BASELINES_LAST_N", "180"))
-
-# --- MIS CONTROLS (DEFAULT ON) ---
-MIS_ENABLED = os.getenv("MIS_ENABLED", "true").lower() == "true"
-MIS_CUT_REJECT = os.getenv("MIS_CUT_REJECT", "true").lower() == "true"
-
-# Quality thresholds (tune later)
-MIS_MIN_MATCH_SCORE = float(os.getenv("MIS_MIN_MATCH_SCORE", "0.68"))      # similarity score
-MIS_MAX_TIME_DIFF_H = float(os.getenv("MIS_MAX_TIME_DIFF_H", "3.0"))       # odds time diff
-MIS_MIN_MARKETS_ANY = int(os.getenv("MIS_MIN_MARKETS_ANY", "2"))           # at least N offered markets
-MIS_MIN_1X2_MARKETS = int(os.getenv("MIS_MIN_1X2_MARKETS", "2"))           # at least 2 of (1,X,2) offered
-MIS_ELITE_SCORE = float(os.getenv("MIS_ELITE_SCORE", "82"))                # elite if score>=
-MIS_CORE_SCORE = float(os.getenv("MIS_CORE_SCORE", "70"))                  # core_allowed if score>=
-MIS_FUN_SCORE = float(os.getenv("MIS_FUN_SCORE", "58"))                    # fun_only if score>= else reject
-
-LEAGUES = {
-    "Premier League": 39,
-    "Championship": 40,
-    "Ligue 1": 61,
-    "Ligue 2": 62,
-    "Bundesliga": 78,
-    "Serie A": 135,
-    "Serie B": 136,
-    "La Liga": 140,
-    "Liga Portugal 1": 94,
-}
-
-LEAGUE_TO_SPORT = {
-    "Premier League": "soccer_epl",
-    "Championship": "soccer_efl_champ",
-    "La Liga": "soccer_spain_la_liga",
-    "Serie A": "soccer_italy_serie_a",
-    "Serie B": "soccer_italy_serie_b",
-    "Bundesliga": "soccer_germany_bundesliga",
-    "Ligue 1": "soccer_france_ligue_one",
-    "Ligue 2": "soccer_france_ligue_two",
-    "Liga Portugal 1": "soccer_portugal_primeira_liga",
-}
 
 TEAM_STATS_CACHE = {}
 
@@ -300,14 +317,14 @@ def fetch_team_recent_stats(team_id: int, league_id: int, want_home_context: boo
 def fetch_league_baselines_static(league_id: int):
     overrides = {
         39: {"avg_goals_per_match": 2.9, "home_advantage": 0.18, "avg_draw_rate": 0.24, "avg_over25_rate": 0.58},
-        40: {"avg_goals_per_match": 2.5, "home_advantage": 0.16, "avg_draw_rate": 0.28, "avg_over25_rate": 0.52},
         78: {"avg_goals_per_match": 3.1, "home_advantage": 0.17, "avg_draw_rate": 0.25, "avg_over25_rate": 0.60},
-        135: {"avg_goals_per_match": 2.5, "home_advantage": 0.15, "avg_draw_rate": 0.30, "avg_over25_rate": 0.52},
-        136: {"avg_goals_per_match": 2.45, "home_advantage": 0.15, "avg_draw_rate": 0.30, "avg_over25_rate": 0.50},
+        135: {"avg_goals_per_match": 2.5, "home_advantage": 0.15, "avg_draw_rate": 0.27, "avg_over25_rate": 0.52},
         140: {"avg_goals_per_match": 2.6, "home_advantage": 0.16, "avg_draw_rate": 0.27, "avg_over25_rate": 0.55},
-        94: {"avg_goals_per_match": 2.55, "home_advantage": 0.15, "avg_draw_rate": 0.28, "avg_over25_rate": 0.54},
         61: {"avg_goals_per_match": 2.70, "home_advantage": 0.16, "avg_draw_rate": 0.26, "avg_over25_rate": 0.55},
         62: {"avg_goals_per_match": 2.35, "home_advantage": 0.15, "avg_draw_rate": 0.29, "avg_over25_rate": 0.49},
+        136: {"avg_goals_per_match": 2.45, "home_advantage": 0.15, "avg_draw_rate": 0.30, "avg_over25_rate": 0.50},
+        88: {"avg_goals_per_match": 3.15, "home_advantage": 0.15, "avg_draw_rate": 0.24, "avg_over25_rate": 0.62},
+        144: {"avg_goals_per_match": 2.85, "home_advantage": 0.14, "avg_draw_rate": 0.25, "avg_over25_rate": 0.58},
     }
     base = {"avg_goals_per_match": 2.6, "home_advantage": 0.16, "avg_draw_rate": 0.26, "avg_over25_rate": 0.55}
     if league_id in overrides:
@@ -467,6 +484,7 @@ def compute_probabilities(lambda_home: float, lambda_away: float):
 
     po = _clamp(po, 1e-6, 1.0 - 1e-6)
     pu = 1.0 - po
+
     return {"home_prob": ph, "draw_prob": pd, "away_prob": pa, "over_2_5_prob": po, "under_2_5_prob": pu}
 
 # ------------------------- ODDS (TheOddsAPI) -------------------------
@@ -571,9 +589,9 @@ def _best_odds_from_event(ev_raw, event_home_norm, event_away_norm, swapped: boo
                     if point is not None and abs(point - 2.5) > 1e-6:
                         continue
                     name = (o.get("name") or "").lower()
-                    if "over" in name:
+                    if "over" in name and ("2.5" in name or point == 2.5):
                         best_over = max(best_over or 0.0, price)
-                    elif "under" in name:
+                    elif "under" in name and ("2.5" in name or point == 2.5):
                         best_under = max(best_under or 0.0, price)
 
     return {"home": best_home, "draw": best_draw, "away": best_away, "over": best_over, "under": best_under}
@@ -629,12 +647,7 @@ def pick_best_odds_for_fixture(fx, league_events_cache):
         return {}, {"matched": False, "reason": f"low_similarity(score={best_score:.2f})"}
 
     odds = _best_odds_from_event(best["raw"], best["home_norm"], best["away_norm"], best_swap)
-    debug = {
-        "matched": True,
-        "score": round(best_score, 3),
-        "swap": best_swap,
-        "time_diff_h": None if best_diff is None else round(best_diff, 2),
-    }
+    debug = {"matched": True, "score": round(best_score, 3), "swap": best_swap, "time_diff_h": None if best_diff is None else round(best_diff, 2)}
     return odds, debug
 
 # ------------------------- VALUE% -------------------------
@@ -649,13 +662,12 @@ def value_pct(offered, fair):
         return None
 
 # ============================================================
-#  STABILIZATION LAYER
+#  STABILIZATION LAYER (NO fantasy numbers, only clamps/snaps)
 # ============================================================
 def _renorm_1x2(ph, pd, pa):
     ph = max(CAP_OUTCOME_MIN, ph)
     pd = max(CAP_OUTCOME_MIN, pd)
     pa = max(CAP_OUTCOME_MIN, pa)
-
     pd = _clamp(pd, CAP_DRAW_MIN, CAP_DRAW_MAX)
 
     s = ph + pd + pa
@@ -735,8 +747,10 @@ def stabilize_probs(
     ph, pd, pa = _renorm_1x2(ph2, pd2, pa2)
 
     ltot = (lam_h or 0) + (lam_a or 0)
+
     if ltot < OVER_BLOCK_LTOTAL or (lam_h or 0) < OVER_BLOCK_LMIN or (lam_a or 0) < OVER_BLOCK_LMIN:
         po = min(po, min(CAP_OVER, 0.66))
+
     if league_name in LOW_TEMPO_LEAGUES:
         po = min(po, LOW_TEMPO_OVER_CAP)
 
@@ -763,98 +777,48 @@ def stabilize_probs(
 
     return ph, pd, pa, po, pu
 
-# ============================================================
-#  MIS (MATCH INTEGRITY SCORE)
-#  Uses ONLY: odds_match debug + offered market availability + time diff
-# ============================================================
-def compute_mis(match_debug: dict, offered: dict):
-    # offered markets count
-    offered_keys = ["home", "draw", "away", "over", "under"]
-    offered_cnt = sum(1 for k in offered_keys if safe_float(offered.get(k), None) is not None)
+# ------------------------- SCORE v2 + TEMPO -------------------------
+def tempo_proxy(lambda_total: float, league_avg_goals_match: float) -> float:
+    if not lambda_total or not league_avg_goals_match:
+        return None
+    # ratio around 1.0 = normal tempo, >1 faster, <1 slower
+    r = lambda_total / max(1e-6, league_avg_goals_match)
+    # clamp for report stability
+    return round(_clamp(r, 0.60, 1.60), 2)
 
-    one_x_two_cnt = sum(
-        1 for k in ["home", "draw", "away"] if safe_float(offered.get(k), None) is not None
-    )
-
-    matched = bool(match_debug.get("matched"))
-    sim = safe_float(match_debug.get("score"), 0.0) or 0.0
-    tdiff = safe_float(match_debug.get("time_diff_h"), None)
-
-    # gating flags
-    gates = {
-        "odds_matched": matched,
-        "sim_ok": (sim >= MIS_MIN_MATCH_SCORE),
-        "time_ok": (tdiff is None or tdiff <= MIS_MAX_TIME_DIFF_H),
-        "markets_any_ok": (offered_cnt >= MIS_MIN_MARKETS_ANY),
-        "markets_1x2_ok": (one_x_two_cnt >= MIS_MIN_1X2_MARKETS),
-    }
-
-    # score (0..100)
-    score = 0.0
-    score += 45.0 if matched else 0.0
-    score += _clamp(sim, 0.0, 1.0) * 35.0
-    score += _clamp(offered_cnt / 5.0, 0.0, 1.0) * 15.0
-    score += 5.0 if (tdiff is None or tdiff <= 1.5) else (3.0 if tdiff <= MIS_MAX_TIME_DIFF_H else 0.0)
-
-    score = round(_clamp(score, 0.0, 100.0), 1)
-
-    # status
-    if not (gates["odds_matched"] and gates["sim_ok"] and gates["time_ok"] and gates["markets_any_ok"]):
-        status = "reject"
-    else:
-        if score >= MIS_ELITE_SCORE and gates["markets_1x2_ok"]:
-            status = "elite"
-        elif score >= MIS_CORE_SCORE and gates["markets_1x2_ok"]:
-            status = "core_allowed"
-        elif score >= MIS_FUN_SCORE:
-            status = "fun_only"
-        else:
-            status = "reject"
-
-    return {
-        "enabled": MIS_ENABLED,
-        "cut_reject": MIS_CUT_REJECT,
-        "score": score,
-        "status": status,
-        "inputs": {
-            "matched": matched,
-            "match_score": round(sim, 3),
-            "time_diff_h": tdiff,
-            "offered_markets_count": offered_cnt,
-            "offered_1x2_count": one_x_two_cnt,
-        },
-        "gates": gates,
-        "thresholds": {
-            "min_match_score": MIS_MIN_MATCH_SCORE,
-            "max_time_diff_h": MIS_MAX_TIME_DIFF_H,
-            "min_markets_any": MIS_MIN_MARKETS_ANY,
-            "min_1x2_markets": MIS_MIN_1X2_MARKETS,
-            "elite_score": MIS_ELITE_SCORE,
-            "core_score": MIS_CORE_SCORE,
-            "fun_score": MIS_FUN_SCORE,
-        },
-    }
+def score_v2(prob: float, value: float) -> float:
+    """
+    Presenter score 1..10.
+    Uses BOTH probability and value_pct:
+      - prob contributes base (prob*10)
+      - value_pct contributes bonus (value_pct/5 capped)
+    """
+    if prob is None:
+        return None
+    base = (prob or 0.0) * 10.0
+    bonus = 0.0
+    if isinstance(value, (int, float)):
+        bonus = _clamp(value / 5.0, 0.0, 3.0)  # +0..+3
+    s = base + bonus
+    return round(_clamp(s, 1.0, 10.0), 1)
 
 # ------------------------- MAIN PIPELINE -------------------------
 def build_fixture_blocks():
     fixtures_out = []
-    rejected = []
     now = datetime.datetime.now(datetime.timezone.utc)
     to_dt = now + datetime.timedelta(hours=WINDOW_HOURS)
     odds_from = now - datetime.timedelta(hours=8)
 
     log(f"Using FOOTBALL_SEASON={FOOTBALL_SEASON}")
     log(f"Window: next {WINDOW_HOURS} hours | USE_ODDS_API={USE_ODDS_API}")
-    log(f"MODEL: ShrinkageK={SHRINKAGE_K} | DC_RHO={DC_RHO}")
-    log(f"STABILIZE: snap_ratio={FAIR_SNAP_RATIO} caps(over={CAP_OVER}, under={CAP_UNDER}, draw=[{CAP_DRAW_MIN},{CAP_DRAW_MAX}])")
-    log(f"MIS: enabled={MIS_ENABLED} cut_reject={MIS_CUT_REJECT} minMatchScore={MIS_MIN_MATCH_SCORE}")
+    log(f"LEAGUES_SELECTED ({len(LEAGUES_SELECTED)}): {', '.join(list(LEAGUES_SELECTED.keys()))}")
 
     if not API_FOOTBALL_KEY:
         log("❌ FOOTBALL_API_KEY is missing. Aborting.")
-        return [], []
+        return []
 
     all_fixtures = []
-    for lg_name, lg_id in LEAGUES.items():
+    for lg_name, lg_id in LEAGUES_SELECTED.items():
         all_fixtures.extend(fetch_fixtures(lg_id, lg_name))
     log(f"Total fixtures collected: {len(all_fixtures)}")
 
@@ -863,7 +827,7 @@ def build_fixture_blocks():
 
     if USE_ODDS_API:
         total_events = 0
-        for lg_name in LEAGUES.keys():
+        for lg_name in LEAGUES_SELECTED.keys():
             odds_events = fetch_odds_for_league(lg_name, odds_from, to_dt)
             total_events += len(odds_events or [])
             odds_cache_by_league[lg_name] = build_events_cache(odds_events)
@@ -919,80 +883,83 @@ def build_fixture_blocks():
         fair_over = implied(po)
         fair_under = implied(pu)
 
-        # MIS
-        mis = None
-        if MIS_ENABLED:
-            mis = compute_mis(
-                match_debug if isinstance(match_debug, dict) else {},
-                {"home": off_1, "draw": off_x, "away": off_2, "over": off_o, "under": off_u},
-            )
+        v1 = value_pct(off_1, fair_1)
+        vx = value_pct(off_x, fair_x)
+        v2 = value_pct(off_2, fair_2)
+        vo = value_pct(off_o, fair_over)
+        vu = value_pct(off_u, fair_under)
+
+        ltot = (lam_h or 0) + (lam_a or 0)
+        avg_match = safe_float((league_baseline or {}).get("avg_goals_per_match"), None)
+        tempo = tempo_proxy(ltot, avg_match) if avg_match else None
 
         dt = fx["commence_utc"]
 
-        row = {
-            "fixture_id": fx["id"],
-            "date": dt.date().isoformat(),
-            "time": dt.strftime("%H:%M"),
-            "league_id": league_id,
-            "league": league_name,
-            "home": fx["home"],
-            "away": fx["away"],
-            "model": "bombay_multiplicative_dc_v3_stabilized_mis",
+        fixtures_out.append(
+            {
+                "fixture_id": fx["id"],
+                "date": dt.date().isoformat(),
+                "time": dt.strftime("%H:%M"),
+                "league_id": league_id,
+                "league": league_name,
+                "home": fx["home"],
+                "away": fx["away"],
+                "model": "bombay_multiplicative_dc_v3_2_league_slim",
 
-            "lambda_home": round(lam_h, 3),
-            "lambda_away": round(lam_a, 3),
+                "lambda_home": round(lam_h, 3),
+                "lambda_away": round(lam_a, 3),
+                "lambda_total": round(ltot, 3),
+                "tempo": tempo,
 
-            "home_prob": round(ph, 3),
-            "draw_prob": round(pd, 3),
-            "away_prob": round(pa, 3),
-            "over_2_5_prob": round(po, 3),
-            "under_2_5_prob": round(pu, 3),
+                "home_prob": round(ph, 3),
+                "draw_prob": round(pd, 3),
+                "away_prob": round(pa, 3),
+                "over_2_5_prob": round(po, 3),
+                "under_2_5_prob": round(pu, 3),
 
-            "fair_1": fair_1,
-            "fair_x": fair_x,
-            "fair_2": fair_2,
-            "fair_over_2_5": fair_over,
-            "fair_under_2_5": fair_under,
+                "fair_1": fair_1,
+                "fair_x": fair_x,
+                "fair_2": fair_2,
+                "fair_over_2_5": fair_over,
+                "fair_under_2_5": fair_under,
 
-            "offered_1": off_1,
-            "offered_x": off_x,
-            "offered_2": off_2,
-            "offered_over_2_5": off_o,
-            "offered_under_2_5": off_u,
+                "offered_1": off_1,
+                "offered_x": off_x,
+                "offered_2": off_2,
+                "offered_over_2_5": off_o,
+                "offered_under_2_5": off_u,
 
-            "value_pct_1": value_pct(off_1, fair_1),
-            "value_pct_x": value_pct(off_x, fair_x),
-            "value_pct_2": value_pct(off_2, fair_2),
-            "value_pct_over": value_pct(off_o, fair_over),
-            "value_pct_under": value_pct(off_u, fair_under),
+                "value_pct_1": v1,
+                "value_pct_x": vx,
+                "value_pct_2": v2,
+                "value_pct_over": vo,
+                "value_pct_under": vu,
 
-            "odds_match": match_debug,
-            "league_baseline": league_baseline,
-            "stabilization": {
-                "snap_ratio": FAIR_SNAP_RATIO,
-                "caps": {
-                    "over": CAP_OVER,
-                    "under": CAP_UNDER,
-                    "draw_min": CAP_DRAW_MIN,
-                    "draw_max": CAP_DRAW_MAX,
-                    "outcome_min": CAP_OUTCOME_MIN,
+                # Presenter scores (v2)
+                "score_draw": score_v2(pd, vx),
+                "score_over": score_v2(po, vo),
+
+                "odds_match": match_debug,
+                "league_baseline": league_baseline,
+                "stabilization": {
+                    "snap_ratio": FAIR_SNAP_RATIO,
+                    "caps": {
+                        "over": CAP_OVER,
+                        "under": CAP_UNDER,
+                        "draw_min": CAP_DRAW_MIN,
+                        "draw_max": CAP_DRAW_MAX,
+                        "outcome_min": CAP_OUTCOME_MIN,
+                    },
+                    "low_tempo_league": (league_name in LOW_TEMPO_LEAGUES),
                 },
-                "low_tempo_league": (league_name in LOW_TEMPO_LEAGUES),
-            },
-            "mis": mis,
-        }
+            }
+        )
 
-        if MIS_ENABLED and MIS_CUT_REJECT and (mis or {}).get("status") == "reject":
-            rejected.append(row)
-            continue
-
-        fixtures_out.append(row)
-
-    log(f"Thursday fixtures_out: {len(fixtures_out)} | rejected: {len(rejected)} | odds matched: {matched_cnt}")
-    return fixtures_out, rejected
+    log(f"Thursday fixtures_out: {len(fixtures_out)} | odds matched: {matched_cnt}")
+    return fixtures_out
 
 def main():
-    fixtures, rejected = build_fixture_blocks()
+    fixtures = build_fixture_blocks()
     now = datetime.datetime.now(datetime.timezone.utc)
     to_dt = now + datetime.timedelta(hours=WINDOW_HOURS)
 
@@ -1000,20 +967,15 @@ def main():
         "generated_at": now.isoformat(),
         "window": {"from": now.date().isoformat(), "to": to_dt.date().isoformat(), "hours": WINDOW_HOURS},
         "fixtures_total": len(fixtures),
-        "fixtures_rejected": len(rejected),
-        "mis": {
-            "enabled": MIS_ENABLED,
-            "cut_reject": MIS_CUT_REJECT,
-        },
+        "leagues_selected": list(LEAGUES_SELECTED.keys()),
         "fixtures": fixtures,
-        "rejected": rejected,  # keep for debugging / audit
     }
 
     os.makedirs("logs", exist_ok=True)
     with open("logs/thursday_report_v3.json", "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, indent=2)
 
-    log(f"✅ Thursday v3 (MIS CUT) READY. Fixtures: {len(fixtures)} | Rejected: {len(rejected)}")
+    log(f"✅ Thursday v3.2 READY. Fixtures: {len(fixtures)}")
 
 if __name__ == "__main__":
     main()
