@@ -150,15 +150,15 @@ def download_friday_shortlist_v3():
 
     return send_file(full_path, mimetype="application/json", as_attachment=True)
 
-@app.route("/download/tuesday-recap-v2", methods=["GET"])
-def download_tuesday_recap_v2():
-    full_path = os.path.join(BASE_DIR, "logs", "tuesday_recap_v2.json")
+@app.route("/download/tuesday-recap-v3", methods=["GET"])
+def download_tuesday_recap_v3():
+    full_path = os.path.join(BASE_DIR, "logs", "tuesday_recap_v3.json")
 
     if not os.path.exists(full_path):
         return jsonify(
             {
                 "status": "error",
-                "message": "Tuesday recap file not found",
+                "message": "Tuesday recap v3 file not found",
                 "path": full_path,
                 "timestamp": datetime.utcnow().isoformat(),
             }
@@ -241,21 +241,31 @@ def api_thursday_analysis_v3():
                 "fair_over_2_5": fx.get("fair_over_2_5"),
                 "fair_under_2_5": fx.get("fair_under_2_5"),
 
-                # Probabilities
-                "draw_prob": draw_prob,
-                "over_2_5_prob": over_prob,
-                "under_2_5_prob": fx.get("under_2_5_prob"),
-
-                # Offered odds (για να μην τα υπολογίζει/μαντεύει το GPT)
+                # Offered odds
                 "offered_1": fx.get("offered_1"),
                 "offered_x": fx.get("offered_x"),
                 "offered_2": fx.get("offered_2"),
                 "offered_over_2_5": fx.get("offered_over_2_5"),
                 "offered_under_2_5": fx.get("offered_under_2_5"),
 
-                # Scores ήδη υπολογισμένα από backend
+                # Value% (Δ%) — από το engine
+                "value_pct_1": fx.get("value_pct_1"),
+                "value_pct_x": fx.get("value_pct_x"),
+                "value_pct_2": fx.get("value_pct_2"),
+                "value_pct_over": fx.get("value_pct_over"),
+                "value_pct_under": fx.get("value_pct_under"),
+
+                # Probabilities
+                "draw_prob": draw_prob,
+                "over_2_5_prob": over_prob,
+                "under_2_5_prob": fx.get("under_2_5_prob"),
+
+                # Scores
                 "score_draw": score_draw,
                 "score_over": score_over,
+
+                # MIS
+                "mis": fx.get("mis"),
             }
         )
 
@@ -264,6 +274,8 @@ def api_thursday_analysis_v3():
         "window": full_report.get("window", {}),
         "fixtures_analyzed": len(light_fixtures),
         "fixtures": light_fixtures,
+        "mis": full_report.get("mis"),
+        "fixtures_rejected": full_report.get("fixtures_rejected"),
     }
 
     return jsonify(
@@ -310,7 +322,7 @@ def api_friday_shortlist_v3():
 
 @app.route("/tuesday-recap", methods=["GET"])
 def api_tuesday_recap():
-    report, error = load_json_report("logs/tuesday_recap_v2.json")
+    report, error = load_json_report("logs/tuesday_recap_v3.json")
 
     if report is None:
         return jsonify(
