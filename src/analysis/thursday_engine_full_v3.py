@@ -8,7 +8,7 @@ import re
 from dateutil import parser
 
 # ============================================================
-#  BOMBAY THURSDAY ENGINE v3 (STABILIZED)
+#  BOMBAY THURSDAY ENGINE v3 (STABILIZED + MIS DRY-RUN)
 #  - Fetch fixtures (API-FOOTBALL) within WINDOW_HOURS
 #  - Base model: multiplicative Poisson + shrinkage + Dixon-Coles
 #  - Odds: TheOddsAPI (1 call per league) + robust matching
@@ -16,8 +16,14 @@ from dateutil import parser
 #      * Hard probability caps
 #      * Favorite protection (market-driven floor)
 #      * Fair odds deviation guard (snap-to-market within 1.35x)
-#      * Over/Under "meat" blockers based on lambdas + low-tempo caps
+#      * Over/Under blockers based on lambdas + low-tempo caps
 #      * Draw normalization based on lambda gap + league draw baseline
+#
+#  - MIS LAYER (DRY RUN by default):
+#      * Computes MIS score per fixture
+#      * Adds "mis" object in each fixture JSON
+#      * DOES NOT remove fixtures unless MIS_CUT_ENABLED=true
+#
 #  - Output: logs/thursday_report_v3.json
 # ============================================================
 
@@ -74,6 +80,15 @@ DRAW_LEAGUE_PLUS = float(os.getenv("DRAW_LEAGUE_PLUS", "0.03"))
 # Baselines
 USE_DYNAMIC_LEAGUE_BASELINES = os.getenv("USE_DYNAMIC_LEAGUE_BASELINES", "false").lower() == "true"
 BASELINES_LAST_N = int(os.getenv("BASELINES_LAST_N", "180"))
+
+# ------------------------------------------------------------
+# MIS flags (DRY RUN default)
+# ------------------------------------------------------------
+MIS_DRY_RUN = os.getenv("MIS_DRY_RUN", "true").lower() == "true"
+MIS_CUT_ENABLED = os.getenv("MIS_CUT_ENABLED", "false").lower() == "true"
+MIS_REJECT_BELOW = int(os.getenv("MIS_REJECT_BELOW", "55"))
+MIS_CORE_BELOW = int(os.getenv("MIS_CORE_BELOW", "65"))
+MIS_ELITE_AT = int(os.getenv("MIS_ELITE_AT", "75"))
 
 LEAGUES = {
     "Premier League": 39,
@@ -617,7 +632,7 @@ def pick_best_odds_for_fixture(fx, league_events_cache):
     debug = {"matched": True, "score": round(best_score, 3), "swap": best_swap, "time_diff_h": None if best_diff is None else round(best_diff, 2)}
     return odds, debug
 
-# ------------------------- VALUE% (already allowed) -------------------------
+# ------------------------- VALUE% -------------------------
 def value_pct(offered, fair):
     if offered is None or fair is None:
         return None
@@ -629,28 +644,21 @@ def value_pct(offered, fair):
         return None
 
 # ============================================================
-#  STABILIZATION LAYER (NO fantasy numbers, only clamps/snaps)
+#  STABILIZATION LAYER
 # ============================================================
-
 def _renorm_1x2(ph, pd, pa):
     ph = max(CAP_OUTCOME_MIN, ph)
     pd = max(CAP_OUTCOME_MIN, pd)
     pa = max(CAP_OUTCOME_MIN, pa)
 
-    # draw caps
     pd = _clamp(pd, CAP_DRAW_MIN, CAP_DRAW_MAX)
 
     s = ph + pd + pa
     if s <= 0:
         return 0.40, 0.26, 0.34
-    ph, pd, pa = ph / s, pd / s, pa / s
-    return ph, pd, pa
+    return ph / s, pd / s, pa / s
 
 def _apply_favorite_protection(ph, pd, pa, off1, off2):
-    """
-    If market shows strong favorite (offered <= threshold), enforce probability floor.
-    """
-    # Home favorite floors
     if off1 is not None:
         if off1 <= 1.40:
             ph = max(ph, 0.62)
@@ -659,7 +667,6 @@ def _apply_favorite_protection(ph, pd, pa, off1, off2):
         elif off1 <= 1.80:
             ph = max(ph, 0.50)
 
-    # Away favorite floors
     if off2 is not None:
         if off2 <= 1.40:
             pa = max(pa, 0.62)
@@ -671,10 +678,6 @@ def _apply_favorite_protection(ph, pd, pa, off1, off2):
     return _renorm_1x2(ph, pd, pa)
 
 def _snap_prob_to_market(prob, offered):
-    """
-    Deviation guard: keep fair within [offered/ratio, offered*ratio]
-    prob -> fair=1/prob, snap fair, convert back to prob.
-    """
     if prob is None or offered is None or offered <= 1.0:
         return prob
     fair = implied(prob)
@@ -683,11 +686,9 @@ def _snap_prob_to_market(prob, offered):
     lo = offered / FAIR_SNAP_RATIO
     hi = offered * FAIR_SNAP_RATIO
     if fair < lo:
-        fair = lo
-        return 1.0 / fair
+        return 1.0 / lo
     if fair > hi:
-        fair = hi
-        return 1.0 / fair
+        return 1.0 / hi
     return prob
 
 def stabilize_probs(
@@ -706,12 +707,10 @@ def stabilize_probs(
     offo,
     offu,
 ):
-    # 1) HARD caps - outcomes min/max
     ph = _clamp(ph, CAP_OUTCOME_MIN, 1.0)
     pa = _clamp(pa, CAP_OUTCOME_MIN, 1.0)
     pd = _clamp(pd, CAP_DRAW_MIN, CAP_DRAW_MAX)
 
-    # 2) Draw normalization using lambda gap and league draw baseline
     gap = abs((lam_h or 0) - (lam_a or 0))
     if gap > DRAW_LAMBDA_GAP_MAX:
         pd = min(pd, DRAW_IF_GAP_CAP)
@@ -723,46 +722,36 @@ def stabilize_probs(
 
     ph, pd, pa = _renorm_1x2(ph, pd, pa)
 
-    # 3) Favorite protection (market-driven)
     ph, pd, pa = _apply_favorite_protection(ph, pd, pa, off1, off2)
 
-    # 4) Fair deviation guard (snap probs to market when offered exists)
-    # snap each 1X2 prob then renormalize
     ph2 = _snap_prob_to_market(ph, off1)
     pd2 = _snap_prob_to_market(pd, offx)
     pa2 = _snap_prob_to_market(pa, off2)
     ph, pd, pa = _renorm_1x2(ph2, pd2, pa2)
 
-    # 5) Over/Under logic blockers + caps + snap
     ltot = (lam_h or 0) + (lam_a or 0)
-    # block "meat over"
+
     if ltot < OVER_BLOCK_LTOTAL or (lam_h or 0) < OVER_BLOCK_LMIN or (lam_a or 0) < OVER_BLOCK_LMIN:
-        pcap = min(CAP_OVER, 0.66)
-        po = min(po, pcap)
-    # low-tempo extra cap
+        po = min(po, min(CAP_OVER, 0.66))
+
     if league_name in LOW_TEMPO_LEAGUES:
         po = min(po, LOW_TEMPO_OVER_CAP)
 
-    # block "impossible under"
     if ltot > UNDER_BLOCK_LTOTAL or ((lam_h or 0) > UNDER_BLOCK_BOTH_GT and (lam_a or 0) > UNDER_BLOCK_BOTH_GT):
         pu = min(pu, 0.70)
 
-    # hard caps
     po = _clamp(po, CAP_OUTCOME_MIN, CAP_OVER)
     pu = _clamp(pu, CAP_OUTCOME_MIN, CAP_UNDER)
 
-    # keep totals sum to 1 by renorm (not inventing, just normalization)
     s2 = po + pu
     if s2 > 0:
         po, pu = po / s2, pu / s2
 
-    # snap totals probs to market too
     po2 = _snap_prob_to_market(po, offo)
     pu2 = _snap_prob_to_market(pu, offu)
     if po2 is not None and pu2 is not None and (po2 + pu2) > 0:
         po, pu = po2 / (po2 + pu2), pu2 / (po2 + pu2)
 
-    # final caps again
     po = _clamp(po, CAP_OUTCOME_MIN, CAP_OVER)
     pu = _clamp(pu, CAP_OUTCOME_MIN, CAP_UNDER)
     s2 = po + pu
@@ -770,6 +759,105 @@ def stabilize_probs(
         po, pu = po / s2, pu / s2
 
     return ph, pd, pa, po, pu
+
+# ============================================================
+#  MIS (DRY RUN)
+# ============================================================
+def compute_mis(
+    league_name: str,
+    lam_h: float,
+    lam_a: float,
+    ph: float,
+    pd: float,
+    pa: float,
+    po: float,
+    pu: float,
+    off_1,
+    off_x,
+    off_2,
+    fair_1,
+    fair_x,
+    fair_2,
+):
+    ltotal = (lam_h or 0.0) + (lam_a or 0.0)
+    gap = abs((lam_h or 0.0) - (lam_a or 0.0))
+
+    # A) Tempo (0-25)
+    if ltotal < 2.1:
+        tempo = 5
+    elif ltotal < 2.4:
+        tempo = 12
+    elif ltotal < 2.8:
+        tempo = 18
+    else:
+        tempo = 25
+    if league_name in LOW_TEMPO_LEAGUES:
+        tempo = max(0, tempo - 5)
+
+    # B) Balance (0-20)
+    if gap > 0.9:
+        balance = 4
+    elif gap > 0.6:
+        balance = 10
+    elif gap > 0.4:
+        balance = 15
+    else:
+        balance = 20
+
+    # C) Market sanity (0-20) using implied probs distance when odds exist
+    def _imp(o):
+        try:
+            o = float(o)
+            return (1.0 / o) if o and o > 1.0 else None
+        except Exception:
+            return None
+
+    sanity = 20
+    imp_off1 = _imp(off_1); imp_off2 = _imp(off_2)
+    imp_f1 = _imp(fair_1); imp_f2 = _imp(fair_2)
+
+    if imp_off1 is not None and imp_f1 is not None and abs(imp_f1 - imp_off1) > 0.12:
+        sanity -= 8
+    if imp_off2 is not None and imp_f2 is not None and abs(imp_f2 - imp_off2) > 0.12:
+        sanity -= 8
+    sanity = max(0, sanity)
+
+    # D) Draw logic (0-20)
+    draw_logic = 20
+    if pd is not None and (pd < 0.20 or pd > 0.32):
+        draw_logic -= 10
+    if gap < 0.35 and (pd is not None and pd < 0.23):
+        draw_logic -= 10
+    if league_name in LOW_TEMPO_LEAGUES and (pd is not None and pd < 0.25):
+        draw_logic -= 10
+    draw_logic = max(0, draw_logic)
+
+    # E) Volatility (0-15)
+    vol = 15
+    if po is not None and po > 0.62 and tempo < 15:
+        vol -= 7
+    if ph is not None and pd is not None and ph > 0.60 and pd > 0.28:
+        vol -= 6
+    vol = max(0, vol)
+
+    score = int(round(tempo + balance + sanity + draw_logic + vol))
+    return {
+        "score": score,
+        "tempo": tempo,
+        "balance": balance,
+        "market_sanity": sanity,
+        "draw_logic": draw_logic,
+        "volatility": vol,
+    }
+
+def mis_status(score: int):
+    if score < MIS_REJECT_BELOW:
+        return "reject"
+    if score < MIS_CORE_BELOW:
+        return "fun_only"
+    if score >= MIS_ELITE_AT:
+        return "elite"
+    return "core_allowed"
 
 # ------------------------- MAIN PIPELINE -------------------------
 def build_fixture_blocks():
@@ -782,6 +870,7 @@ def build_fixture_blocks():
     log(f"Window: next {WINDOW_HOURS} hours | USE_ODDS_API={USE_ODDS_API}")
     log(f"MODEL: ShrinkageK={SHRINKAGE_K} | DC_RHO={DC_RHO}")
     log(f"STABILIZE: snap_ratio={FAIR_SNAP_RATIO} caps(over={CAP_OVER}, under={CAP_UNDER}, draw=[{CAP_DRAW_MIN},{CAP_DRAW_MAX}])")
+    log(f"MIS: dry_run={MIS_DRY_RUN} cut_enabled={MIS_CUT_ENABLED} thresholds reject<{MIS_REJECT_BELOW} core<{MIS_CORE_BELOW} elite>={MIS_ELITE_AT}")
 
     if not API_FOOTBALL_KEY:
         log("❌ FOOTBALL_API_KEY is missing. Aborting.")
@@ -805,6 +894,13 @@ def build_fixture_blocks():
     else:
         log("⚠️ USE_ODDS_API=False → skipping odds.")
 
+    # MIS counters
+    mis_total = 0
+    mis_reject = 0
+    mis_fun = 0
+    mis_core = 0
+    mis_elite = 0
+
     for fx in all_fixtures:
         league_id = fx["league_id"]
         league_name = fx["league_name"]
@@ -816,7 +912,6 @@ def build_fixture_blocks():
         lam_h, lam_a = compute_expected_goals(home_stats, away_stats, league_baseline)
         probs = compute_probabilities(lam_h, lam_a)
 
-        # offered odds
         offered = {}
         match_debug = {"matched": False, "reason": "odds_off"}
         if USE_ODDS_API:
@@ -831,7 +926,6 @@ def build_fixture_blocks():
         off_o = offered.get("over")
         off_u = offered.get("under")
 
-        # --- STABILIZE (key part) ---
         ph, pd, pa, po, pu = stabilize_probs(
             league_name=league_name,
             league_baseline=league_baseline,
@@ -854,6 +948,30 @@ def build_fixture_blocks():
         fair_2 = implied(pa)
         fair_over = implied(po)
         fair_under = implied(pu)
+
+        # MIS computed always (dry run just means "do not cut")
+        mis = compute_mis(
+            league_name=league_name,
+            lam_h=lam_h, lam_a=lam_a,
+            ph=ph, pd=pd, pa=pa, po=po, pu=pu,
+            off_1=off_1, off_x=off_x, off_2=off_2,
+            fair_1=fair_1, fair_x=fair_x, fair_2=fair_2
+        )
+        mis["status"] = mis_status(mis["score"])
+
+        mis_total += 1
+        if mis["status"] == "reject":
+            mis_reject += 1
+        elif mis["status"] == "fun_only":
+            mis_fun += 1
+        elif mis["status"] == "elite":
+            mis_elite += 1
+        else:
+            mis_core += 1
+
+        # Optional cut (OFF by default)
+        if MIS_CUT_ENABLED and mis["status"] == "reject":
+            continue
 
         dt = fx["commence_utc"]
 
@@ -908,10 +1026,14 @@ def build_fixture_blocks():
                     },
                     "low_tempo_league": (league_name in LOW_TEMPO_LEAGUES),
                 },
+
+                # ✅ MIS block
+                "mis": mis,
             }
         )
 
     log(f"Thursday fixtures_out: {len(fixtures_out)} | odds matched: {matched_cnt}")
+    log(f"MIS summary: reject={mis_reject} fun_only={mis_fun} core_allowed={mis_core} elite={mis_elite} total={mis_total}")
     return fixtures_out
 
 def main():
@@ -924,13 +1046,22 @@ def main():
         "window": {"from": now.date().isoformat(), "to": to_dt.date().isoformat(), "hours": WINDOW_HOURS},
         "fixtures_total": len(fixtures),
         "fixtures": fixtures,
+        "mis": {
+            "dry_run": MIS_DRY_RUN,
+            "cut_enabled": MIS_CUT_ENABLED,
+            "thresholds": {
+                "reject_below": MIS_REJECT_BELOW,
+                "core_below": MIS_CORE_BELOW,
+                "elite_at": MIS_ELITE_AT,
+            },
+        },
     }
 
     os.makedirs("logs", exist_ok=True)
     with open("logs/thursday_report_v3.json", "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, indent=2)
 
-    log(f"✅ Thursday v3 STABILIZED READY. Fixtures: {len(fixtures)}")
+    log(f"✅ Thursday v3 STABILIZED + MIS READY. Fixtures: {len(fixtures)}")
 
 if __name__ == "__main__":
     main()
