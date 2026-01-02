@@ -1,4 +1,3 @@
-# src/analysis/thursday_engine_full_v3.py
 import os
 import json
 import math
