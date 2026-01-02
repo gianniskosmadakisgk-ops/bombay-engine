@@ -212,7 +212,6 @@ def choose_core(rows):
             continue
         if r["odds"] is None or r["odds"] >= CORE_DOUBLE_MAX_LEG_ODDS:
             continue
-        # require "real" value; use the low band threshold as base intent
         if r["value_pct"] < CORE_MIN_VALUE_LOW:
             continue
         low_legs.append(r)
@@ -266,9 +265,7 @@ def choose_core(rows):
         if len(doubles) >= 6:
             break
 
-    # Legacy single "best double"
     primary_double = doubles[0] if doubles else None
-    # IMPORTANT: avoid double counting: keep doubles list excluding primary
     doubles_rest = doubles[1:] if len(doubles) > 1 else []
 
     return singles, primary_double, doubles_rest
@@ -295,7 +292,6 @@ def cap_core_exposure(core_singles, core_double, core_doubles):
 
 # ------------------------- FUN -------------------------
 def fun_stake_for_odds(odds: float) -> float:
-    # higher odds => lower stake (correct direction)
     if 2.00 <= odds < 2.30:
         return FUN_STAKE_LOW
     if 2.30 <= odds < 2.60:
@@ -308,7 +304,6 @@ def columns_for_system(system: str, n: int) -> int:
     if not system:
         return 0
 
-    # exact systems
     if system == "3/3":
         return 1
     if system == "3/4":
@@ -324,7 +319,6 @@ def columns_for_system(system: str, n: int) -> int:
     if system == "4/7":
         return math.comb(7, 4)
 
-    # NEW: 8-pick support
     if system == "3/8":
         return math.comb(8, 3)
     if system == "4/8":
@@ -332,7 +326,6 @@ def columns_for_system(system: str, n: int) -> int:
     if system == "5/8":
         return math.comb(8, 5)
 
-    # mixed systems
     if system == "3-4-5/7":
         return math.comb(7, 3) + math.comb(7, 4) + math.comb(7, 5)
     if system == "3-4-5/8":
@@ -341,7 +334,6 @@ def columns_for_system(system: str, n: int) -> int:
     return 0
 
 def cap_fun_exposure(fun_obj: dict) -> dict:
-    """Hard cap system+singles exposure."""
     max_exposure = BANKROLL_FUN * FUN_EXPOSURE_CAP
     total = float(fun_obj.get("total_stake") or 0.0) + sum(s.get("stake", 0.0) for s in (fun_obj.get("singles") or []))
 
@@ -350,7 +342,6 @@ def cap_fun_exposure(fun_obj: dict) -> dict:
         return fun_obj
 
     scale = max_exposure / total
-    # Scale unit (system) and singles
     unit = float(fun_obj.get("unit") or 0.0)
     fun_obj["unit"] = round(unit * scale, 2) if unit > 0 else 0.0
     fun_obj["total_stake"] = round((fun_obj.get("columns", 0) or 0) * fun_obj["unit"], 1)
@@ -409,7 +400,6 @@ def choose_fun(rows, core_pick_ids=None):
     avg_value = sum(p["value_pct"] for p in picks) / n
     avg_odds = sum(p["odds"] for p in picks) / n
 
-    # System selection by pick count
     if n == 8:
         system = "3-4-5/8" if (avg_value >= 8.0 and avg_odds >= 2.15) else "4/8"
     elif n == 7:
@@ -421,7 +411,7 @@ def choose_fun(rows, core_pick_ids=None):
     elif n == 4:
         system = "3/4"
     else:
-        system = "3/3"  # n==3 only
+        system = "3/3"
 
     cols = columns_for_system(system, n)
     if cols <= 0:
@@ -432,28 +422,25 @@ def choose_fun(rows, core_pick_ids=None):
 
     max_exposure = BANKROLL_FUN * FUN_EXPOSURE_CAP
 
-    # Build singles (optional) – “worth it” rule
     singles = []
     for p in picks:
         st = fun_stake_for_odds(p["odds"])
         if st <= 0:
             continue
-        # stricter: keep singles rare & meaningful
         if p["value_pct"] >= 10.0 or p["prob"] >= 0.45:
             singles.append({
-                "pick_id": p["pick_id"],
-                "fixture_id": p["fixture_id"),
-                "market_code": p["market_code"],
-                "match": p["match"],
-                "league": p["league"],
-                "market": p["market"],
-                "odds": p["odds"],
+                "pick_id": p.get("pick_id"),
+                "fixture_id": p.get("fixture_id"),   # ✅ FIXED HERE
+                "market_code": p.get("market_code"),
+                "match": p.get("match"),
+                "league": p.get("league"),
+                "market": p.get("market"),
+                "odds": p.get("odds"),
                 "stake": round(st, 1),
             })
         if len(singles) >= FUN_MAX_SINGLES:
             break
 
-    # Unit: 1–3€, computed from cap but will be capped again after adding singles
     unit = float(int(max_exposure // cols) or 1)
     unit = max(1.0, min(3.0, unit))
     total = unit * cols
@@ -470,7 +457,6 @@ def choose_fun(rows, core_pick_ids=None):
         "avg_odds": round(avg_odds, 2),
     }
 
-    # Hard cap combined exposure (system + singles)
     return cap_fun_exposure(fun_obj)
 
 def main():
@@ -485,7 +471,6 @@ def main():
 
     core_singles, core_double, core_doubles = choose_core(all_rows)
     core_pick_ids = {p.get("pick_id") for p in core_singles if p.get("pick_id")}
-    # include double legs too (avoid overlap)
     if core_double:
         for leg in core_double.get("legs", []):
             if leg.get("pick_id"):
@@ -537,8 +522,8 @@ def main():
                 "odds_match_min_score": ODDS_MATCH_MIN_SCORE,
             },
             "singles": core_singles,
-            "double": core_double,    # legacy: best double
-            "doubles": core_doubles,  # remaining doubles (no double-counting)
+            "double": core_double,
+            "doubles": core_doubles,
             "open": core_open,
             "after_open": round(BANKROLL_CORE - core_open, 1),
             "picks_count": len(core_singles) + (1 if core_double else 0) + (len(core_doubles) if core_doubles else 0),
