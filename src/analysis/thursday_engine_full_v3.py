@@ -12,7 +12,6 @@ from dateutil import parser
 #  KEY FIXES:
 #   1) VALUE% computed from MODEL probabilities (post-stabilization, PRE market-snap)
 #   2) Market-snap probabilities are saved separately as snap_* fields (display-only)
-#   3) If USE_ODDS_API=False => odds_match is None (not a "failed match")
 # ============================================================
 
 API_FOOTBALL_KEY = os.getenv("FOOTBALL_API_KEY")
@@ -820,10 +819,8 @@ def build_fixture_blocks():
         probs = compute_probabilities(lam_h, lam_a)
 
         offered = {}
-        match_debug = None  # ✅ FIX: odds off => None, not a fake "failed match"
-
+        match_debug = {"matched": False, "reason": "odds_off"}
         if USE_ODDS_API:
-            match_debug = {"matched": False, "reason": "no_match"}
             league_cache = odds_cache_by_league.get(league_name, [])
             offered, match_debug = pick_best_odds_for_fixture(fx, league_cache)
             if match_debug.get("matched"):
@@ -920,7 +917,7 @@ def build_fixture_blocks():
                 "value_pct_over": vo,
                 "value_pct_under": vu,
 
-                "odds_match": match_debug,  # ✅ can be None if odds api off
+                "odds_match": match_debug,
                 "league_baseline": league_baseline,
             }
         )
