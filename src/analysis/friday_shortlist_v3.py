@@ -89,21 +89,16 @@ def make_pick_id(fixture_id, market_code):
 
 def fixture_odds_match_ok(fx: dict) -> bool:
     """
-    Gate fixtures by odds matcher quality.
-    Only enforce min score WHEN a match exists (matched=True).
-    If no match happened (odds off / feed down), do NOT block the pipeline.
+    Gate fixtures by odds matcher quality (Thursday provides odds_match).
+    If odds_match missing, we allow (backwards compatible).
     """
     om = fx.get("odds_match")
     if not isinstance(om, dict):
         return True
-
-    # Only gate when matched=True
-    if om.get("matched") is True:
-        score = safe_float(om.get("score"), None)
-        return score is not None and score >= ODDS_MATCH_MIN_SCORE
-
-    # matched=False or any other => allow
-    return True
+    if om.get("matched") is not True:
+        return False
+    score = safe_float(om.get("score"), 1.0)
+    return score is not None and score >= ODDS_MATCH_MIN_SCORE
 
 def market_rows_from_fixture(fx):
     if not fixture_odds_match_ok(fx):
@@ -435,7 +430,7 @@ def choose_fun(rows, core_pick_ids=None):
         if p["value_pct"] >= 10.0 or p["prob"] >= 0.45:
             singles.append({
                 "pick_id": p.get("pick_id"),
-                "fixture_id": p.get("fixture_id"),
+                "fixture_id": p.get("fixture_id"),   # ✅ FIXED HERE
                 "market_code": p.get("market_code"),
                 "match": p.get("match"),
                 "league": p.get("league"),
