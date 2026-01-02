@@ -8,15 +8,16 @@ import re
 from dateutil import parser
 
 # ============================================================
-#  BOMBAY THURSDAY ENGINE v3.2 (LEAGUE-SLIM + SCORE v2 + TEMPO)
+#  BOMBAY THURSDAY ENGINE v3 (STABILIZED)
 #  - Fetch fixtures (API-FOOTBALL) within WINDOW_HOURS
 #  - Base model: multiplicative Poisson + shrinkage + Dixon-Coles
 #  - Odds: TheOddsAPI (1 call per league) + robust matching
-#  - STABILIZATION LAYER (as before)
-#  - NEW:
-#      * League Slim (Tier1 + FanOnly) to reduce chaos & API hits
-#      * Score v2 for Presenter (prob + value_pct, not only prob)
-#      * Tempo proxy (lambda_total / league_avg_goals_per_match)
+#  - STABILIZATION LAYER:
+#      * Hard probability caps
+#      * Favorite protection (market-driven floor)
+#      * Fair odds deviation guard (snap-to-market within 1.35x)
+#      * Over/Under "meat" blockers based on lambdas + low-tempo caps
+#      * Draw normalization based on lambda gap + league draw baseline
 #  - Output: logs/thursday_report_v3.json
 # ============================================================
 
@@ -31,64 +32,6 @@ FOOTBALL_SEASON = os.getenv("FOOTBALL_SEASON", "2025")
 USE_ODDS_API = os.getenv("USE_ODDS_API", "true").lower() == "true"
 WINDOW_HOURS = int(os.getenv("WINDOW_HOURS", "72"))
 
-# -------------------- LEAGUE SLIM (default selection) --------------------
-# Tier-1 (core) + Fan-only (extras).
-# You can override via env:
-#   LEAGUES_TIER1="Premier League,La Liga,Serie A,Bundesliga,Ligue 1,Eredivisie,Belgium Pro League"
-#   LEAGUES_FANONLY="Serie B,Ligue 2"
-LEAGUES_TIER1 = [x.strip() for x in os.getenv(
-    "LEAGUES_TIER1",
-    "Premier League,La Liga,Serie A,Bundesliga,Ligue 1,Eredivisie,Belgium Pro League"
-).split(",") if x.strip()]
-
-LEAGUES_FANONLY = [x.strip() for x in os.getenv(
-    "LEAGUES_FANONLY",
-    "Serie B,Ligue 2"
-).split(",") if x.strip()]
-
-# Master league dictionary (API-Football ids).
-# NOTE: Eredivisie=88, Belgium Pro League=144 are defaults.
-LEAGUES_ALL = {
-    "Premier League": 39,
-    "La Liga": 140,
-    "Serie A": 135,
-    "Bundesliga": 78,
-    "Ligue 1": 61,
-
-    "Eredivisie": 88,            # Netherlands
-    "Belgium Pro League": 144,   # Belgium First Division A
-
-    "Serie B": 136,
-    "Ligue 2": 62,
-
-    # Optional (keep available but not selected by default)
-    "Championship": 40,
-    "Liga Portugal 1": 94,
-}
-
-# Selected leagues = Tier1 + FanOnly (dedup, keep order)
-_LEAGUES_SEL_NAMES = []
-for nm in (LEAGUES_TIER1 + LEAGUES_FANONLY):
-    if nm in LEAGUES_ALL and nm not in _LEAGUES_SEL_NAMES:
-        _LEAGUES_SEL_NAMES.append(nm)
-
-LEAGUES_SELECTED = {nm: LEAGUES_ALL[nm] for nm in _LEAGUES_SEL_NAMES}
-
-# TheOddsAPI sport keys
-LEAGUE_TO_SPORT = {
-    "Premier League": "soccer_epl",
-    "La Liga": "soccer_spain_la_liga",
-    "Serie A": "soccer_italy_serie_a",
-    "Serie B": "soccer_italy_serie_b",
-    "Bundesliga": "soccer_germany_bundesliga",
-    "Ligue 1": "soccer_france_ligue_one",
-    "Ligue 2": "soccer_france_ligue_two",
-    "Liga Portugal 1": "soccer_portugal_primeira_liga",
-    "Championship": "soccer_efl_champ",
-    "Eredivisie": "soccer_netherlands_eredivisie",
-    "Belgium Pro League": "soccer_belgium_first_div",
-}
-
 # Odds matching controls
 ODDS_TIME_GATE_HOURS = float(os.getenv("ODDS_TIME_GATE_HOURS", "6"))
 ODDS_TIME_SOFT_HOURS = float(os.getenv("ODDS_TIME_SOFT_HOURS", "10"))
@@ -102,14 +45,14 @@ LAMBDA_MIN = float(os.getenv("LAMBDA_MIN", "0.40"))
 LAMBDA_MAX_HOME = float(os.getenv("LAMBDA_MAX_HOME", "3.00"))
 LAMBDA_MAX_AWAY = float(os.getenv("LAMBDA_MAX_AWAY", "3.00"))
 
-# --- Stabilization (your rules) ---
+# --- Stabilization ---
 CAP_OVER = float(os.getenv("CAP_OVER", "0.70"))
 CAP_UNDER = float(os.getenv("CAP_UNDER", "0.75"))
 CAP_DRAW_MAX = float(os.getenv("CAP_DRAW_MAX", "0.32"))
 CAP_DRAW_MIN = float(os.getenv("CAP_DRAW_MIN", "0.20"))
 CAP_OUTCOME_MIN = float(os.getenv("CAP_OUTCOME_MIN", "0.05"))
 
-FAIR_SNAP_RATIO = float(os.getenv("FAIR_SNAP_RATIO", "1.35"))  # offered/1.35 .. offered*1.35
+FAIR_SNAP_RATIO = float(os.getenv("FAIR_SNAP_RATIO", "1.35"))
 
 LOW_TEMPO_LEAGUES = set(
     [x.strip() for x in os.getenv("LOW_TEMPO_LEAGUES", "Serie B,Ligue 2").split(",") if x.strip()]
@@ -131,6 +74,30 @@ DRAW_LEAGUE_PLUS = float(os.getenv("DRAW_LEAGUE_PLUS", "0.03"))
 # Baselines
 USE_DYNAMIC_LEAGUE_BASELINES = os.getenv("USE_DYNAMIC_LEAGUE_BASELINES", "false").lower() == "true"
 BASELINES_LAST_N = int(os.getenv("BASELINES_LAST_N", "180"))
+
+LEAGUES = {
+    "Premier League": 39,
+    "Championship": 40,
+    "Ligue 1": 61,
+    "Ligue 2": 62,
+    "Bundesliga": 78,
+    "Serie A": 135,
+    "Serie B": 136,
+    "La Liga": 140,
+    "Liga Portugal 1": 94,
+}
+
+LEAGUE_TO_SPORT = {
+    "Premier League": "soccer_epl",
+    "Championship": "soccer_efl_champ",
+    "La Liga": "soccer_spain_la_liga",
+    "Serie A": "soccer_italy_serie_a",
+    "Serie B": "soccer_italy_serie_b",
+    "Bundesliga": "soccer_germany_bundesliga",
+    "Ligue 1": "soccer_france_ligue_one",
+    "Ligue 2": "soccer_france_ligue_two",
+    "Liga Portugal 1": "soccer_portugal_primeira_liga",
+}
 
 TEAM_STATS_CACHE = {}
 
@@ -317,14 +284,14 @@ def fetch_team_recent_stats(team_id: int, league_id: int, want_home_context: boo
 def fetch_league_baselines_static(league_id: int):
     overrides = {
         39: {"avg_goals_per_match": 2.9, "home_advantage": 0.18, "avg_draw_rate": 0.24, "avg_over25_rate": 0.58},
+        40: {"avg_goals_per_match": 2.5, "home_advantage": 0.16, "avg_draw_rate": 0.28, "avg_over25_rate": 0.52},
         78: {"avg_goals_per_match": 3.1, "home_advantage": 0.17, "avg_draw_rate": 0.25, "avg_over25_rate": 0.60},
-        135: {"avg_goals_per_match": 2.5, "home_advantage": 0.15, "avg_draw_rate": 0.27, "avg_over25_rate": 0.52},
+        135: {"avg_goals_per_match": 2.5, "home_advantage": 0.15, "avg_draw_rate": 0.30, "avg_over25_rate": 0.52},
+        136: {"avg_goals_per_match": 2.45, "home_advantage": 0.15, "avg_draw_rate": 0.30, "avg_over25_rate": 0.50},
         140: {"avg_goals_per_match": 2.6, "home_advantage": 0.16, "avg_draw_rate": 0.27, "avg_over25_rate": 0.55},
+        94: {"avg_goals_per_match": 2.55, "home_advantage": 0.15, "avg_draw_rate": 0.28, "avg_over25_rate": 0.54},
         61: {"avg_goals_per_match": 2.70, "home_advantage": 0.16, "avg_draw_rate": 0.26, "avg_over25_rate": 0.55},
         62: {"avg_goals_per_match": 2.35, "home_advantage": 0.15, "avg_draw_rate": 0.29, "avg_over25_rate": 0.49},
-        136: {"avg_goals_per_match": 2.45, "home_advantage": 0.15, "avg_draw_rate": 0.30, "avg_over25_rate": 0.50},
-        88: {"avg_goals_per_match": 3.15, "home_advantage": 0.15, "avg_draw_rate": 0.24, "avg_over25_rate": 0.62},
-        144: {"avg_goals_per_match": 2.85, "home_advantage": 0.14, "avg_draw_rate": 0.25, "avg_over25_rate": 0.58},
     }
     base = {"avg_goals_per_match": 2.6, "home_advantage": 0.16, "avg_draw_rate": 0.26, "avg_over25_rate": 0.55}
     if league_id in overrides:
@@ -420,7 +387,7 @@ def compute_expected_goals(home_stats: dict, away_stats: dict, league_baseline: 
         att = _clamp(att, 0.55, 1.85)
         dff = _clamp(dff, 0.55, 1.85)
 
-        return {"n": n, "att": att, "def": dff}
+        return {"n": n, "att": att, "def": dff, "gf_shrunk": gf_shrunk, "ga_shrunk": ga_shrunk}
 
     h = get_rates(home_stats or {})
     a = get_rates(away_stats or {})
@@ -661,19 +628,17 @@ def value_pct(offered, fair):
     except Exception:
         return None
 
-# ============================================================
-#  STABILIZATION LAYER (NO fantasy numbers, only clamps/snaps)
-# ============================================================
+# ------------------------- STABILIZATION -------------------------
 def _renorm_1x2(ph, pd, pa):
     ph = max(CAP_OUTCOME_MIN, ph)
     pd = max(CAP_OUTCOME_MIN, pd)
     pa = max(CAP_OUTCOME_MIN, pa)
     pd = _clamp(pd, CAP_DRAW_MIN, CAP_DRAW_MAX)
-
     s = ph + pd + pa
     if s <= 0:
         return 0.40, 0.26, 0.34
-    return ph / s, pd / s, pa / s
+    ph, pd, pa = ph / s, pd / s, pa / s
+    return ph, pd, pa
 
 def _apply_favorite_protection(ph, pd, pa, off1, off2):
     if off1 is not None:
@@ -703,9 +668,11 @@ def _snap_prob_to_market(prob, offered):
     lo = offered / FAIR_SNAP_RATIO
     hi = offered * FAIR_SNAP_RATIO
     if fair < lo:
-        return 1.0 / lo
+        fair = lo
+        return 1.0 / fair
     if fair > hi:
-        return 1.0 / hi
+        fair = hi
+        return 1.0 / fair
     return prob
 
 def stabilize_probs(
@@ -749,8 +716,8 @@ def stabilize_probs(
     ltot = (lam_h or 0) + (lam_a or 0)
 
     if ltot < OVER_BLOCK_LTOTAL or (lam_h or 0) < OVER_BLOCK_LMIN or (lam_a or 0) < OVER_BLOCK_LMIN:
-        po = min(po, min(CAP_OVER, 0.66))
-
+        pcap = min(CAP_OVER, 0.66)
+        po = min(po, pcap)
     if league_name in LOW_TEMPO_LEAGUES:
         po = min(po, LOW_TEMPO_OVER_CAP)
 
@@ -777,31 +744,6 @@ def stabilize_probs(
 
     return ph, pd, pa, po, pu
 
-# ------------------------- SCORE v2 + TEMPO -------------------------
-def tempo_proxy(lambda_total: float, league_avg_goals_match: float) -> float:
-    if not lambda_total or not league_avg_goals_match:
-        return None
-    # ratio around 1.0 = normal tempo, >1 faster, <1 slower
-    r = lambda_total / max(1e-6, league_avg_goals_match)
-    # clamp for report stability
-    return round(_clamp(r, 0.60, 1.60), 2)
-
-def score_v2(prob: float, value: float) -> float:
-    """
-    Presenter score 1..10.
-    Uses BOTH probability and value_pct:
-      - prob contributes base (prob*10)
-      - value_pct contributes bonus (value_pct/5 capped)
-    """
-    if prob is None:
-        return None
-    base = (prob or 0.0) * 10.0
-    bonus = 0.0
-    if isinstance(value, (int, float)):
-        bonus = _clamp(value / 5.0, 0.0, 3.0)  # +0..+3
-    s = base + bonus
-    return round(_clamp(s, 1.0, 10.0), 1)
-
 # ------------------------- MAIN PIPELINE -------------------------
 def build_fixture_blocks():
     fixtures_out = []
@@ -811,14 +753,13 @@ def build_fixture_blocks():
 
     log(f"Using FOOTBALL_SEASON={FOOTBALL_SEASON}")
     log(f"Window: next {WINDOW_HOURS} hours | USE_ODDS_API={USE_ODDS_API}")
-    log(f"LEAGUES_SELECTED ({len(LEAGUES_SELECTED)}): {', '.join(list(LEAGUES_SELECTED.keys()))}")
 
     if not API_FOOTBALL_KEY:
         log("❌ FOOTBALL_API_KEY is missing. Aborting.")
         return []
 
     all_fixtures = []
-    for lg_name, lg_id in LEAGUES_SELECTED.items():
+    for lg_name, lg_id in LEAGUES.items():
         all_fixtures.extend(fetch_fixtures(lg_id, lg_name))
     log(f"Total fixtures collected: {len(all_fixtures)}")
 
@@ -827,7 +768,7 @@ def build_fixture_blocks():
 
     if USE_ODDS_API:
         total_events = 0
-        for lg_name in LEAGUES_SELECTED.keys():
+        for lg_name in LEAGUES.keys():
             odds_events = fetch_odds_for_league(lg_name, odds_from, to_dt)
             total_events += len(odds_events or [])
             odds_cache_by_league[lg_name] = build_events_cache(odds_events)
@@ -883,16 +824,6 @@ def build_fixture_blocks():
         fair_over = implied(po)
         fair_under = implied(pu)
 
-        v1 = value_pct(off_1, fair_1)
-        vx = value_pct(off_x, fair_x)
-        v2 = value_pct(off_2, fair_2)
-        vo = value_pct(off_o, fair_over)
-        vu = value_pct(off_u, fair_under)
-
-        ltot = (lam_h or 0) + (lam_a or 0)
-        avg_match = safe_float((league_baseline or {}).get("avg_goals_per_match"), None)
-        tempo = tempo_proxy(ltot, avg_match) if avg_match else None
-
         dt = fx["commence_utc"]
 
         fixtures_out.append(
@@ -904,12 +835,10 @@ def build_fixture_blocks():
                 "league": league_name,
                 "home": fx["home"],
                 "away": fx["away"],
-                "model": "bombay_multiplicative_dc_v3_2_league_slim",
+                "model": "bombay_multiplicative_dc_v3_stabilized",
 
                 "lambda_home": round(lam_h, 3),
                 "lambda_away": round(lam_a, 3),
-                "lambda_total": round(ltot, 3),
-                "tempo": tempo,
 
                 "home_prob": round(ph, 3),
                 "draw_prob": round(pd, 3),
@@ -929,29 +858,14 @@ def build_fixture_blocks():
                 "offered_over_2_5": off_o,
                 "offered_under_2_5": off_u,
 
-                "value_pct_1": v1,
-                "value_pct_x": vx,
-                "value_pct_2": v2,
-                "value_pct_over": vo,
-                "value_pct_under": vu,
-
-                # Presenter scores (v2)
-                "score_draw": score_v2(pd, vx),
-                "score_over": score_v2(po, vo),
+                "value_pct_1": value_pct(off_1, fair_1),
+                "value_pct_x": value_pct(off_x, fair_x),
+                "value_pct_2": value_pct(off_2, fair_2),
+                "value_pct_over": value_pct(off_o, fair_over),
+                "value_pct_under": value_pct(off_u, fair_under),
 
                 "odds_match": match_debug,
                 "league_baseline": league_baseline,
-                "stabilization": {
-                    "snap_ratio": FAIR_SNAP_RATIO,
-                    "caps": {
-                        "over": CAP_OVER,
-                        "under": CAP_UNDER,
-                        "draw_min": CAP_DRAW_MIN,
-                        "draw_max": CAP_DRAW_MAX,
-                        "outcome_min": CAP_OUTCOME_MIN,
-                    },
-                    "low_tempo_league": (league_name in LOW_TEMPO_LEAGUES),
-                },
             }
         )
 
@@ -967,7 +881,6 @@ def main():
         "generated_at": now.isoformat(),
         "window": {"from": now.date().isoformat(), "to": to_dt.date().isoformat(), "hours": WINDOW_HOURS},
         "fixtures_total": len(fixtures),
-        "leagues_selected": list(LEAGUES_SELECTED.keys()),
         "fixtures": fixtures,
     }
 
@@ -975,7 +888,7 @@ def main():
     with open("logs/thursday_report_v3.json", "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, indent=2)
 
-    log(f"✅ Thursday v3.2 READY. Fixtures: {len(fixtures)}")
+    log(f"✅ Thursday v3 STABILIZED READY. Fixtures: {len(fixtures)}")
 
 if __name__ == "__main__":
     main()
