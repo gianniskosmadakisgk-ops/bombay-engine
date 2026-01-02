@@ -1,187 +1,352 @@
-# =========================
-# FILE: src/analysis/tuesday_recap_v3.py
-# =========================
 import os
 import json
+import subprocess
 from datetime import datetime
 
-FRIDAY_REPORT_PATH = "logs/friday_shortlist_v3.json"
-TUESDAY_RESULTS_PATH = "logs/tuesday_results.json"   # optional input from you
-TUESDAY_RECAP_PATH = "logs/tuesday_recap_v3.json"
+from flask import Flask, jsonify, send_file
 
-def log(msg: str):
-    print(msg, flush=True)
+app = Flask(__name__)
 
-def load_json(path):
-    if not os.path.exists(path):
-        return None
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
+# ------------------------------------------------------
+# Ριζικός φάκελος (εκεί που βρίσκεται το app.py)
+# ------------------------------------------------------
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-def result_map(results_json):
-    """
-    Primary key: pick_id (fixture_id:market_code)
-    Example pick_id: "123456:O25"
-    """
-    m = {}
-    if not results_json:
-        return m
+# ------------------------------------------------------
+# Βοηθητικό: τρέξιμο script (χειροκίνητο, όχι GPT)
+# ------------------------------------------------------
+def run_script(script_name: str):
+    try:
+        print(f"▶️ Running script: {script_name}", flush=True)
 
-    for r in results_json.get("matches", []) or []:
-        pid = (r.get("pick_id") or "").strip()
-        res = (r.get("result") or "").upper().strip()
-        if pid and res in ("WIN", "LOSS", "VOID"):
-            m[pid] = res
+        result = subprocess.run(
+            ["python3", script_name],
+            cwd=BASE_DIR,
+            capture_output=True,
+            text=True,
+        )
 
-    return m
+        print("----- SCRIPT OUTPUT START -----", flush=True)
+        print(result.stdout, flush=True)
+        print("----- SCRIPT OUTPUT END -----", flush=True)
 
-def settle_single(stake, odds, res):
-    if res == "WIN":
-        return round(stake * (odds - 1.0), 2)
-    if res == "LOSS":
-        return round(-stake, 2)
-    return 0.0
+        if result.stderr:
+            print("⚠️ SCRIPT ERRORS:", flush=True)
+            print(result.stderr, flush=True)
 
-def main():
-    friday = load_json(FRIDAY_REPORT_PATH)
-    if not friday:
-        raise FileNotFoundError(f"Missing Friday report: {FRIDAY_REPORT_PATH}")
-
-    results = load_json(TUESDAY_RESULTS_PATH)  # may be None
-    rmap = result_map(results)
-
-    core = friday.get("core", {}) or {}
-    fun = friday.get("funbet", {}) or {}
-
-    # -------- CORE recap --------
-    core_singles = core.get("singles", []) or []
-    core_double = core.get("double", None)
-
-    core_rows = []
-    core_pl = 0.0
-    core_w = core_l = core_v = 0
-
-    for p in core_singles:
-        pid = (p.get("pick_id") or "").strip()
-        stake = float(p.get("stake") or 0.0)
-        odds = float(p.get("odds") or 0.0)
-
-        res = rmap.get(pid, "PENDING") if pid else "PENDING"
-        pl = None
-
-        if res != "PENDING":
-            pl = settle_single(stake, odds, res)
-            core_pl += pl
-            if res == "WIN":
-                core_w += 1
-            elif res == "LOSS":
-                core_l += 1
-            elif res == "VOID":
-                core_v += 1
-
-        core_rows.append({
-            "pick_id": pid or None,
-            "fixture_id": p.get("fixture_id"),
-            "market_code": p.get("market_code"),
-
-            "match": p.get("match"),
-            "league": p.get("league"),
-            "market": p.get("market"),
-            "odds": odds,
-            "stake": stake,
-            "result": res,
-            "p_l": pl,
-        })
-
-    # Double stays informational unless you extend results schema to settle combos
-    double_row = None
-    if core_double:
-        double_row = {
-            "type": "Double",
-            "combo_odds": core_double.get("combo_odds"),
-            "stake": core_double.get("stake"),
-            "legs": core_double.get("legs", []),
-            "result": "PENDING" if not results else "NOT_SETTLED_BY_DEFAULT",
+        return {
+            "ok": (result.returncode == 0),
+            "return_code": result.returncode,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+        }
+    except Exception as e:
+        print(f"❌ Error running {script_name}: {e}", flush=True)
+        return {
+            "ok": False,
+            "return_code": -1,
+            "stdout": "",
+            "stderr": str(e),
         }
 
-    # -------- FUN recap --------
-    fun_picks = fun.get("picks", []) or []
-    fun_rows = []
-    fun_w = fun_l = fun_v = 0
+# ------------------------------------------------------
+# Βοηθητικό: φόρτωση JSON report από logs/
+# ------------------------------------------------------
+def load_json_report(relative_path: str):
+    full_path = os.path.join(BASE_DIR, relative_path)
 
-    for p in fun_picks:
-        pid = (p.get("pick_id") or "").strip()
-        odds = float(p.get("odds") or 0.0)
+    if not os.path.exists(full_path):
+        msg = f"Report file not found: {full_path}"
+        print(f"⚠️ {msg}", flush=True)
+        return None, msg
 
-        res = rmap.get(pid, "PENDING") if pid else "PENDING"
-        if res == "WIN":
-            fun_w += 1
-        elif res == "LOSS":
-            fun_l += 1
-        elif res == "VOID":
-            fun_v += 1
+    try:
+        with open(full_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data, None
+    except Exception as e:
+        msg = f"Failed to load report file {full_path}: {e}"
+        print(f"⚠️ {msg}", flush=True)
+        return None, msg
 
-        fun_rows.append({
-            "pick_id": pid or None,
-            "fixture_id": p.get("fixture_id"),
-            "market_code": p.get("market_code"),
+# ------------------------------------------------------
+# HEALTHCHECK
+# ------------------------------------------------------
+@app.route("/healthcheck", methods=["GET"])
+def healthcheck():
+    return jsonify({"status": "ok", "message": "Bombay Engine alive"})
 
-            "match": p.get("match"),
-            "league": p.get("league"),
-            "market": p.get("market"),
-            "odds": odds,
-            "result": res,
-        })
+# ------------------------------------------------------
+# MANUAL RUN ENDPOINTS
+# ------------------------------------------------------
+@app.route("/run/thursday-v3", methods=["GET"])
+def manual_run_thursday_v3():
+    """
+    Τρέχει ΜΟΝΟ χειροκίνητα από browser.
+    Γράφει το logs/thursday_report_v3.json.
+    """
+    r = run_script("src/analysis/thursday_engine_full_v3.py")
+    return jsonify(
+        {
+            "status": "ok" if r["ok"] else "error",
+            "script": "src/analysis/thursday_engine_full_v3.py",
+            "return_code": r["return_code"],
+            "stdout": r["stdout"],
+            "stderr": r["stderr"],
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+    )
 
-    recap = {
-        "timestamp": datetime.utcnow().isoformat(),
-        "window": friday.get("window", {}),
-        "fixtures_total": friday.get("fixtures_total"),
+@app.route("/run/friday-shortlist-v3", methods=["GET"])
+def manual_run_friday_shortlist_v3():
+    """
+    Τρέχει το Friday shortlist v3 script.
+    Γράφει logs/friday_shortlist_v3.json.
+    """
+    r = run_script("src/analysis/friday_shortlist_v3.py")
+    return jsonify(
+        {
+            "status": "ok" if r["ok"] else "error",
+            "script": "src/analysis/friday_shortlist_v3.py",
+            "return_code": r["return_code"],
+            "stdout": r["stdout"],
+            "stderr": r["stderr"],
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+    )
 
-        "core_recap": {
-            "bankroll_start": core.get("bankroll"),
-            "open": core.get("open"),
-            "after_open": core.get("after_open"),
-            "picks_count": core.get("picks_count"),
-            "picks": core_rows,
-            "double": double_row,
-            "settled": bool(results),
-            "wins": core_w,
-            "losses": core_l,
-            "voids": core_v,
-            "p_l_total": round(core_pl, 2) if results else None,
-        },
+# ------------------------------------------------------
+# DOWNLOAD ENDPOINTS (για manual upload στο Custom GPT)
+# ------------------------------------------------------
+@app.route("/download/thursday-report-v3", methods=["GET"])
+def download_thursday_report_v3():
+    full_path = os.path.join(BASE_DIR, "logs", "thursday_report_v3.json")
 
-        "fun_recap": {
-            "bankroll_start": fun.get("bankroll"),
-            "open": fun.get("open"),
-            "after_open": fun.get("after_open"),
-            "system": fun.get("system"),
-            "columns": fun.get("columns"),
-            "unit": fun.get("unit"),
-            "total_stake": fun.get("total_stake"),
-            "picks_count": fun.get("picks_count"),
-            "picks": fun_rows,
-            "settled": bool(results),
-            "wins": fun_w,
-            "losses": fun_l,
-            "voids": fun_v,
-            "note": "Fun payout δεν υπολογίζεται χωρίς line-by-line settlement του συστήματος. Εδώ κρατάμε outcomes ανά pick.",
-        },
+    if not os.path.exists(full_path):
+        return jsonify(
+            {
+                "status": "error",
+                "message": "Thursday report file not found",
+                "path": full_path,
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+        )
 
-        "weekly_summary": {
-            "core_open": core.get("open"),
-            "fun_open": fun.get("open"),
-            "core_p_l": round(core_pl, 2) if results else None,
-            "fun_p_l": None,
-        },
+    return send_file(full_path, mimetype="application/json", as_attachment=True)
+
+@app.route("/download/friday-shortlist-v3", methods=["GET"])
+def download_friday_shortlist_v3():
+    full_path = os.path.join(BASE_DIR, "logs", "friday_shortlist_v3.json")
+
+    if not os.path.exists(full_path):
+        return jsonify(
+            {
+                "status": "error",
+                "message": "Friday shortlist v3 file not found",
+                "path": full_path,
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+        )
+
+    return send_file(full_path, mimetype="application/json", as_attachment=True)
+
+@app.route("/download/tuesday-recap-v2", methods=["GET"])
+def download_tuesday_recap_v2():
+    full_path = os.path.join(BASE_DIR, "logs", "tuesday_recap_v2.json")
+
+    if not os.path.exists(full_path):
+        return jsonify(
+            {
+                "status": "error",
+                "message": "Tuesday recap file not found",
+                "path": full_path,
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+        )
+
+    return send_file(full_path, mimetype="application/json", as_attachment=True)
+
+# ------------------------------------------------------
+# GPT ENDPOINTS (Thursday / Friday / Tuesday)
+# ------------------------------------------------------
+@app.route("/thursday-analysis-v3", methods=["GET"])
+def api_thursday_analysis_v3():
+    """
+    Το GPT παίρνει μια "light" έκδοση του Thursday report,
+    βασισμένη στο logs/thursday_report_v3.json.
+
+    ΠΡΙΝ το διαβάσει, κάνει auto-run τον Thursday engine.
+    """
+    try:
+        run_script("src/analysis/thursday_engine_full_v3.py")
+    except Exception as e:
+        print(f"⚠️ Error while auto-running Thursday engine: {e}", flush=True)
+
+    full_report, error = load_json_report("logs/thursday_report_v3.json")
+    if full_report is None:
+        return jsonify(
+            {
+                "status": "error",
+                "message": "Thursday report not available",
+                "error": error,
+                "report": None,
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+        )
+
+    fixtures = full_report.get("fixtures", [])
+    light_fixtures = []
+
+    for fx in fixtures:
+        draw_prob = fx.get("draw_prob")
+        over_prob = fx.get("over_2_5_prob")
+
+        # Υπολογισμός SCORE DRAW (σύμφωνα με το spec)
+        if isinstance(draw_prob, (int, float)):
+            score_draw_raw = draw_prob * 10
+            score_draw = round(score_draw_raw, 1)
+            if score_draw < 1:
+                score_draw = 1
+            if score_draw > 10:
+                score_draw = 10
+        else:
+            score_draw = None
+
+        # Υπολογισμός SCORE OVER (σύμφωνα με το spec)
+        if isinstance(over_prob, (int, float)):
+            score_over_raw = over_prob * 10
+            score_over = round(score_over_raw, 1)
+            if score_over < 1:
+                score_over = 1
+            if score_over > 10:
+                score_over = 10
+        else:
+            score_over = None
+
+        light_fixtures.append(
+            {
+                "fixture_id": fx.get("fixture_id"),
+                "date": fx.get("date"),
+                "time": fx.get("time"),
+                "league_id": fx.get("league_id"),
+                "league": fx.get("league"),
+                "home": fx.get("home"),
+                "away": fx.get("away"),
+                "model": fx.get("model"),
+
+                # FAIR odds
+                "fair_1": fx.get("fair_1"),
+                "fair_x": fx.get("fair_x"),
+                "fair_2": fx.get("fair_2"),
+                "fair_over_2_5": fx.get("fair_over_2_5"),
+                "fair_under_2_5": fx.get("fair_under_2_5"),
+
+                # Probabilities (ό,τι υπάρχει ήδη στο report)
+                "home_prob": fx.get("home_prob"),
+                "draw_prob": draw_prob,
+                "away_prob": fx.get("away_prob"),
+                "over_2_5_prob": over_prob,
+                "under_2_5_prob": fx.get("under_2_5_prob"),
+
+                # Offered odds (για να μην τα υπολογίζει/μαντεύει το GPT)
+                "offered_1": fx.get("offered_1"),
+                "offered_x": fx.get("offered_x"),
+                "offered_2": fx.get("offered_2"),
+                "offered_over_2_5": fx.get("offered_over_2_5"),
+                "offered_under_2_5": fx.get("offered_under_2_5"),
+
+                # ✅ VALUE % (Δ%) — ΜΟΝΟ μεταφορά, ΚΑΝΕΝΑΣ υπολογισμός εδώ
+                "value_pct_1": fx.get("value_pct_1"),
+                "value_pct_x": fx.get("value_pct_x"),
+                "value_pct_2": fx.get("value_pct_2"),
+                "value_pct_over": fx.get("value_pct_over"),
+                "value_pct_under": fx.get("value_pct_under"),
+
+                # Scores ήδη υπολογισμένα από backend
+                "score_draw": score_draw,
+                "score_over": score_over,
+            }
+        )
+
+    light_report = {
+        "generated_at": full_report.get("generated_at"),
+        "window": full_report.get("window", {}),
+        "fixtures_analyzed": len(light_fixtures),
+        "fixtures": light_fixtures,
     }
 
-    os.makedirs("logs", exist_ok=True)
-    with open(TUESDAY_RECAP_PATH, "w", encoding="utf-8") as f:
-        json.dump(recap, f, ensure_ascii=False, indent=2)
+    return jsonify(
+        {
+            "status": "ok",
+            "script": "src/analysis/thursday_engine_full_v3.py",
+            "timestamp": datetime.utcnow().isoformat(),
+            "report": light_report,
+        }
+    )
 
-    log(f"✅ Tuesday Recap saved → {TUESDAY_RECAP_PATH}")
+@app.route("/friday-shortlist-v3", methods=["GET"])
+def api_friday_shortlist_v3():
+    """
+    Το GPT ζητάει το Friday shortlist.
+    ΠΡΙΝ το σερβίρουμε, τρέχουμε (auto-run) το Friday engine,
+    ώστε να υπάρχει ΠΑΝΤΑ φρέσκο JSON.
+    """
+    try:
+        run_script("src/analysis/friday_shortlist_v3.py")
+    except Exception as e:
+        print(f"⚠️ Error while auto-running Friday shortlist: {e}", flush=True)
 
+    report, error = load_json_report("logs/friday_shortlist_v3.json")
+
+    if report is None:
+        return jsonify(
+            {
+                "status": "error",
+                "message": "Friday shortlist v3 not available",
+                "error": error,
+                "report": None,
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+        )
+
+    return jsonify(
+        {
+            "status": "ok",
+            "timestamp": datetime.utcnow().isoformat(),
+            "report": report,
+        }
+    )
+
+@app.route("/tuesday-recap", methods=["GET"])
+def api_tuesday_recap():
+    report, error = load_json_report("logs/tuesday_recap_v2.json")
+
+    if report is None:
+        return jsonify(
+            {
+                "status": "error",
+                "message": "Tuesday recap not available",
+                "error": error,
+                "report": None,
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+        )
+
+    return jsonify(
+        {
+            "status": "ok",
+            "timestamp": datetime.utcnow().isoformat(),
+            "report": report,
+        }
+    )
+
+# ------------------------------------------------------
+# ENTRY POINT
+# ------------------------------------------------------
 if __name__ == "__main__":
-    main()
+    port = int(os.environ.get("PORT", 10000))
+    print(
+        f"🚀 Starting Bombay Engine Flask Server on port {port}...",
+        flush=True,
+    )
+    app.run(host="0.0.0.0", port=port, use_reloader=False)
