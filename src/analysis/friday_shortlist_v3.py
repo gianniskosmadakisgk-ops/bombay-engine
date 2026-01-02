@@ -1,8 +1,17 @@
+# =========================
+# FRIDAY SHORTLIST v3 — FIXED
+# - CORE singles stakes: 15/20/25
+# - CORE exposure cap: 0.30 (so stakes don't get crushed)
+# - CORE doubles: allow up to 1.70 per leg
+# - FUN singles stakes remain boosted (8/7/6) + cap scaling
+# - Outputs report compatible with your previous JSON structure
+# =========================
+
 import os
 import json
-import math
 from datetime import datetime
 from itertools import combinations
+from math import comb
 
 THURSDAY_REPORT_PATH = "logs/thursday_report_v3.json"
 FRIDAY_REPORT_PATH = "logs/friday_shortlist_v3.json"
@@ -11,52 +20,57 @@ FRIDAY_REPORT_PATH = "logs/friday_shortlist_v3.json"
 BANKROLL_CORE = float(os.getenv("BANKROLL_CORE", "700"))
 BANKROLL_FUN = float(os.getenv("BANKROLL_FUN", "400"))
 
-CORE_EXPOSURE_CAP = float(os.getenv("CORE_EXPOSURE_CAP", "0.18"))
+# ✅ FIX: core cap raised so 15/20/25 doesn't get scaled down to 10-12
+CORE_EXPOSURE_CAP = float(os.getenv("CORE_EXPOSURE_CAP", "0.30"))
 FUN_EXPOSURE_CAP = float(os.getenv("FUN_EXPOSURE_CAP", "0.20"))
 
-# Odds match quality gate (from Thursday)
 ODDS_MATCH_MIN_SCORE = float(os.getenv("ODDS_MATCH_MIN_SCORE", "0.75"))
 
 # ------------------------- CORE RULES -------------------------
-CORE_MIN_ODDS = float(os.getenv("CORE_MIN_ODDS", "1.50"))
-CORE_MAX_ODDS = float(os.getenv("CORE_MAX_ODDS", "2.20"))
-
-CORE_MIN_VALUE_LOW = float(os.getenv("CORE_MIN_VALUE_LOW", "4.0"))    # 1.50-1.65
-CORE_MIN_VALUE_MID = float(os.getenv("CORE_MIN_VALUE_MID", "3.0"))    # 1.65-2.00
-CORE_MIN_VALUE_HIGH = float(os.getenv("CORE_MIN_VALUE_HIGH", "2.5"))  # 2.00-2.20
-
-CORE_MAX_SINGLES = int(os.getenv("CORE_MAX_SINGLES", "10"))
-CORE_MIN_SINGLES = int(os.getenv("CORE_MIN_SINGLES", "4"))
+CORE_MIN_ODDS = 1.50
+CORE_MAX_ODDS = 2.20
 
 CORE_ALLOWED_MARKETS = {"Home", "Away", "Over 2.5", "Under 2.5"}
+CORE_MAX_SINGLES = 10
 
-# Core doubles from legs <1.50
-CORE_DOUBLE_MAX_LEG_ODDS = float(os.getenv("CORE_DOUBLE_MAX_LEG_ODDS", "1.50"))
-CORE_DOUBLE_TARGET_MIN = float(os.getenv("CORE_DOUBLE_TARGET_MIN", "1.55"))
-CORE_DOUBLE_TARGET_MAX = float(os.getenv("CORE_DOUBLE_TARGET_MAX", "2.20"))
+CORE_MIN_VALUE_BANDS = {
+    (1.50, 1.65): 4.0,
+    (1.65, 2.00): 3.0,
+    (2.00, 2.20): 2.5,
+}
 
-# CORE stake bands (flat)
-CORE_STAKE_LOW_ODDS = float(os.getenv("CORE_STAKE_LOW_ODDS", "25"))   # 1.50-1.65
-CORE_STAKE_MID_ODDS = float(os.getenv("CORE_STAKE_MID_ODDS", "23"))   # 1.65-2.00
-CORE_STAKE_HIGH_ODDS = float(os.getenv("CORE_STAKE_HIGH_ODDS", "18")) # 2.00-2.20
+# ✅ FIX: requested stake bands (final targets)
+CORE_STAKE_BANDS = {
+    (1.50, 1.65): 25.0,
+    (1.65, 2.00): 20.0,
+    (2.00, 2.20): 15.0,
+}
+
+# ✅ FIX: allow real doubles
+CORE_DOUBLE_MAX_LEG_ODDS = 1.70
+CORE_DOUBLE_TARGET_MIN = 1.55
+CORE_DOUBLE_TARGET_MAX = 2.20
 
 # ------------------------- FUN RULES -------------------------
-FUN_MIN_ODDS = float(os.getenv("FUN_MIN_ODDS", "2.00"))
-FUN_MAX_ODDS = float(os.getenv("FUN_MAX_ODDS", "3.00"))
-FUN_MIN_VALUE_PCT = float(os.getenv("FUN_MIN_VALUE_PCT", "5.0"))
-
-FUN_MAX_PICKS = int(os.getenv("FUN_MAX_PICKS", "8"))
-FUN_MAX_SINGLES = int(os.getenv("FUN_MAX_SINGLES", "7"))
+FUN_MIN_ODDS = 2.00
+FUN_MAX_ODDS = 3.00
+FUN_MIN_VALUE_PCT = 5.0
+FUN_MAX_PICKS = 8
+FUN_MAX_SINGLES = 7
 
 FUN_ALLOWED_MARKETS = {"Home", "Draw", "Away", "Over 2.5", "Under 2.5"}
+FUN_AVOID_CORE_OVERLAP = True
 
-# FUN singles stake bands (flat) - higher odds => lower stake
-FUN_STAKE_LOW = float(os.getenv("FUN_STAKE_LOW", "17"))    # 2.00-2.30
-FUN_STAKE_MID = float(os.getenv("FUN_STAKE_MID", "13"))    # 2.30-2.60
-FUN_STAKE_HIGH = float(os.getenv("FUN_STAKE_HIGH", "10"))  # 2.60-3.00
+# ✅ FIX: boosted fun single stakes (no more peanuts)
+FUN_SINGLE_STAKE_BANDS = {
+    (2.00, 2.30): 8.0,
+    (2.30, 2.60): 7.0,
+    (2.60, 3.00): 6.0,
+}
 
-# If you want FunBet to avoid overlapping Core picks
-FUN_AVOID_CORE_OVERLAP = os.getenv("FUN_AVOID_CORE_OVERLAP", "1").strip() != "0"
+# FUN system settings (keep your 3-4-5/8 structure)
+FUN_SYSTEM = "3-4-5/8"
+FUN_BASE_UNIT = float(os.getenv("FUN_SYSTEM_UNIT", "0.31"))  # was ~0.31 in your report
 
 MARKET_CODE = {
     "Home": "1",
@@ -66,296 +80,153 @@ MARKET_CODE = {
     "Under 2.5": "U25",
 }
 
-def log(msg: str):
-    print(msg, flush=True)
-
-def safe_float(v, default=None):
+def safe_float(v, d=None):
     try:
-        if v is None:
-            return default
         return float(v)
-    except Exception:
-        return default
+    except:
+        return d
 
-def load_thursday():
-    if not os.path.exists(THURSDAY_REPORT_PATH):
-        raise FileNotFoundError(f"Thursday report not found: {THURSDAY_REPORT_PATH}")
+def band_lookup(x, band_map, default=None):
+    for (a, b), val in band_map.items():
+        if a <= x <= b:
+            return val
+    return default
+
+def load_thursday_fixtures():
     with open(THURSDAY_REPORT_PATH, "r", encoding="utf-8") as f:
         data = json.load(f)
-    return data.get("fixtures", []) or [], data
+    return data["fixtures"], data
 
-def make_pick_id(fixture_id, market_code):
-    return f"{fixture_id}:{market_code}"
-
-def fixture_odds_match_ok(fx: dict) -> bool:
-    """
-    Gate fixtures by odds matcher quality (Thursday provides odds_match).
-    If odds_match missing, we allow (backwards compatible).
-    """
-    om = fx.get("odds_match")
-    if not isinstance(om, dict):
-        return True
-    if om.get("matched") is not True:
+def odds_match_ok(fx):
+    om = fx.get("odds_match") or {}
+    if not om.get("matched"):
         return False
-    score = safe_float(om.get("score"), 1.0)
-    return score is not None and score >= ODDS_MATCH_MIN_SCORE
+    score = safe_float(om.get("score"), 0.0)
+    return score >= ODDS_MATCH_MIN_SCORE
 
-def market_rows_from_fixture(fx):
-    if not fixture_odds_match_ok(fx):
-        return []
-
-    fixture_id = fx.get("fixture_id")
-    home = fx.get("home")
-    away = fx.get("away")
-    league = fx.get("league")
-    match = f"{home} – {away}"
-
+def build_rows(fixtures):
     rows = []
+    for fx in fixtures:
+        # skip if odds matching is weak (keeps garbage out)
+        if not odds_match_ok(fx):
+            continue
 
-    def add(market, prob_key, fair_key, odds_key, value_key):
-        prob = safe_float(fx.get(prob_key), None)
-        fair = safe_float(fx.get(fair_key), None)
-        odds = safe_float(fx.get(odds_key), None)
-        val = fx.get(value_key, None)
+        markets = [
+            ("Home", "home_prob", "fair_1", "offered_1", "value_pct_1"),
+            ("Draw", "draw_prob", "fair_x", "offered_x", "value_pct_x"),
+            ("Away", "away_prob", "fair_2", "offered_2", "value_pct_2"),
+            ("Over 2.5", "over_2_5_prob", "fair_over_2_5", "offered_over_2_5", "value_pct_over"),
+            ("Under 2.5", "under_2_5_prob", "fair_under_2_5", "offered_under_2_5", "value_pct_under"),
+        ]
 
-        if prob is None or fair is None:
-            return
-        if odds is None or odds <= 1.0:
-            return
-        if val is None:
-            return
+        for market, pkey, fkey, okey, vkey in markets:
+            val = fx.get(vkey)
+            if val is None:
+                continue
 
-        mcode = MARKET_CODE.get(market)
-        pid = make_pick_id(fixture_id, mcode) if fixture_id and mcode else None
+            odds = safe_float(fx.get(okey))
+            if not odds or odds <= 1:
+                continue
 
-        rows.append({
-            "fixture_id": fixture_id,
-            "pick_id": pid,
-            "market_code": mcode,
-            "match": match,
-            "league": league,
-            "market": market,
-            "prob": round(prob, 3),
-            "fair": fair,
-            "odds": odds,
-            "value_pct": float(val),
-        })
-
-    add("Home", "home_prob", "fair_1", "offered_1", "value_pct_1")
-    add("Draw", "draw_prob", "fair_x", "offered_x", "value_pct_x")
-    add("Away", "away_prob", "fair_2", "offered_2", "value_pct_2")
-    add("Over 2.5", "over_2_5_prob", "fair_over_2_5", "offered_over_2_5", "value_pct_over")
-    add("Under 2.5", "under_2_5_prob", "fair_under_2_5", "offered_under_2_5", "value_pct_under")
-
+            rows.append({
+                "fixture_id": fx.get("fixture_id"),
+                "date": fx.get("date"),
+                "time": fx.get("time"),
+                "league": fx.get("league"),
+                "match": f'{fx.get("home")} – {fx.get("away")}',
+                "market": market,
+                "market_code": MARKET_CODE[market],
+                "prob": safe_float(fx.get(pkey), 0.0),
+                "fair": safe_float(fx.get(fkey)),
+                "odds": odds,
+                "value_pct": safe_float(val, 0.0),
+            })
     return rows
 
-# ------------------------- CORE -------------------------
-def core_min_value_for_odds(odds: float) -> float:
-    if odds < 1.65:
-        return CORE_MIN_VALUE_LOW
-    if odds < 2.00:
-        return CORE_MIN_VALUE_MID
-    return CORE_MIN_VALUE_HIGH
+def scale_stakes(items, cap_amount, stake_key="stake"):
+    total = sum(safe_float(x.get(stake_key), 0.0) for x in items)
+    if total <= 0:
+        return items, 0.0, total
+    if total <= cap_amount:
+        return items, 1.0, total
 
-def core_stake_for_odds(odds: float) -> float:
-    if 1.50 <= odds < 1.65:
-        return CORE_STAKE_LOW_ODDS
-    if 1.65 <= odds < 2.00:
-        return CORE_STAKE_MID_ODDS
-    if 2.00 <= odds <= 2.20:
-        return CORE_STAKE_HIGH_ODDS
-    return 0.0
+    s = cap_amount / total
+    for x in items:
+        x[stake_key] = round(safe_float(x.get(stake_key), 0.0) * s, 1)
+    return items, s, total
 
-def choose_core(rows):
-    cand = []
+def pick_core(rows):
+    # filter core candidates
+    core_candidates = []
     for r in rows:
         if r["market"] not in CORE_ALLOWED_MARKETS:
             continue
         if r["odds"] < CORE_MIN_ODDS or r["odds"] > CORE_MAX_ODDS:
             continue
-        if r["value_pct"] < core_min_value_for_odds(r["odds"]):
+
+        min_val = band_lookup(r["odds"], CORE_MIN_VALUE_BANDS, default=9999)
+        if r["value_pct"] < min_val:
             continue
-        stake = core_stake_for_odds(r["odds"])
+
+        stake = band_lookup(r["odds"], CORE_STAKE_BANDS, default=0.0)
         if stake <= 0:
             continue
-        cand.append((r, stake))
 
-    cand.sort(key=lambda t: (t[0]["value_pct"], t[0]["prob"]), reverse=True)
+        core_candidates.append({**r, "stake": float(stake), "tag": "core"})
 
-    singles = []
+    # sort by value_pct desc, then prob desc
+    core_candidates.sort(key=lambda x: (x["value_pct"], x["prob"]), reverse=True)
+
+    # keep unique matches
+    core_singles = []
     used_matches = set()
-    for r, stake in cand:
+    for r in core_candidates:
         if r["match"] in used_matches:
             continue
-        singles.append({
-            "pick_id": r.get("pick_id"),
-            "fixture_id": r.get("fixture_id"),
-            "market_code": r.get("market_code"),
-            "match": r["match"],
-            "league": r["league"],
-            "market": r["market"],
-            "prob": r["prob"],
-            "fair": r["fair"],
-            "odds": r["odds"],
-            "value_pct": round(r["value_pct"], 1),
-            "stake": round(stake, 1),
-            "tag": "core",
-        })
+        core_singles.append(r)
         used_matches.add(r["match"])
-        if len(singles) >= CORE_MAX_SINGLES:
+        if len(core_singles) >= CORE_MAX_SINGLES:
             break
 
-    # Doubles pool: legs < 1.50
-    low_legs = []
-    for r in rows:
-        if r["market"] not in CORE_ALLOWED_MARKETS:
-            continue
-        if r["odds"] is None or r["odds"] >= CORE_DOUBLE_MAX_LEG_ODDS:
-            continue
-        if r["value_pct"] < CORE_MIN_VALUE_LOW:
-            continue
-        low_legs.append(r)
+    # scale to exposure cap
+    cap_amount = BANKROLL_CORE * CORE_EXPOSURE_CAP
+    core_singles, core_scale, core_base_total = scale_stakes(core_singles, cap_amount, "stake")
 
-    low_legs.sort(key=lambda x: (x["value_pct"], x["prob"]), reverse=True)
+    # build a core double (best value pair) from eligible legs
+    eligible_for_double = [x for x in core_singles if x["odds"] <= CORE_DOUBLE_MAX_LEG_ODDS]
+    best_double = None
+    best_score = -1e9
 
-    doubles = []
-    used_in_doubles = set()
-
-    pool = low_legs[:16]
-    for a, b in combinations(pool, 2):
-        if a["match"] == b["match"]:
-            continue
-        if a["match"] in used_in_doubles or b["match"] in used_in_doubles:
-            continue
+    for a, b in combinations(eligible_for_double, 2):
         combo_odds = a["odds"] * b["odds"]
         if not (CORE_DOUBLE_TARGET_MIN <= combo_odds <= CORE_DOUBLE_TARGET_MAX):
             continue
+        score = (a["value_pct"] + b["value_pct"]) + (a["prob"] + b["prob"]) * 10
+        if score > best_score:
+            best_score = score
+            best_double = {
+                "legs": [
+                    {"pick_id": f'{a["fixture_id"]}:{a["market_code"]}', "match": a["match"], "market": a["market"], "odds": a["odds"]},
+                    {"pick_id": f'{b["fixture_id"]}:{b["market_code"]}', "match": b["match"], "market": b["market"], "odds": b["odds"]},
+                ],
+                "combo_odds": round(combo_odds, 2),
+                "tag": "core_double",
+            }
 
-        stake = core_stake_for_odds(combo_odds if combo_odds <= 2.20 else 2.20)
-        if stake <= 0:
-            stake = CORE_STAKE_MID_ODDS
+    open_amount = round(sum(x["stake"] for x in core_singles), 1)
+    return core_singles, best_double, {
+        "bankroll": BANKROLL_CORE,
+        "exposure_cap_pct": CORE_EXPOSURE_CAP,
+        "exposure_scale_applied": round(open_amount / (core_base_total if core_base_total else open_amount), 3) if open_amount else 0.0,
+        "open": open_amount,
+        "after_open": round(BANKROLL_CORE - open_amount, 1),
+        "picks_count": len(core_singles),
+    }
 
-        doubles.append({
-            "type": "Double",
-            "combo_odds": round(combo_odds, 2),
-            "stake": round(stake, 1),
-            "legs": [
-                {
-                    "pick_id": a.get("pick_id"),
-                    "fixture_id": a.get("fixture_id"),
-                    "market_code": a.get("market_code"),
-                    "match": a["match"],
-                    "league": a["league"],
-                    "market": a["market"],
-                    "odds": a["odds"],
-                },
-                {
-                    "pick_id": b.get("pick_id"),
-                    "fixture_id": b.get("fixture_id"),
-                    "market_code": b.get("market_code"),
-                    "match": b["match"],
-                    "league": b["league"],
-                    "market": b["market"],
-                    "odds": b["odds"],
-                },
-            ],
-        })
-        used_in_doubles.add(a["match"])
-        used_in_doubles.add(b["match"])
-        if len(doubles) >= 6:
-            break
+def pick_fun(rows, core_singles):
+    core_fixture_ids = {x["fixture_id"] for x in core_singles}
 
-    primary_double = doubles[0] if doubles else None
-    doubles_rest = doubles[1:] if len(doubles) > 1 else []
-
-    return singles, primary_double, doubles_rest
-
-def cap_core_exposure(core_singles, core_double, core_doubles):
-    max_exposure = BANKROLL_CORE * CORE_EXPOSURE_CAP
-    open_singles = sum(p["stake"] for p in core_singles)
-    open_double = (core_double["stake"] if core_double else 0.0)
-    open_more = sum(d["stake"] for d in (core_doubles or []))
-    total_open = open_singles + open_double + open_more
-
-    if total_open <= max_exposure or total_open <= 0:
-        return core_singles, core_double, core_doubles, 1.0
-
-    scale = max_exposure / total_open
-    for p in core_singles:
-        p["stake"] = round(p["stake"] * scale, 1)
-    if core_double:
-        core_double["stake"] = round(core_double["stake"] * scale, 1)
-    for d in (core_doubles or []):
-        d["stake"] = round(d["stake"] * scale, 1)
-
-    return core_singles, core_double, core_doubles, round(scale, 3)
-
-# ------------------------- FUN -------------------------
-def fun_stake_for_odds(odds: float) -> float:
-    if 2.00 <= odds < 2.30:
-        return FUN_STAKE_LOW
-    if 2.30 <= odds < 2.60:
-        return FUN_STAKE_MID
-    if 2.60 <= odds <= 3.00:
-        return FUN_STAKE_HIGH
-    return 0.0
-
-def columns_for_system(system: str, n: int) -> int:
-    if not system:
-        return 0
-
-    if system == "3/3":
-        return 1
-    if system == "3/4":
-        return math.comb(4, 3)
-    if system == "3/5":
-        return math.comb(5, 3)
-    if system == "3/6":
-        return math.comb(6, 3)
-    if system == "4/6":
-        return math.comb(6, 4)
-    if system == "3/7":
-        return math.comb(7, 3)
-    if system == "4/7":
-        return math.comb(7, 4)
-
-    if system == "3/8":
-        return math.comb(8, 3)
-    if system == "4/8":
-        return math.comb(8, 4)
-    if system == "5/8":
-        return math.comb(8, 5)
-
-    if system == "3-4-5/7":
-        return math.comb(7, 3) + math.comb(7, 4) + math.comb(7, 5)
-    if system == "3-4-5/8":
-        return math.comb(8, 3) + math.comb(8, 4) + math.comb(8, 5)
-
-    return 0
-
-def cap_fun_exposure(fun_obj: dict) -> dict:
-    max_exposure = BANKROLL_FUN * FUN_EXPOSURE_CAP
-    total = float(fun_obj.get("total_stake") or 0.0) + sum(s.get("stake", 0.0) for s in (fun_obj.get("singles") or []))
-
-    if total <= max_exposure or total <= 0:
-        fun_obj["exposure_scale_applied"] = 1.0
-        return fun_obj
-
-    scale = max_exposure / total
-    unit = float(fun_obj.get("unit") or 0.0)
-    fun_obj["unit"] = round(unit * scale, 2) if unit > 0 else 0.0
-    fun_obj["total_stake"] = round((fun_obj.get("columns", 0) or 0) * fun_obj["unit"], 1)
-
-    for s in (fun_obj.get("singles") or []):
-        s["stake"] = round(float(s["stake"]) * scale, 1)
-
-    fun_obj["exposure_scale_applied"] = round(scale, 3)
-    return fun_obj
-
-def choose_fun(rows, core_pick_ids=None):
-    core_pick_ids = set(core_pick_ids or [])
-
-    cand = []
+    fun_candidates = []
     for r in rows:
         if r["market"] not in FUN_ALLOWED_MARKETS:
             continue
@@ -363,211 +234,173 @@ def choose_fun(rows, core_pick_ids=None):
             continue
         if r["value_pct"] < FUN_MIN_VALUE_PCT:
             continue
-        if FUN_AVOID_CORE_OVERLAP and r.get("pick_id") in core_pick_ids:
+        if FUN_AVOID_CORE_OVERLAP and r["fixture_id"] in core_fixture_ids:
             continue
-        cand.append(r)
 
-    cand.sort(key=lambda x: (x["value_pct"], x["prob"]), reverse=True)
+        fun_candidates.append(r)
 
-    picks = []
+    fun_candidates.sort(key=lambda x: (x["value_pct"], x["prob"]), reverse=True)
+
+    fun_picks = []
     used_matches = set()
-    for r in cand:
+    for r in fun_candidates:
         if r["match"] in used_matches:
             continue
-        picks.append({
-            "pick_id": r.get("pick_id"),
-            "fixture_id": r.get("fixture_id"),
-            "market_code": r.get("market_code"),
+        fun_picks.append(r)
+        used_matches.add(r["match"])
+        if len(fun_picks) >= FUN_MAX_PICKS:
+            break
+
+    # fun singles (max 7)
+    fun_singles = []
+    for r in fun_picks[:FUN_MAX_SINGLES]:
+        stake = band_lookup(r["odds"], FUN_SINGLE_STAKE_BANDS, default=0.0)
+        if stake <= 0:
+            continue
+        fun_singles.append({
+            "pick_id": f'{r["fixture_id"]}:{r["market_code"]}',
+            "fixture_id": r["fixture_id"],
+            "market_code": r["market_code"],
             "match": r["match"],
             "league": r["league"],
             "market": r["market"],
-            "prob": r["prob"],
-            "fair": r["fair"],
             "odds": r["odds"],
-            "value_pct": round(r["value_pct"], 1),
+            "stake": float(stake),
         })
-        used_matches.add(r["match"])
-        if len(picks) >= FUN_MAX_PICKS:
-            break
 
-    n = len(picks)
-    if n < 3:
-        return {
-            "system": None, "columns": 0, "unit": 0.0, "total_stake": 0.0,
-            "picks": picks, "singles": [], "rule_ok": False
-        }
+    # system columns for 3-4-5/8
+    n = len(fun_picks)
+    cols = 0
+    if n >= 5:
+        cols = comb(n, 3) + comb(n, 4) + comb(n, 5)
 
-    avg_value = sum(p["value_pct"] for p in picks) / n
-    avg_odds = sum(p["odds"] for p in picks) / n
+    base_unit = FUN_BASE_UNIT
+    base_system_stake = base_unit * cols
+    base_singles_stake = sum(x["stake"] for x in fun_singles)
+    base_total = base_system_stake + base_singles_stake
 
-    if n == 8:
-        system = "3-4-5/8" if (avg_value >= 8.0 and avg_odds >= 2.15) else "4/8"
-    elif n == 7:
-        system = "3-4-5/7" if (avg_value >= 8.0 and avg_odds >= 2.10) else "4/7"
-    elif n == 6:
-        system = "3/6" if avg_value >= 6.5 else "4/6"
-    elif n == 5:
-        system = "3/5"
-    elif n == 4:
-        system = "3/4"
-    else:
-        system = "3/3"
+    cap_amount = BANKROLL_FUN * FUN_EXPOSURE_CAP
+    scale = 1.0
+    if base_total > 0 and base_total > cap_amount:
+        scale = cap_amount / base_total
 
-    cols = columns_for_system(system, n)
-    if cols <= 0:
-        return {
-            "system": None, "columns": 0, "unit": 0.0, "total_stake": 0.0,
-            "picks": picks, "singles": [], "rule_ok": False
-        }
+    unit = round(base_unit * scale, 2)
+    total_stake = round(unit * cols, 1)
 
-    max_exposure = BANKROLL_FUN * FUN_EXPOSURE_CAP
+    # scale fun singles too
+    for x in fun_singles:
+        x["stake"] = round(x["stake"] * scale, 1)
 
-    singles = []
-    for p in picks:
-        st = fun_stake_for_odds(p["odds"])
-        if st <= 0:
-            continue
-        if p["value_pct"] >= 10.0 or p["prob"] >= 0.45:
-            singles.append({
-                "pick_id": p.get("pick_id"),
-                "fixture_id": p.get("fixture_id"),   # ✅ FIXED HERE
-                "market_code": p.get("market_code"),
-                "match": p.get("match"),
-                "league": p.get("league"),
-                "market": p.get("market"),
-                "odds": p.get("odds"),
-                "stake": round(st, 1),
-            })
-        if len(singles) >= FUN_MAX_SINGLES:
-            break
+    open_amount = round(total_stake + sum(x["stake"] for x in fun_singles), 1)
 
-    unit = float(int(max_exposure // cols) or 1)
-    unit = max(1.0, min(3.0, unit))
-    total = unit * cols
-
-    fun_obj = {
-        "system": system,
+    fun_payload = {
+        "bankroll": BANKROLL_FUN,
+        "exposure_cap_pct": FUN_EXPOSURE_CAP,
+        "exposure_scale_applied": round(scale, 3),
+        "rules": {
+            "odds_min": FUN_MIN_ODDS,
+            "odds_max": FUN_MAX_ODDS,
+            "min_value_pct": FUN_MIN_VALUE_PCT,
+            "max_picks": FUN_MAX_PICKS,
+            "allowed_markets": sorted(list(FUN_ALLOWED_MARKETS)),
+            "single_stake_bands": {
+                "2.00-2.30": FUN_SINGLE_STAKE_BANDS[(2.00, 2.30)],
+                "2.30-2.60": FUN_SINGLE_STAKE_BANDS[(2.30, 2.60)],
+                "2.60-3.00": FUN_SINGLE_STAKE_BANDS[(2.60, 3.00)],
+            },
+            "system_unit_eur_range": [1, 3],
+            "avoid_core_overlap": FUN_AVOID_CORE_OVERLAP,
+            "odds_match_min_score": ODDS_MATCH_MIN_SCORE,
+        },
+        "system": FUN_SYSTEM,
         "columns": cols,
         "unit": unit,
-        "total_stake": round(total, 1),
-        "picks": picks,
-        "singles": singles,
-        "rule_ok": True,
-        "avg_value": round(avg_value, 2),
-        "avg_odds": round(avg_odds, 2),
+        "total_stake": open_amount,  # overall fun exposure (system + singles)
+        "picks": [
+            {
+                "pick_id": f'{r["fixture_id"]}:{r["market_code"]}',
+                "fixture_id": r["fixture_id"],
+                "market_code": r["market_code"],
+                "match": r["match"],
+                "league": r["league"],
+                "market": r["market"],
+                "prob": r["prob"],
+                "fair": r["fair"],
+                "odds": r["odds"],
+                "value_pct": r["value_pct"],
+            }
+            for r in fun_picks
+        ],
+        "singles": fun_singles,
+        "open": open_amount,
+        "after_open": round(BANKROLL_FUN - open_amount, 1),
+        "picks_count": len(fun_picks),
+        "singles_count": len(fun_singles),
+        "avg_value": round(sum(x["value_pct"] for x in fun_picks) / len(fun_picks), 2) if fun_picks else 0.0,
+        "avg_odds": round(sum(x["odds"] for x in fun_picks) / len(fun_picks), 2) if fun_picks else 0.0,
     }
-
-    return cap_fun_exposure(fun_obj)
+    return fun_payload
 
 def main():
-    log("🚀 Running Friday Shortlist v3 (FIXED)")
+    fixtures, th_meta = load_thursday_fixtures()
+    rows = build_rows(fixtures)
 
-    fixtures, th = load_thursday()
-    log(f"Loaded {len(fixtures)} fixtures from {THURSDAY_REPORT_PATH}")
+    core_singles, core_double, core_meta = pick_core(rows)
+    fun_payload = pick_fun(rows, core_singles)
 
-    all_rows = []
-    for fx in fixtures:
-        all_rows.extend(market_rows_from_fixture(fx))
-
-    core_singles, core_double, core_doubles = choose_core(all_rows)
-    core_pick_ids = {p.get("pick_id") for p in core_singles if p.get("pick_id")}
-    if core_double:
-        for leg in core_double.get("legs", []):
-            if leg.get("pick_id"):
-                core_pick_ids.add(leg["pick_id"])
-    for d in (core_doubles or []):
-        for leg in d.get("legs", []):
-            if leg.get("pick_id"):
-                core_pick_ids.add(leg["pick_id"])
-
-    fun = choose_fun(all_rows, core_pick_ids=core_pick_ids)
-
-    core_singles, core_double, core_doubles, scale = cap_core_exposure(core_singles, core_double, core_doubles)
-
-    core_open = round(
-        sum(p["stake"] for p in core_singles)
-        + (core_double["stake"] if core_double else 0.0)
-        + sum(d["stake"] for d in (core_doubles or [])),
-        1
-    )
-    fun_open = round(
-        float(fun.get("total_stake") or 0.0) + sum(s.get("stake", 0.0) for s in (fun.get("singles") or [])),
-        1
-    )
-
-    output = {
+    report = {
         "timestamp": datetime.utcnow().isoformat(),
-        "window": th.get("window", {}),
-        "fixtures_total": len(fixtures),
-
+        "window": th_meta.get("window", {}),
+        "fixtures_total": th_meta.get("fixtures_total", len(fixtures)),
         "core": {
             "bankroll": BANKROLL_CORE,
             "exposure_cap_pct": CORE_EXPOSURE_CAP,
-            "exposure_scale_applied": scale,
             "rules": {
                 "odds_range": [CORE_MIN_ODDS, CORE_MAX_ODDS],
                 "allowed_markets": sorted(list(CORE_ALLOWED_MARKETS)),
                 "min_value_bands": {
-                    "1.50-1.65": CORE_MIN_VALUE_LOW,
-                    "1.65-2.00": CORE_MIN_VALUE_MID,
-                    "2.00-2.20": CORE_MIN_VALUE_HIGH,
+                    "1.50-1.65": CORE_MIN_VALUE_BANDS[(1.50, 1.65)],
+                    "1.65-2.00": CORE_MIN_VALUE_BANDS[(1.65, 2.00)],
+                    "2.00-2.20": CORE_MIN_VALUE_BANDS[(2.00, 2.20)],
                 },
                 "stake_bands": {
-                    "1.50-1.65": CORE_STAKE_LOW_ODDS,
-                    "1.65-2.00": CORE_STAKE_MID_ODDS,
-                    "2.00-2.20": CORE_STAKE_HIGH_ODDS,
+                    "1.50-1.65": CORE_STAKE_BANDS[(1.50, 1.65)],
+                    "1.65-2.00": CORE_STAKE_BANDS[(1.65, 2.00)],
+                    "2.00-2.20": CORE_STAKE_BANDS[(2.00, 2.20)],
                 },
                 "double_leg_max_odds": CORE_DOUBLE_MAX_LEG_ODDS,
                 "double_target_combo_odds": [CORE_DOUBLE_TARGET_MIN, CORE_DOUBLE_TARGET_MAX],
                 "odds_match_min_score": ODDS_MATCH_MIN_SCORE,
             },
-            "singles": core_singles,
+            "singles": [
+                {
+                    "pick_id": f'{x["fixture_id"]}:{x["market_code"]}',
+                    "fixture_id": x["fixture_id"],
+                    "market_code": x["market_code"],
+                    "match": x["match"],
+                    "league": x["league"],
+                    "market": x["market"],
+                    "prob": x["prob"],
+                    "fair": x["fair"],
+                    "odds": x["odds"],
+                    "value_pct": x["value_pct"],
+                    "stake": x["stake"],
+                    "tag": x.get("tag", "core"),
+                }
+                for x in core_singles
+            ],
             "double": core_double,
-            "doubles": core_doubles,
-            "open": core_open,
-            "after_open": round(BANKROLL_CORE - core_open, 1),
-            "picks_count": len(core_singles) + (1 if core_double else 0) + (len(core_doubles) if core_doubles else 0),
+            "doubles": [core_double] if core_double else [],
+            "open": core_meta["open"],
+            "after_open": core_meta["after_open"],
+            "picks_count": core_meta["picks_count"],
         },
-
-        "funbet": {
-            "bankroll": BANKROLL_FUN,
-            "exposure_cap_pct": FUN_EXPOSURE_CAP,
-            "exposure_scale_applied": fun.get("exposure_scale_applied", 1.0),
-            "rules": {
-                "odds_min": FUN_MIN_ODDS,
-                "odds_max": FUN_MAX_ODDS,
-                "min_value_pct": FUN_MIN_VALUE_PCT,
-                "max_picks": FUN_MAX_PICKS,
-                "allowed_markets": sorted(list(FUN_ALLOWED_MARKETS)),
-                "single_stake_bands": {
-                    "2.00-2.30": FUN_STAKE_LOW,
-                    "2.30-2.60": FUN_STAKE_MID,
-                    "2.60-3.00": FUN_STAKE_HIGH,
-                },
-                "system_unit_eur_range": [1, 3],
-                "avoid_core_overlap": FUN_AVOID_CORE_OVERLAP,
-                "odds_match_min_score": ODDS_MATCH_MIN_SCORE,
-            },
-            "system": fun.get("system"),
-            "columns": fun.get("columns", 0),
-            "unit": fun.get("unit", 0.0),
-            "total_stake": fun.get("total_stake", 0.0),
-            "picks": fun.get("picks", []),
-            "singles": fun.get("singles", []),
-            "open": fun_open,
-            "after_open": round(BANKROLL_FUN - fun_open, 1),
-            "picks_count": len(fun.get("picks", [])),
-            "singles_count": len(fun.get("singles", []) or []),
-            "avg_value": fun.get("avg_value"),
-            "avg_odds": fun.get("avg_odds"),
-        },
+        "funbet": fun_payload,
     }
 
     os.makedirs("logs", exist_ok=True)
     with open(FRIDAY_REPORT_PATH, "w", encoding="utf-8") as f:
-        json.dump(output, f, ensure_ascii=False, indent=2)
-
-    log(f"✅ Friday Shortlist v3 saved → {FRIDAY_REPORT_PATH}")
+        json.dump(report, f, indent=2, ensure_ascii=False)
 
 if __name__ == "__main__":
     main()
