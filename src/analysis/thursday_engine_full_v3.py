@@ -1,3 +1,4 @@
+# src/analysis/thursday_engine_full_v3.py
 import os
 import json
 import math
@@ -8,17 +9,10 @@ import re
 from dateutil import parser
 
 # ============================================================
-#  BOMBAY THURSDAY ENGINE v3 (STABILIZED)
-#  - Fetch fixtures (API-FOOTBALL) within WINDOW_HOURS
-#  - Base model: multiplicative Poisson + shrinkage + Dixon-Coles
-#  - Odds: TheOddsAPI (1 call per league) + robust matching
-#  - STABILIZATION LAYER:
-#      * Hard probability caps
-#      * Favorite protection (market-driven floor)
-#      * Fair odds deviation guard (snap-to-market within 1.35x)
-#      * Over/Under "meat" blockers based on lambdas + low-tempo caps
-#      * Draw normalization based on lambda gap + league draw baseline
-#  - Output: logs/thursday_report_v3.json
+#  BOMBAY THURSDAY ENGINE v3 (STABILIZED) — FIXED
+#  KEY FIXES:
+#   1) VALUE% computed from MODEL probabilities (post-stabilization, PRE market-snap)
+#   2) Market-snap probabilities are saved separately as snap_* fields (display-only)
 # ============================================================
 
 API_FOOTBALL_KEY = os.getenv("FOOTBALL_API_KEY")
@@ -101,8 +95,10 @@ LEAGUE_TO_SPORT = {
 
 TEAM_STATS_CACHE = {}
 
+
 def log(msg: str):
     print(msg, flush=True)
+
 
 def safe_float(v, default=None):
     try:
@@ -112,15 +108,19 @@ def safe_float(v, default=None):
     except Exception:
         return default
 
+
 def implied(p: float):
     return 1.0 / p if p and p > 0 else None
+
 
 def _clamp(x, lo, hi):
     return max(lo, min(hi, x))
 
+
 def iso_z(dt: datetime.datetime) -> str:
     dt = dt.astimezone(datetime.timezone.utc).replace(microsecond=0)
     return dt.isoformat().replace("+00:00", "Z")
+
 
 # ------------------------- NAME NORMALIZATION -------------------------
 def _strip_accents(s: str) -> str:
@@ -128,6 +128,7 @@ def _strip_accents(s: str) -> str:
         return ""
     s = unicodedata.normalize("NFKD", s)
     return "".join(ch for ch in s if not unicodedata.combining(ch))
+
 
 def normalize_team_name(raw: str) -> str:
     if not raw:
@@ -158,8 +159,10 @@ def normalize_team_name(raw: str) -> str:
     }
     return aliases.get(s, s)
 
+
 def token_set(s: str):
     return set([t for t in s.split() if t])
+
 
 def jaccard(a: set, b: set) -> float:
     if not a or not b:
@@ -167,6 +170,7 @@ def jaccard(a: set, b: set) -> float:
     inter = len(a & b)
     uni = len(a | b)
     return inter / uni if uni else 0.0
+
 
 # ------------------------- FIXTURES (API-FOOTBALL) -------------------------
 def fetch_fixtures(league_id: int, league_name: str):
@@ -220,6 +224,7 @@ def fetch_fixtures(league_id: int, league_name: str):
 
     log(f"→ {league_name}: {len(out)} fixtures within window")
     return out
+
 
 # ------------------------- TEAM RECENT GOALS (API-FOOTBALL) -------------------------
 def fetch_team_recent_stats(team_id: int, league_id: int, want_home_context: bool = None):
@@ -280,6 +285,7 @@ def fetch_team_recent_stats(team_id: int, league_id: int, want_home_context: boo
     TEAM_STATS_CACHE[ck] = stats
     return stats
 
+
 # ------------------------- LEAGUE BASELINES -------------------------
 def fetch_league_baselines_static(league_id: int):
     overrides = {
@@ -297,6 +303,7 @@ def fetch_league_baselines_static(league_id: int):
     if league_id in overrides:
         base.update(overrides[league_id])
     return base
+
 
 def fetch_league_baselines_dynamic(league_id: int):
     if not API_FOOTBALL_KEY:
@@ -349,14 +356,17 @@ def fetch_league_baselines_dynamic(league_id: int):
         "avg_over25_rate": float(round(overs / total, 3)),
     }
 
+
 def fetch_league_baselines(league_id: int):
     return fetch_league_baselines_dynamic(league_id) if USE_DYNAMIC_LEAGUE_BASELINES else fetch_league_baselines_static(league_id)
+
 
 # ------------------------- POISSON HELPERS -------------------------
 def poisson_pmf(k: int, lam: float) -> float:
     if lam <= 0:
         return 0.0
     return math.exp(-lam) * (lam ** k) / math.factorial(k)
+
 
 # ------------------------- MULTIPLICATIVE LAMBDAS + SHRINKAGE -------------------------
 def compute_expected_goals(home_stats: dict, away_stats: dict, league_baseline: dict):
@@ -398,6 +408,7 @@ def compute_expected_goals(home_stats: dict, away_stats: dict, league_baseline: 
     lam_h = _clamp(lam_h, LAMBDA_MIN, LAMBDA_MAX_HOME)
     lam_a = _clamp(lam_a, LAMBDA_MIN, LAMBDA_MAX_AWAY)
     return lam_h, lam_a
+
 
 # ------------------------- DC-ADJUSTED PROBS -------------------------
 def compute_probabilities(lambda_home: float, lambda_away: float):
@@ -454,6 +465,7 @@ def compute_probabilities(lambda_home: float, lambda_away: float):
 
     return {"home_prob": ph, "draw_prob": pd, "away_prob": pa, "over_2_5_prob": po, "under_2_5_prob": pu}
 
+
 # ------------------------- ODDS (TheOddsAPI) -------------------------
 def _odds_request(sport_key: str, params: dict):
     url = f"{ODDS_BASE_URL}/{sport_key}/odds"
@@ -468,6 +480,7 @@ def _odds_request(sport_key: str, params: dict):
     except Exception as e:
         log(f"   TheOddsAPI request error: {e}")
         return []
+
 
 def fetch_odds_for_league(league_name: str, window_from: datetime.datetime, window_to: datetime.datetime):
     if not USE_ODDS_API:
@@ -496,6 +509,7 @@ def fetch_odds_for_league(league_name: str, window_from: datetime.datetime, wind
         return data
     return _odds_request(sport_key, base_params)
 
+
 def build_events_cache(odds_events):
     out = []
     for ev in odds_events or []:
@@ -518,6 +532,7 @@ def build_events_cache(odds_events):
             "raw": ev,
         })
     return out
+
 
 def _best_odds_from_event(ev_raw, event_home_norm, event_away_norm, swapped: bool):
     best_home = best_draw = best_away = None
@@ -562,6 +577,7 @@ def _best_odds_from_event(ev_raw, event_home_norm, event_away_norm, swapped: boo
                         best_under = max(best_under or 0.0, price)
 
     return {"home": best_home, "draw": best_draw, "away": best_away, "over": best_over, "under": best_under}
+
 
 def pick_best_odds_for_fixture(fx, league_events_cache):
     if not league_events_cache:
@@ -617,6 +633,7 @@ def pick_best_odds_for_fixture(fx, league_events_cache):
     debug = {"matched": True, "score": round(best_score, 3), "swap": best_swap, "time_diff_h": None if best_diff is None else round(best_diff, 2)}
     return odds, debug
 
+
 # ------------------------- VALUE% -------------------------
 def value_pct(offered, fair):
     if offered is None or fair is None:
@@ -627,6 +644,7 @@ def value_pct(offered, fair):
         return round((offered / fair - 1.0) * 100.0, 1)
     except Exception:
         return None
+
 
 # ------------------------- STABILIZATION -------------------------
 def _renorm_1x2(ph, pd, pa):
@@ -639,6 +657,7 @@ def _renorm_1x2(ph, pd, pa):
         return 0.40, 0.26, 0.34
     ph, pd, pa = ph / s, pd / s, pa / s
     return ph, pd, pa
+
 
 def _apply_favorite_protection(ph, pd, pa, off1, off2):
     if off1 is not None:
@@ -659,6 +678,7 @@ def _apply_favorite_protection(ph, pd, pa, off1, off2):
 
     return _renorm_1x2(ph, pd, pa)
 
+
 def _snap_prob_to_market(prob, offered):
     if prob is None or offered is None or offered <= 1.0:
         return prob
@@ -674,6 +694,7 @@ def _snap_prob_to_market(prob, offered):
         fair = hi
         return 1.0 / fair
     return prob
+
 
 def stabilize_probs(
     league_name: str,
@@ -691,14 +712,17 @@ def stabilize_probs(
     offo,
     offu,
 ):
+    # outcome caps
     ph = _clamp(ph, CAP_OUTCOME_MIN, 1.0)
     pa = _clamp(pa, CAP_OUTCOME_MIN, 1.0)
     pd = _clamp(pd, CAP_DRAW_MIN, CAP_DRAW_MAX)
 
+    # draw normalization by lambda gap
     gap = abs((lam_h or 0) - (lam_a or 0))
     if gap > DRAW_LAMBDA_GAP_MAX:
         pd = min(pd, DRAW_IF_GAP_CAP)
 
+    # draw baseline by league
     league_draw = safe_float((league_baseline or {}).get("avg_draw_rate"), None)
     if league_draw is not None:
         pd = min(pd, league_draw + DRAW_LEAGUE_PLUS, CAP_DRAW_MAX)
@@ -706,13 +730,10 @@ def stabilize_probs(
 
     ph, pd, pa = _renorm_1x2(ph, pd, pa)
 
+    # favorite protection
     ph, pd, pa = _apply_favorite_protection(ph, pd, pa, off1, off2)
 
-    ph2 = _snap_prob_to_market(ph, off1)
-    pd2 = _snap_prob_to_market(pd, offx)
-    pa2 = _snap_prob_to_market(pa, off2)
-    ph, pd, pa = _renorm_1x2(ph2, pd2, pa2)
-
+    # Over/Under blockers from lambdas + low tempo caps
     ltot = (lam_h or 0) + (lam_a or 0)
 
     if ltot < OVER_BLOCK_LTOTAL or (lam_h or 0) < OVER_BLOCK_LMIN or (lam_a or 0) < OVER_BLOCK_LMIN:
@@ -724,18 +745,7 @@ def stabilize_probs(
     if ltot > UNDER_BLOCK_LTOTAL or ((lam_h or 0) > UNDER_BLOCK_BOTH_GT and (lam_a or 0) > UNDER_BLOCK_BOTH_GT):
         pu = min(pu, 0.70)
 
-    po = _clamp(po, CAP_OUTCOME_MIN, CAP_OVER)
-    pu = _clamp(pu, CAP_OUTCOME_MIN, CAP_UNDER)
-
-    s2 = po + pu
-    if s2 > 0:
-        po, pu = po / s2, pu / s2
-
-    po2 = _snap_prob_to_market(po, offo)
-    pu2 = _snap_prob_to_market(pu, offu)
-    if po2 is not None and pu2 is not None and (po2 + pu2) > 0:
-        po, pu = po2 / (po2 + pu2), pu2 / (po2 + pu2)
-
+    # clamp & renorm O/U
     po = _clamp(po, CAP_OUTCOME_MIN, CAP_OVER)
     pu = _clamp(pu, CAP_OUTCOME_MIN, CAP_UNDER)
     s2 = po + pu
@@ -743,6 +753,28 @@ def stabilize_probs(
         po, pu = po / s2, pu / s2
 
     return ph, pd, pa, po, pu
+
+
+# ------------------------- MARKET SNAP (DISPLAY ONLY) -------------------------
+def market_snap_probs(ph, pd, pa, po, pu, off1, offx, off2, offo, offu):
+    ph2 = _snap_prob_to_market(ph, off1)
+    pd2 = _snap_prob_to_market(pd, offx)
+    pa2 = _snap_prob_to_market(pa, off2)
+    ph2, pd2, pa2 = _renorm_1x2(ph2, pd2, pa2)
+
+    po2 = _snap_prob_to_market(po, offo)
+    pu2 = _snap_prob_to_market(pu, offu)
+    if po2 is not None and pu2 is not None and (po2 + pu2) > 0:
+        po2, pu2 = po2 / (po2 + pu2), pu2 / (po2 + pu2)
+
+    po2 = _clamp(po2, CAP_OUTCOME_MIN, CAP_OVER)
+    pu2 = _clamp(pu2, CAP_OUTCOME_MIN, CAP_UNDER)
+    s2 = po2 + pu2
+    if s2 > 0:
+        po2, pu2 = po2 / s2, pu2 / s2
+
+    return ph2, pd2, pa2, po2, pu2
+
 
 # ------------------------- MAIN PIPELINE -------------------------
 def build_fixture_blocks():
@@ -801,7 +833,8 @@ def build_fixture_blocks():
         off_o = offered.get("over")
         off_u = offered.get("under")
 
-        ph, pd, pa, po, pu = stabilize_probs(
+        # 1) MODEL probs (stabilized, NO market snap) => used for FAIR + VALUE
+        m_ph, m_pd, m_pa, m_po, m_pu = stabilize_probs(
             league_name=league_name,
             league_baseline=league_baseline,
             lam_h=lam_h,
@@ -818,11 +851,23 @@ def build_fixture_blocks():
             offu=off_u,
         )
 
-        fair_1 = implied(ph)
-        fair_x = implied(pd)
-        fair_2 = implied(pa)
-        fair_over = implied(po)
-        fair_under = implied(pu)
+        # 2) SNAP probs (display-only)
+        s_ph, s_pd, s_pa, s_po, s_pu = market_snap_probs(
+            m_ph, m_pd, m_pa, m_po, m_pu, off_1, off_x, off_2, off_o, off_u
+        )
+
+        # FAIR + VALUE from MODEL probs
+        fair_1 = implied(m_ph)
+        fair_x = implied(m_pd)
+        fair_2 = implied(m_pa)
+        fair_over = implied(m_po)
+        fair_under = implied(m_pu)
+
+        v1 = value_pct(off_1, fair_1)
+        vx = value_pct(off_x, fair_x)
+        v2 = value_pct(off_2, fair_2)
+        vo = value_pct(off_o, fair_over)
+        vu = value_pct(off_u, fair_under)
 
         dt = fx["commence_utc"]
 
@@ -840,11 +885,19 @@ def build_fixture_blocks():
                 "lambda_home": round(lam_h, 3),
                 "lambda_away": round(lam_a, 3),
 
-                "home_prob": round(ph, 3),
-                "draw_prob": round(pd, 3),
-                "away_prob": round(pa, 3),
-                "over_2_5_prob": round(po, 3),
-                "under_2_5_prob": round(pu, 3),
+                # MODEL probabilities (used for value)
+                "home_prob": round(m_ph, 3),
+                "draw_prob": round(m_pd, 3),
+                "away_prob": round(m_pa, 3),
+                "over_2_5_prob": round(m_po, 3),
+                "under_2_5_prob": round(m_pu, 3),
+
+                # SNAP probabilities (display only)
+                "snap_home_prob": round(s_ph, 3),
+                "snap_draw_prob": round(s_pd, 3),
+                "snap_away_prob": round(s_pa, 3),
+                "snap_over_2_5_prob": round(s_po, 3),
+                "snap_under_2_5_prob": round(s_pu, 3),
 
                 "fair_1": fair_1,
                 "fair_x": fair_x,
@@ -858,11 +911,12 @@ def build_fixture_blocks():
                 "offered_over_2_5": off_o,
                 "offered_under_2_5": off_u,
 
-                "value_pct_1": value_pct(off_1, fair_1),
-                "value_pct_x": value_pct(off_x, fair_x),
-                "value_pct_2": value_pct(off_2, fair_2),
-                "value_pct_over": value_pct(off_o, fair_over),
-                "value_pct_under": value_pct(off_u, fair_under),
+                # VALUE% computed from MODEL fair (correct)
+                "value_pct_1": v1,
+                "value_pct_x": vx,
+                "value_pct_2": v2,
+                "value_pct_over": vo,
+                "value_pct_under": vu,
 
                 "odds_match": match_debug,
                 "league_baseline": league_baseline,
@@ -871,6 +925,7 @@ def build_fixture_blocks():
 
     log(f"Thursday fixtures_out: {len(fixtures_out)} | odds matched: {matched_cnt}")
     return fixtures_out
+
 
 def main():
     fixtures = build_fixture_blocks()
@@ -889,6 +944,7 @@ def main():
         json.dump(out, f, ensure_ascii=False, indent=2)
 
     log(f"✅ Thursday v3 STABILIZED READY. Fixtures: {len(fixtures)}")
+
 
 if __name__ == "__main__":
     main()
