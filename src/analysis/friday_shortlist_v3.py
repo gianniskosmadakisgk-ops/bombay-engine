@@ -442,7 +442,7 @@ def choose_fun(rows, core_pick_ids=None):
         if p["value_pct"] >= 10.0 or p["prob"] >= 0.45:
             singles.append({
                 "pick_id": p["pick_id"],
-                "fixture_id": p["fixture_id"],
+                "fixture_id": p["fixture_id"),
                 "market_code": p["market_code"],
                 "match": p["match"],
                 "league": p["league"],
