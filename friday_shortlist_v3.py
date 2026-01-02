@@ -3,40 +3,23 @@ import json
 from datetime import datetime
 import itertools
 
-# ======================================================
-#  FRIDAY SHORTLIST v3 — Tuesday Edition
-#
-#  - Διαβάζει Tuesday report (με offered odds ήδη μέσα)
-#  - ΔΕΝ τραβάει odds από TheOddsAPI
-#  - Παράγει:
-#       * Draw singles  (10 max)
-#       * Over singles  (10 max)
-#       * FanBet Draw system  (3-4-5 ή 4-5-6)
-#       * FanBet Over system  (2-from-X)
-#       * Kelly value picks
-#       * Bankroll summary
-# ======================================================
-
 TUESDAY_REPORT_PATH = "logs/tuesday_report_v3.json"
 FRIDAY_REPORT_PATH = "logs/friday_shortlist_v3.json"
 
 os.makedirs("logs", exist_ok=True)
 
-# ---------------------- BANKROLLS ----------------------
 DRAW_WALLET = 300
 OVER_WALLET = 300
 FANBET_DRAW_WALLET = 100
 FANBET_OVER_WALLET = 100
 KELLY_WALLET = 300.0
 
-# ---------------------- LIMITS -------------------------
 MAX_DRAW_PICKS = 10
 MAX_OVER_PICKS = 10
 
 FUNBET_DRAW_STAKE_PER_COL = 2.0
 FUNBET_OVER_STAKE_PER_COL = 4.0
 
-# ---------------------- THRESHOLDS ---------------------
 DRAW_MIN_SCORE = 7.5
 DRAW_MIN_ODDS = 2.70
 
@@ -81,8 +64,45 @@ def generate_picks(fixtures):
     over_singles = []
     kelly_candidates = []
 
+    def add_kelly(match_label, league, label, fair, offered):
+        if fair is None or offered is None:
+            return
+        try:
+            fair = float(fair)
+            offered = float(offered)
+        except (TypeError, ValueError):
+            return
+
+        if fair <= 0 or offered <= 1:
+            return
+
+        p = 1.0 / fair
+        if p < KELLY_MIN_PROB:
+            return
+
+        edge = (offered - fair) / fair
+        if edge < KELLY_VALUE_THRESHOLD:
+            return
+
+        b = offered - 1
+        q = 1 - p
+        fk = (b * p - q) / b
+        if fk <= 0:
+            return
+
+        stake_raw = fk * KELLY_FRACTION * KELLY_WALLET
+        if stake_raw > 0:
+            kelly_candidates.append({
+                "match": match_label,
+                "league": league,
+                "market": label,
+                "fair": round(fair, 2),
+                "offered": round(offered, 2),
+                "edge": f"{edge:+.0%}",
+                "stake_raw": stake_raw,
+            })
+
     for f in fixtures:
-        # Skip if odds matching failed (no offered odds)
         odds_match = f.get("odds_match") or {}
         if not odds_match.get("matched"):
             continue
@@ -98,11 +118,10 @@ def generate_picks(fixtures):
         offered_2 = f.get("offered_2")
         offered_over = f.get("offered_over_2_5")
 
-        # Scores (ίδιο concept με πριν)
-        score_draw = float(f.get("draw_prob", 0)) * 10
-        score_over = float(f.get("over_2_5_prob", 0)) * 10
+        # ✅ safe on None
+        score_draw = float(f.get("draw_prob") or 0) * 10
+        score_over = float(f.get("over_2_5_prob") or 0) * 10
 
-        # ---------------- DRAW singles ----------------
         if fair_x and offered_x and score_draw >= DRAW_MIN_SCORE:
             if float(offered_x) >= DRAW_MIN_ODDS:
                 stake = flat_stake(score_draw)
@@ -118,75 +137,39 @@ def generate_picks(fixtures):
                         "stake": stake,
                     })
 
-        # ---------------- OVER singles ----------------
         if fair_over and offered_over and score_over >= OVER_MIN_SCORE:
-            offered_over = float(offered_over)
-            fair_over = float(fair_over)
+            offered_over_f = float(offered_over)
+            fair_over_f = float(fair_over)
 
-            value_ok = offered_over >= fair_over
+            value_ok = offered_over_f >= fair_over_f
             monster = (
                 score_over >= OVER_AUTO_SCORE
-                and offered_over >= OVER_MIN_FAIR
-                and (offered_over - fair_over) / fair_over >= OVER_NEG_EDGE_LIMIT
+                and offered_over_f >= OVER_MIN_FAIR
+                and (offered_over_f - fair_over_f) / fair_over_f >= OVER_NEG_EDGE_LIMIT
             )
 
-            if offered_over >= OVER_MIN_FAIR and (value_ok or monster):
+            if offered_over_f >= OVER_MIN_FAIR and (value_ok or monster):
                 stake = flat_stake(score_over)
                 if stake:
-                    diff = (offered_over - fair_over) / fair_over
+                    diff = (offered_over_f - fair_over_f) / fair_over_f
                     over_singles.append({
                         "match": match_label,
                         "league": league,
-                        "odds": round(offered_over, 2),
-                        "fair": round(fair_over, 2),
+                        "odds": round(offered_over_f, 2),
+                        "fair": round(fair_over_f, 2),
                         "diff": f"{diff:+.0%}",
                         "score": round(score_over, 2),
                         "stake": stake,
                     })
 
-        # ---------------- KELLY candidates ----------------
-        def add_kelly(label, fair, offered):
-            if not fair or not offered:
-                return
-            fair = float(fair)
-            offered = float(offered)
+        add_kelly(match_label, league, "Home", fair_1, offered_1)
+        add_kelly(match_label, league, "Draw", fair_x, offered_x)
+        add_kelly(match_label, league, "Away", fair_2, offered_2)
+        add_kelly(match_label, league, "Over 2.5", fair_over, offered_over)
 
-            p = 1.0 / fair
-            if p < KELLY_MIN_PROB:
-                return
-
-            edge = (offered - fair) / fair
-            if edge < KELLY_VALUE_THRESHOLD:
-                return
-
-            b = offered - 1
-            q = 1 - p
-            fk = (b * p - q) / b
-            if fk <= 0:
-                return
-
-            stake_raw = fk * KELLY_FRACTION * KELLY_WALLET
-            if stake_raw > 0:
-                kelly_candidates.append({
-                    "match": match_label,
-                    "league": league,
-                    "market": label,
-                    "fair": round(fair, 2),
-                    "offered": round(offered, 2),
-                    "edge": f"{edge:+.0%}",
-                    "stake_raw": stake_raw,
-                })
-
-        add_kelly("Home", fair_1, offered_1)
-        add_kelly("Draw", fair_x, offered_x)
-        add_kelly("Away", fair_2, offered_2)
-        add_kelly("Over 2.5", fair_over, offered_over)
-
-    # Top-10
     draw_singles = sorted(draw_singles, key=lambda x: x["score"], reverse=True)[:MAX_DRAW_PICKS]
     over_singles = sorted(over_singles, key=lambda x: x["score"], reverse=True)[:MAX_OVER_PICKS]
 
-    # Kelly exposure limit
     kelly_candidates = sorted(kelly_candidates, key=lambda x: x["stake_raw"], reverse=True)[:10]
     total_raw = sum(k["stake_raw"] for k in kelly_candidates)
     max_exposure = KELLY_WALLET * KELLY_MAX_EXPOSURE_PCT
