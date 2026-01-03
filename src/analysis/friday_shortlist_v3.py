@@ -1,10 +1,12 @@
 # =========================
-# FRIDAY SHORTLIST v3 — FIXED
-# - CORE singles stakes: 15/20/25
-# - CORE exposure cap: 0.30 (so stakes don't get crushed)
-# - CORE doubles: allow up to 1.70 per leg
-# - FUN singles stakes remain boosted (8/7/6) + cap scaling
-# - Outputs report compatible with your previous JSON structure
+# FRIDAY SHORTLIST v3.1 — NEO (OVERS CONTROL + PROPER STAKES)
+# - CORE singles stake bands: 25/20/15  (odds: 1.50-1.65 / 1.65-2.00 / 2.00-2.20)
+# - CORE exposure cap default via env (CORE_EXPOSURE_CAP, default 0.30)
+# - CORE doubles: prefer legs <= 1.55, fallback <= 1.70
+# - FUN singles: bigger stakes + NOT crushed by system (cap split singles/system)
+# - Uses Thursday flags if present:
+#     - selection_value_pct_over
+#     - over_value_penalty_pts
 # =========================
 
 import os
@@ -20,7 +22,6 @@ FRIDAY_REPORT_PATH = "logs/friday_shortlist_v3.json"
 BANKROLL_CORE = float(os.getenv("BANKROLL_CORE", "700"))
 BANKROLL_FUN = float(os.getenv("BANKROLL_FUN", "400"))
 
-# ✅ FIX: core cap raised so 15/20/25 doesn't get scaled down to 10-12
 CORE_EXPOSURE_CAP = float(os.getenv("CORE_EXPOSURE_CAP", "0.30"))
 FUN_EXPOSURE_CAP = float(os.getenv("FUN_EXPOSURE_CAP", "0.20"))
 
@@ -39,15 +40,16 @@ CORE_MIN_VALUE_BANDS = {
     (2.00, 2.20): 2.5,
 }
 
-# ✅ FIX: requested stake bands (final targets)
+# Requested stake categories (bigger on lower odds, smaller on higher odds)
 CORE_STAKE_BANDS = {
     (1.50, 1.65): 25.0,
     (1.65, 2.00): 20.0,
     (2.00, 2.20): 15.0,
 }
 
-# ✅ FIX: allow real doubles
-CORE_DOUBLE_MAX_LEG_ODDS = 1.70
+# Doubles
+CORE_DOUBLE_PREF_MAX_LEG_ODDS = 1.55  # prefer these
+CORE_DOUBLE_MAX_LEG_ODDS = 1.70       # fallback
 CORE_DOUBLE_TARGET_MIN = 1.55
 CORE_DOUBLE_TARGET_MAX = 2.20
 
@@ -61,16 +63,20 @@ FUN_MAX_SINGLES = 7
 FUN_ALLOWED_MARKETS = {"Home", "Draw", "Away", "Over 2.5", "Under 2.5"}
 FUN_AVOID_CORE_OVERLAP = True
 
-# ✅ FIX: boosted fun single stakes (no more peanuts)
+# ✅ Boosted FUN single stakes (still reasonable)
 FUN_SINGLE_STAKE_BANDS = {
-    (2.00, 2.30): 8.0,
-    (2.30, 2.60): 7.0,
-    (2.60, 3.00): 6.0,
+    (2.00, 2.30): 12.0,
+    (2.30, 2.60): 10.0,
+    (2.60, 3.00): 8.0,
 }
 
-# FUN system settings (keep your 3-4-5/8 structure)
+# FUN system settings (3-4-5/8)
 FUN_SYSTEM = "3-4-5/8"
-FUN_BASE_UNIT = float(os.getenv("FUN_SYSTEM_UNIT", "0.31"))  # was ~0.31 in your report
+FUN_BASE_UNIT = float(os.getenv("FUN_SYSTEM_UNIT", "0.31"))
+
+# ✅ Split the FUN cap so singles don't get nuked by system columns
+FUN_CAP_SPLIT_SINGLES = float(os.getenv("FUN_CAP_SPLIT_SINGLES", "0.45"))  # 45% singles, 55% system
+FUN_CAP_SPLIT_SINGLES = max(0.10, min(0.80, FUN_CAP_SPLIT_SINGLES))
 
 MARKET_CODE = {
     "Home": "1",
@@ -104,29 +110,62 @@ def odds_match_ok(fx):
     score = safe_float(om.get("score"), 0.0)
     return score >= ODDS_MATCH_MIN_SCORE
 
+def _get_over_value_and_penalty(fx):
+    """
+    Thursday may write:
+      - selection_value_pct_over (preferred)
+      - over_value_penalty_pts
+    Fallback: fx['value_pct_over']
+    """
+    v_raw = fx.get("selection_value_pct_over")
+    if v_raw is None:
+        v_raw = fx.get("value_pct_over")
+    v_raw = safe_float(v_raw, None)
+
+    pen = fx.get("over_value_penalty_pts")
+    pen = safe_float(pen, 0.0) or 0.0
+
+    if v_raw is None:
+        return None, 0.0, None
+
+    v_adj = v_raw - pen
+    return v_raw, pen, v_adj
+
 def build_rows(fixtures):
     rows = []
     for fx in fixtures:
-        # skip if odds matching is weak (keeps garbage out)
         if not odds_match_ok(fx):
             continue
+
+        # pull over adjusted metrics (if available)
+        over_v_raw, over_pen_pts, over_v_adj = _get_over_value_and_penalty(fx)
 
         markets = [
             ("Home", "home_prob", "fair_1", "offered_1", "value_pct_1"),
             ("Draw", "draw_prob", "fair_x", "offered_x", "value_pct_x"),
             ("Away", "away_prob", "fair_2", "offered_2", "value_pct_2"),
+            # Over uses adjusted if present
             ("Over 2.5", "over_2_5_prob", "fair_over_2_5", "offered_over_2_5", "value_pct_over"),
             ("Under 2.5", "under_2_5_prob", "fair_under_2_5", "offered_under_2_5", "value_pct_under"),
         ]
 
         for market, pkey, fkey, okey, vkey in markets:
-            val = fx.get(vkey)
-            if val is None:
-                continue
-
             odds = safe_float(fx.get(okey))
             if not odds or odds <= 1:
                 continue
+
+            if market == "Over 2.5":
+                if over_v_raw is None:
+                    continue
+                val_raw = over_v_raw
+                val_adj = over_v_adj if over_v_adj is not None else val_raw
+                pen_pts = over_pen_pts
+            else:
+                val_raw = safe_float(fx.get(vkey), None)
+                if val_raw is None:
+                    continue
+                val_adj = val_raw
+                pen_pts = 0.0
 
             rows.append({
                 "fixture_id": fx.get("fixture_id"),
@@ -139,7 +178,9 @@ def build_rows(fixtures):
                 "prob": safe_float(fx.get(pkey), 0.0),
                 "fair": safe_float(fx.get(fkey)),
                 "odds": odds,
-                "value_pct": safe_float(val, 0.0),
+                "value_pct": val_raw,
+                "value_adj": val_adj,
+                "penalty_pts": pen_pts,
             })
     return rows
 
@@ -156,7 +197,6 @@ def scale_stakes(items, cap_amount, stake_key="stake"):
     return items, s, total
 
 def pick_core(rows):
-    # filter core candidates
     core_candidates = []
     for r in rows:
         if r["market"] not in CORE_ALLOWED_MARKETS:
@@ -164,8 +204,9 @@ def pick_core(rows):
         if r["odds"] < CORE_MIN_ODDS or r["odds"] > CORE_MAX_ODDS:
             continue
 
+        # thresholds based on adjusted value (important for Overs)
         min_val = band_lookup(r["odds"], CORE_MIN_VALUE_BANDS, default=9999)
-        if r["value_pct"] < min_val:
+        if r["value_adj"] < min_val:
             continue
 
         stake = band_lookup(r["odds"], CORE_STAKE_BANDS, default=0.0)
@@ -174,10 +215,9 @@ def pick_core(rows):
 
         core_candidates.append({**r, "stake": float(stake), "tag": "core"})
 
-    # sort by value_pct desc, then prob desc
-    core_candidates.sort(key=lambda x: (x["value_pct"], x["prob"]), reverse=True)
+    # sort by adjusted value, then prob
+    core_candidates.sort(key=lambda x: (x["value_adj"], x["prob"]), reverse=True)
 
-    # keep unique matches
     core_singles = []
     used_matches = set()
     for r in core_candidates:
@@ -188,30 +228,34 @@ def pick_core(rows):
         if len(core_singles) >= CORE_MAX_SINGLES:
             break
 
-    # scale to exposure cap
     cap_amount = BANKROLL_CORE * CORE_EXPOSURE_CAP
     core_singles, core_scale, core_base_total = scale_stakes(core_singles, cap_amount, "stake")
 
-    # build a core double (best value pair) from eligible legs
-    eligible_for_double = [x for x in core_singles if x["odds"] <= CORE_DOUBLE_MAX_LEG_ODDS]
-    best_double = None
-    best_score = -1e9
+    # ---- Doubles: prefer <= 1.55 legs, else <= 1.70 ----
+    def best_double_from_pool(pool):
+        best = None
+        best_score = -1e9
+        for a, b in combinations(pool, 2):
+            combo_odds = a["odds"] * b["odds"]
+            if not (CORE_DOUBLE_TARGET_MIN <= combo_odds <= CORE_DOUBLE_TARGET_MAX):
+                continue
+            score = (a["value_adj"] + b["value_adj"]) + (a["prob"] + b["prob"]) * 10
+            if score > best_score:
+                best_score = score
+                best = {
+                    "legs": [
+                        {"pick_id": f'{a["fixture_id"]}:{a["market_code"]}', "match": a["match"], "market": a["market"], "odds": a["odds"]},
+                        {"pick_id": f'{b["fixture_id"]}:{b["market_code"]}', "match": b["match"], "market": b["market"], "odds": b["odds"]},
+                    ],
+                    "combo_odds": round(combo_odds, 2),
+                    "tag": "core_double",
+                }
+        return best
 
-    for a, b in combinations(eligible_for_double, 2):
-        combo_odds = a["odds"] * b["odds"]
-        if not (CORE_DOUBLE_TARGET_MIN <= combo_odds <= CORE_DOUBLE_TARGET_MAX):
-            continue
-        score = (a["value_pct"] + b["value_pct"]) + (a["prob"] + b["prob"]) * 10
-        if score > best_score:
-            best_score = score
-            best_double = {
-                "legs": [
-                    {"pick_id": f'{a["fixture_id"]}:{a["market_code"]}', "match": a["match"], "market": a["market"], "odds": a["odds"]},
-                    {"pick_id": f'{b["fixture_id"]}:{b["market_code"]}', "match": b["match"], "market": b["market"], "odds": b["odds"]},
-                ],
-                "combo_odds": round(combo_odds, 2),
-                "tag": "core_double",
-            }
+    eligible_pref = [x for x in core_singles if x["odds"] <= CORE_DOUBLE_PREF_MAX_LEG_ODDS]
+    eligible_fallback = [x for x in core_singles if x["odds"] <= CORE_DOUBLE_MAX_LEG_ODDS]
+
+    best_double = best_double_from_pool(eligible_pref) or best_double_from_pool(eligible_fallback)
 
     open_amount = round(sum(x["stake"] for x in core_singles), 1)
     return core_singles, best_double, {
@@ -232,14 +276,14 @@ def pick_fun(rows, core_singles):
             continue
         if r["odds"] < FUN_MIN_ODDS or r["odds"] > FUN_MAX_ODDS:
             continue
-        if r["value_pct"] < FUN_MIN_VALUE_PCT:
+        if r["value_adj"] < FUN_MIN_VALUE_PCT:
             continue
         if FUN_AVOID_CORE_OVERLAP and r["fixture_id"] in core_fixture_ids:
             continue
 
         fun_candidates.append(r)
 
-    fun_candidates.sort(key=lambda x: (x["value_pct"], x["prob"]), reverse=True)
+    fun_candidates.sort(key=lambda x: (x["value_adj"], x["prob"]), reverse=True)
 
     fun_picks = []
     used_matches = set()
@@ -251,7 +295,7 @@ def pick_fun(rows, core_singles):
         if len(fun_picks) >= FUN_MAX_PICKS:
             break
 
-    # fun singles (max 7)
+    # fun singles candidates (max 7)
     fun_singles = []
     for r in fun_picks[:FUN_MAX_SINGLES]:
         stake = band_lookup(r["odds"], FUN_SINGLE_STAKE_BANDS, default=0.0)
@@ -274,29 +318,38 @@ def pick_fun(rows, core_singles):
     if n >= 5:
         cols = comb(n, 3) + comb(n, 4) + comb(n, 5)
 
+    cap_amount = BANKROLL_FUN * FUN_EXPOSURE_CAP
+    cap_singles = cap_amount * FUN_CAP_SPLIT_SINGLES
+    cap_system = cap_amount * (1.0 - FUN_CAP_SPLIT_SINGLES)
+
+    # ---- Scale singles independently (so they don't get crushed by columns) ----
+    singles_total = sum(x["stake"] for x in fun_singles)
+    singles_scale = 1.0
+    if singles_total > 0 and singles_total > cap_singles:
+        singles_scale = cap_singles / singles_total
+        for x in fun_singles:
+            x["stake"] = round(x["stake"] * singles_scale, 1)
+
+    # ---- Scale system independently ----
     base_unit = FUN_BASE_UNIT
     base_system_stake = base_unit * cols
-    base_singles_stake = sum(x["stake"] for x in fun_singles)
-    base_total = base_system_stake + base_singles_stake
+    system_scale = 1.0
+    if base_system_stake > 0 and base_system_stake > cap_system:
+        system_scale = cap_system / base_system_stake
 
-    cap_amount = BANKROLL_FUN * FUN_EXPOSURE_CAP
-    scale = 1.0
-    if base_total > 0 and base_total > cap_amount:
-        scale = cap_amount / base_total
+    unit = round(base_unit * system_scale, 2)
+    system_stake = round(unit * cols, 1)
 
-    unit = round(base_unit * scale, 2)
-    total_stake = round(unit * cols, 1)
-
-    # scale fun singles too
-    for x in fun_singles:
-        x["stake"] = round(x["stake"] * scale, 1)
-
-    open_amount = round(total_stake + sum(x["stake"] for x in fun_singles), 1)
+    open_amount = round(system_stake + sum(x["stake"] for x in fun_singles), 1)
 
     fun_payload = {
         "bankroll": BANKROLL_FUN,
         "exposure_cap_pct": FUN_EXPOSURE_CAP,
-        "exposure_scale_applied": round(scale, 3),
+        "exposure_scale_applied": {
+            "singles_scale": round(singles_scale, 3),
+            "system_scale": round(system_scale, 3),
+            "cap_split_singles": round(FUN_CAP_SPLIT_SINGLES, 2),
+        },
         "rules": {
             "odds_min": FUN_MIN_ODDS,
             "odds_max": FUN_MAX_ODDS,
@@ -308,14 +361,14 @@ def pick_fun(rows, core_singles):
                 "2.30-2.60": FUN_SINGLE_STAKE_BANDS[(2.30, 2.60)],
                 "2.60-3.00": FUN_SINGLE_STAKE_BANDS[(2.60, 3.00)],
             },
-            "system_unit_eur_range": [1, 3],
             "avoid_core_overlap": FUN_AVOID_CORE_OVERLAP,
             "odds_match_min_score": ODDS_MATCH_MIN_SCORE,
+            "fun_cap_split_singles": FUN_CAP_SPLIT_SINGLES,
         },
         "system": FUN_SYSTEM,
         "columns": cols,
         "unit": unit,
-        "total_stake": open_amount,  # overall fun exposure (system + singles)
+        "total_stake": open_amount,
         "picks": [
             {
                 "pick_id": f'{r["fixture_id"]}:{r["market_code"]}',
@@ -328,6 +381,8 @@ def pick_fun(rows, core_singles):
                 "fair": r["fair"],
                 "odds": r["odds"],
                 "value_pct": r["value_pct"],
+                "value_adj": r["value_adj"],
+                "penalty_pts": r.get("penalty_pts", 0.0),
             }
             for r in fun_picks
         ],
@@ -336,7 +391,7 @@ def pick_fun(rows, core_singles):
         "after_open": round(BANKROLL_FUN - open_amount, 1),
         "picks_count": len(fun_picks),
         "singles_count": len(fun_singles),
-        "avg_value": round(sum(x["value_pct"] for x in fun_picks) / len(fun_picks), 2) if fun_picks else 0.0,
+        "avg_value": round(sum(x["value_adj"] for x in fun_picks) / len(fun_picks), 2) if fun_picks else 0.0,
         "avg_odds": round(sum(x["odds"] for x in fun_picks) / len(fun_picks), 2) if fun_picks else 0.0,
     }
     return fun_payload
@@ -368,6 +423,7 @@ def main():
                     "1.65-2.00": CORE_STAKE_BANDS[(1.65, 2.00)],
                     "2.00-2.20": CORE_STAKE_BANDS[(2.00, 2.20)],
                 },
+                "double_leg_pref_max_odds": CORE_DOUBLE_PREF_MAX_LEG_ODDS,
                 "double_leg_max_odds": CORE_DOUBLE_MAX_LEG_ODDS,
                 "double_target_combo_odds": [CORE_DOUBLE_TARGET_MIN, CORE_DOUBLE_TARGET_MAX],
                 "odds_match_min_score": ODDS_MATCH_MIN_SCORE,
@@ -384,6 +440,8 @@ def main():
                     "fair": x["fair"],
                     "odds": x["odds"],
                     "value_pct": x["value_pct"],
+                    "value_adj": x["value_adj"],
+                    "penalty_pts": x.get("penalty_pts", 0.0),
                     "stake": x["stake"],
                     "tag": x.get("tag", "core"),
                 }
