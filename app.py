@@ -191,40 +191,60 @@ def download_tuesday_recap_v2():
     return send_file(full_path, mimetype="application/json", as_attachment=True)
 
 # ------------------------------------------------------
-# GPT ENDPOINTS (public - run + return report)
+# FAST "REPORT ONLY" ENDPOINTS (public - DO NOT run scripts)
+# These are what a Custom GPT should call.
 # ------------------------------------------------------
-@app.route("/thursday-analysis-v3", methods=["GET"])
-def api_thursday_analysis_v3():
-    r = run_script("src/analysis/thursday_engine_full_v3.py")
-    if not r["ok"]:
-        return jsonify({
-            "status": "error",
-            "message": "Thursday engine failed",
-            "run": r,
-            "timestamp": datetime.utcnow().isoformat(),
-            "report": None
-        }), 500
-
-    full_report, error = load_json_report("logs/thursday_report_v3.json")
-    if full_report is None:
+@app.route("/thursday-report-v3", methods=["GET"])
+def api_thursday_report_v3():
+    report, error = load_json_report("logs/thursday_report_v3.json")
+    if report is None:
         return jsonify({
             "status": "error",
             "message": "Thursday report not available",
             "error": error,
-            "run": r,
+            "timestamp": datetime.utcnow().isoformat(),
+        }), 404
+    return jsonify(report)
+
+@app.route("/friday-report-v3", methods=["GET"])
+def api_friday_report_v3():
+    report, error = load_json_report("logs/friday_shortlist_v3.json")
+    if report is None:
+        return jsonify({
+            "status": "error",
+            "message": "Friday shortlist v3 not available",
+            "error": error,
+            "timestamp": datetime.utcnow().isoformat(),
+        }), 404
+    return jsonify(report)
+
+# ------------------------------------------------------
+# GPT ENDPOINTS (public)
+# IMPORTANT FIX:
+# /thursday-analysis-v3 should NOT run the engine, because GPT timeouts.
+# It now simply returns the latest saved report.
+# ------------------------------------------------------
+@app.route("/thursday-analysis-v3", methods=["GET"])
+def api_thursday_analysis_v3():
+    report, error = load_json_report("logs/thursday_report_v3.json")
+    if report is None:
+        return jsonify({
+            "status": "error",
+            "message": "Thursday report not available",
+            "error": error,
             "timestamp": datetime.utcnow().isoformat(),
             "report": None
-        }), 500
+        }), 404
 
     return jsonify({
         "status": "ok",
         "timestamp": datetime.utcnow().isoformat(),
-        "run": r,
-        "report": full_report
+        "report": report
     })
 
 @app.route("/friday-shortlist-v3", methods=["GET"])
 def api_friday_shortlist_v3():
+    # Αφήνω αυτό όπως ήταν (run + return), αλλά αν θες το κάνουμε και αυτό "report-only".
     r = run_script("src/analysis/friday_shortlist_v3.py")
     if not r["ok"]:
         return jsonify({
