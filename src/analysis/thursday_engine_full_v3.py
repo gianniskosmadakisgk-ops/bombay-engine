@@ -12,6 +12,9 @@ from dateutil import parser
 #  KEY FIXES:
 #   1) VALUE% computed from MODEL probabilities (post-stabilization, PRE market-snap)
 #   2) Market-snap probabilities are saved separately as snap_* fields (display-only)
+#  NEW (Selection-Hints Layer):
+#   3) Adds flags + penalty-adjusted "selection_value_pct_over"
+#      WITHOUT altering model probs or fair odds.
 # ============================================================
 
 API_FOOTBALL_KEY = os.getenv("FOOTBALL_API_KEY")
@@ -67,6 +70,20 @@ DRAW_LEAGUE_PLUS = float(os.getenv("DRAW_LEAGUE_PLUS", "0.03"))
 # Baselines
 USE_DYNAMIC_LEAGUE_BASELINES = os.getenv("USE_DYNAMIC_LEAGUE_BASELINES", "false").lower() == "true"
 BASELINES_LAST_N = int(os.getenv("BASELINES_LAST_N", "180"))
+
+# -------------------- SELECTION HINTS (NO MODEL DISTORTION) --------------------
+# Tight-game proxy: if draw prob is high, overs are riskier ("game death")
+TIGHT_DRAW_THRESHOLD = float(os.getenv("TIGHT_DRAW_THRESHOLD", "0.28"))
+
+# Extra tightness proxy: if total lambda is low-ish, overs are fragile even if priced as value
+TIGHT_LTOTAL_THRESHOLD = float(os.getenv("TIGHT_LTOTAL_THRESHOLD", "2.55"))
+
+# Penalty (in VALUE% points) applied ONLY to selection_value_pct_over (not to model fair/value)
+OVER_TIGHT_PENALTY_PTS = float(os.getenv("OVER_TIGHT_PENALTY_PTS", "12.0"))
+
+# Optional extra penalty for low-tempo leagues (points)
+OVER_LOW_TEMPO_EXTRA_PENALTY_PTS = float(os.getenv("OVER_LOW_TEMPO_EXTRA_PENALTY_PTS", "6.0"))
+# ---------------------------------------------------------------------------
 
 LEAGUES = {
     "Premier League": 39,
@@ -868,6 +885,29 @@ def build_fixture_blocks():
         vo = value_pct(off_o, fair_over)
         vu = value_pct(off_u, fair_under)
 
+        # -------------------- SELECTION HINTS (NO MODEL DISTORTION) --------------------
+        ltot = (lam_h or 0.0) + (lam_a or 0.0)
+        tight_game = (m_pd >= TIGHT_DRAW_THRESHOLD) or (ltot <= TIGHT_LTOTAL_THRESHOLD)
+
+        low_tempo = league_name in LOW_TEMPO_LEAGUES
+
+        over_penalty_pts = 0.0
+        if tight_game:
+            over_penalty_pts += OVER_TIGHT_PENALTY_PTS
+        if low_tempo:
+            over_penalty_pts += OVER_LOW_TEMPO_EXTRA_PENALTY_PTS
+
+        selection_vo = None
+        if vo is not None:
+            selection_vo = round(vo - over_penalty_pts, 1)
+
+        flags = {
+            "tight_game": bool(tight_game),
+            "low_tempo_league": bool(low_tempo),
+            "odds_matched": bool(match_debug.get("matched")),
+        }
+        # ---------------------------------------------------------------------------
+
         dt = fx["commence_utc"]
 
         fixtures_out.append(
@@ -884,7 +924,7 @@ def build_fixture_blocks():
                 "lambda_home": round(lam_h, 3),
                 "lambda_away": round(lam_a, 3),
 
-                # MODEL probabilities (used for value)
+                # MODEL probabilities (used for fair/value)
                 "home_prob": round(m_ph, 3),
                 "draw_prob": round(m_pd, 3),
                 "away_prob": round(m_pa, 3),
@@ -916,6 +956,11 @@ def build_fixture_blocks():
                 "value_pct_2": v2,
                 "value_pct_over": vo,
                 "value_pct_under": vu,
+
+                # Selection-only hints (for Friday shortlist / allocation)
+                "selection_value_pct_over": selection_vo,
+                "over_value_penalty_pts": round(over_penalty_pts, 2),
+                "flags": flags,
 
                 "odds_match": match_debug,
                 "league_baseline": league_baseline,
