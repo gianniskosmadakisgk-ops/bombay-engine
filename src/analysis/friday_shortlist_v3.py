@@ -1,13 +1,26 @@
+
 # =========================
-# FRIDAY SHORTLIST v3.4.1 — CORE 800 (3–4 singles + optional double) / FUN 400 (1–3 singles + system)
-# Drop-in replacement for: src/analysis/friday_shortlist_v3.py
+# FRIDAY SHORTLIST v3.5 — Core + Fun (singles + system) with sane odds bands
 #
-# Output: logs/friday_shortlist_v3.json
-# Schema-safe: keeps the same top-level report keys and structures.
+# Goals (per latest rules):
+#  CORE:
+#   - Singles odds: 1.50–1.75 (default)
+#   - If a strong pick is <1.50, it is NOT played single by default; it is used as a DOUBLE leg
+#   - Optional double is created ONLY if at least one leg is <1.50 (default behavior)
+#   - Stakes: 30–50€ per single, double stake configurable
 #
-# Fix v3.4.1:
-# - Over value penalty is NOT double-subtracted when selection_value_pct_over is already adjusted.
-# - CORE_MAX_ODDS default tightened to 1.90 (can override via env).
+#  FUN:
+#   - Picks are ranked by value_adj, then prob
+#   - Singles: top K (default 4) BUT they can ALSO be included in the system pool (overlap allowed)
+#   - System pool: 5–6 picks by default (will shrink if coverage is bad)
+#   - System type chosen by "coverage" (conservative breakeven-style check using odds only)
+#
+# Output:
+#   - Reads logs/thursday_report_v3.json
+#   - Writes logs/friday_shortlist_v3.json
+# Schema-safe:
+#   - Keeps the same top-level keys/structure used by previous v3 outputs.
+#   - Adds optional fields (like "ev") without breaking existing consumers.
 # =========================
 
 import os
@@ -16,87 +29,28 @@ from datetime import datetime
 from itertools import combinations
 from math import comb
 
-THURSDAY_REPORT_PATH = "logs/thursday_report_v3.json"
-FRIDAY_REPORT_PATH = "logs/friday_shortlist_v3.json"
+THURSDAY_REPORT_PATH = os.getenv("THURSDAY_REPORT_PATH", "logs/thursday_report_v3.json")
+FRIDAY_REPORT_PATH   = os.getenv("FRIDAY_REPORT_PATH",   "logs/friday_shortlist_v3.json")
 
-# ------------------------- BANKROLLS (defaults per new framework) -------------------------
+# ------------------------- BANKROLLS -------------------------
 BANKROLL_CORE = float(os.getenv("BANKROLL_CORE", "800"))
-BANKROLL_FUN  = float(os.getenv("BANKROLL_FUN", "400"))
+BANKROLL_FUN  = float(os.getenv("BANKROLL_FUN",  "400"))
 
-# Exposure caps
-CORE_EXPOSURE_CAP = float(os.getenv("CORE_EXPOSURE_CAP", "0.25"))  # ~200€ on 800
-FUN_EXPOSURE_CAP  = float(os.getenv("FUN_EXPOSURE_CAP",  "0.20"))  # ~80€ on 400
+# Exposure caps (target: core open ~110–120 on 800, fun open ~75–80 on 400)
+CORE_EXPOSURE_CAP = float(os.getenv("CORE_EXPOSURE_CAP", "0.15"))
+FUN_EXPOSURE_CAP  = float(os.getenv("FUN_EXPOSURE_CAP",  "0.20"))
 
 # Odds-match thresholds
 ODDS_MATCH_MIN_SCORE_CORE = float(os.getenv("ODDS_MATCH_MIN_SCORE_CORE", "0.75"))
-ODDS_MATCH_MIN_SCORE_FUN  = float(os.getenv("ODDS_MATCH_MIN_SCORE_FUN",  "0.65"))  # fun πιο ανεκτικό
+ODDS_MATCH_MIN_SCORE_FUN  = float(os.getenv("ODDS_MATCH_MIN_SCORE_FUN",  "0.65"))
 
-# Optional confidence gate (Thursday adds flags.confidence)
+# Optional confidence gate (if Thursday sets flags.confidence)
 CORE_MIN_CONFIDENCE = float(os.getenv("CORE_MIN_CONFIDENCE", "0.55"))
 FUN_MIN_CONFIDENCE  = float(os.getenv("FUN_MIN_CONFIDENCE",  "0.45"))
 
-# ------------------------- CORE RULES -------------------------
+# ------------------------- MARKETS -------------------------
 CORE_ALLOWED_MARKETS = {"Home", "Away", "Over 2.5", "Under 2.5"}
-
-CORE_MIN_ODDS = float(os.getenv("CORE_MIN_ODDS", "1.50"))
-CORE_MAX_ODDS = float(os.getenv("CORE_MAX_ODDS", "1.90"))  # tightened default
-
-CORE_TARGET_SINGLES = int(os.getenv("CORE_TARGET_SINGLES", "4"))  # 3–4 by default logic below
-CORE_MIN_SINGLES = int(os.getenv("CORE_MIN_SINGLES", "3"))
-
-# Value thresholds (kept from previous version)
-CORE_MIN_VALUE_BANDS = {
-    (1.50, 1.65): float(os.getenv("CORE_MIN_VALUE_150_165", "4.0")),
-    (1.65, 2.00): float(os.getenv("CORE_MIN_VALUE_165_200", "3.0")),
-    (2.00, 2.20): float(os.getenv("CORE_MIN_VALUE_200_220", "2.5")),
-}
-
-# Stakes per new plan: 40–50€ singles, (slightly odds-weighted)
-CORE_STAKE_LOW  = float(os.getenv("CORE_STAKE_LOW",  "40"))  # higher odds end
-CORE_STAKE_MID  = float(os.getenv("CORE_STAKE_MID",  "45"))
-CORE_STAKE_HIGH = float(os.getenv("CORE_STAKE_HIGH", "50"))  # low odds end
-
-# Core double: optional, low-odds legs
-CORE_DOUBLE_LEG_MAX_ODDS = float(os.getenv("CORE_DOUBLE_LEG_MAX_ODDS", "1.55"))
-CORE_DOUBLE_TARGET_MIN   = float(os.getenv("CORE_DOUBLE_TARGET_MIN",   "1.70"))
-CORE_DOUBLE_TARGET_MAX   = float(os.getenv("CORE_DOUBLE_TARGET_MAX",   "2.20"))
-CORE_DOUBLE_STAKE_MIN    = float(os.getenv("CORE_DOUBLE_STAKE_MIN",    "30"))
-CORE_DOUBLE_STAKE_MAX    = float(os.getenv("CORE_DOUBLE_STAKE_MAX",    "40"))
-
-# ------------------------- FUN RULES -------------------------
-FUN_ALLOWED_MARKETS = {"Home", "Draw", "Away", "Over 2.5", "Under 2.5"}
-
-FUN_MIN_ODDS_DEFAULT = float(os.getenv("FUN_MIN_ODDS_DEFAULT", "1.70"))
-FUN_MAX_ODDS_BY_MARKET = {
-    "Home": float(os.getenv("FUN_MAX_ODDS_HOME", "3.20")),
-    "Away": float(os.getenv("FUN_MAX_ODDS_AWAY", "3.20")),
-    "Over 2.5": float(os.getenv("FUN_MAX_ODDS_O25", "3.20")),
-    "Under 2.5": float(os.getenv("FUN_MAX_ODDS_U25", "3.20")),
-    "Draw": float(os.getenv("FUN_MAX_ODDS_DRAW", "4.60")),
-}
-
-FUN_MIN_VALUE_PCT = float(os.getenv("FUN_MIN_VALUE_PCT", "4.0"))
-FUN_MIN_PROB      = float(os.getenv("FUN_MIN_PROB", "0.22"))  # avoid pure lottery
-
-FUN_MAX_PICKS_TOTAL = int(os.getenv("FUN_MAX_PICKS_TOTAL", "10"))
-
-# Per new framework: 1–3 singles + system from remaining
-FUN_MAX_SINGLES = int(os.getenv("FUN_MAX_SINGLES", "3"))
-FUN_MIN_SINGLES = int(os.getenv("FUN_MIN_SINGLES", "1"))
-
-# Per notes: system usually 3/5 or 4/6 (cap pool by default to 6)
-FUN_SYSTEM_MAX_MATCHES = int(os.getenv("FUN_SYSTEM_MAX_MATCHES", "6"))
-
-# Exposure split inside FUN cap (singles vs system)
-FUN_CAP_SPLIT_SINGLES = float(os.getenv("FUN_CAP_SPLIT_SINGLES", "0.40"))
-FUN_CAP_SPLIT_SINGLES = max(0.10, min(0.80, FUN_CAP_SPLIT_SINGLES))
-
-# System unit base (0.5–1 per combo); will be scaled down if needed
-FUN_SYSTEM_UNIT_BASE = float(os.getenv("FUN_SYSTEM_UNIT_BASE", "1.0"))
-FUN_SYSTEM_UNIT_MIN  = float(os.getenv("FUN_SYSTEM_UNIT_MIN",  "0.50"))
-FUN_SYSTEM_UNIT_MAX  = float(os.getenv("FUN_SYSTEM_UNIT_MAX",  "1.00"))
-
-FUN_AVOID_CORE_OVERLAP = os.getenv("FUN_AVOID_CORE_OVERLAP", "true").lower() == "true"
+FUN_ALLOWED_MARKETS  = {"Home", "Draw", "Away", "Over 2.5", "Under 2.5"}
 
 MARKET_CODE = {
     "Home": "1",
@@ -106,26 +60,112 @@ MARKET_CODE = {
     "Under 2.5": "U25",
 }
 
+# ------------------------- CORE RULES -------------------------
+CORE_SINGLES_MIN_ODDS = float(os.getenv("CORE_SINGLES_MIN_ODDS", "1.50"))
+CORE_SINGLES_MAX_ODDS = float(os.getenv("CORE_SINGLES_MAX_ODDS", "1.75"))
 
+# Low-odds legs for doubles (the "don't miss <1.50" bucket)
+CORE_DOUBLE_LEG_MIN_ODDS = float(os.getenv("CORE_DOUBLE_LEG_MIN_ODDS", "1.20"))
+CORE_DOUBLE_LEG_MAX_ODDS = float(os.getenv("CORE_DOUBLE_LEG_MAX_ODDS", "1.49"))
+
+# Partner leg for doubles (can be low or normal single-range)
+CORE_DOUBLE_PARTNER_MIN_ODDS = float(os.getenv("CORE_DOUBLE_PARTNER_MIN_ODDS", "1.35"))
+CORE_DOUBLE_PARTNER_MAX_ODDS = float(os.getenv("CORE_DOUBLE_PARTNER_MAX_ODDS", "1.70"))
+
+# Double combo target
+CORE_DOUBLE_TARGET_MIN = float(os.getenv("CORE_DOUBLE_TARGET_MIN", "1.75"))
+CORE_DOUBLE_TARGET_MAX = float(os.getenv("CORE_DOUBLE_TARGET_MAX", "2.05"))
+
+# Counts
+CORE_TARGET_SINGLES = int(os.getenv("CORE_TARGET_SINGLES", "4"))  # 3–4 typical
+CORE_MIN_SINGLES    = int(os.getenv("CORE_MIN_SINGLES",    "3"))
+CORE_MAX_SINGLES    = int(os.getenv("CORE_MAX_SINGLES",    "5"))
+
+CORE_MAX_DOUBLES    = int(os.getenv("CORE_MAX_DOUBLES",    "1"))  # keep it tight
+
+# Stakes: 30–50€ per single; double stake 20–35€ (scaled into cap)
+CORE_STAKE_HIGH = float(os.getenv("CORE_STAKE_HIGH", "50"))  # lowest odds
+CORE_STAKE_MID  = float(os.getenv("CORE_STAKE_MID",  "40"))
+CORE_STAKE_LOW  = float(os.getenv("CORE_STAKE_LOW",  "30"))  # highest odds in core range
+
+CORE_DOUBLE_STAKE = float(os.getenv("CORE_DOUBLE_STAKE", "25"))
+
+# Value thresholds (kept as bands)
+CORE_MIN_VALUE_BANDS = {
+    # CORE is "tight on odds, loose on edge": keep value gates minimal.
+    (1.20, 1.50): float(os.getenv("CORE_MIN_VALUE_120_150", "-5.0")),
+    (1.50, 1.65): float(os.getenv("CORE_MIN_VALUE_150_165", "0.5")),
+    (1.65, 1.75): float(os.getenv("CORE_MIN_VALUE_165_175", "0.5")),
+    (1.75, 2.20): float(os.getenv("CORE_MIN_VALUE_175_220", "0.5")),
+}
+
+CORE_DOUBLE_LOWLEG_MIN_PROB = float(os.getenv("CORE_DOUBLE_LOWLEG_MIN_PROB", "0.70"))
+CORE_DOUBLE_LOWLEG_MIN_CONF_BAND = os.getenv("CORE_DOUBLE_LOWLEG_MIN_CONF_BAND", "mid")  # low/mid/high
+
+# Optional: market diversity cap (set to 99 to disable)
+CORE_MAX_OVERS = int(os.getenv("CORE_MAX_OVERS", "99"))
+
+# ------------------------- FUN RULES -------------------------
+FUN_MIN_ODDS_DEFAULT = float(os.getenv("FUN_MIN_ODDS_DEFAULT", "1.85"))
+FUN_MAX_ODDS_BY_MARKET = {
+    "Home":  float(os.getenv("FUN_MAX_ODDS_HOME", "3.20")),
+    "Away":  float(os.getenv("FUN_MAX_ODDS_AWAY", "3.20")),
+    "Over 2.5":  float(os.getenv("FUN_MAX_ODDS_O25", "3.20")),
+    "Under 2.5": float(os.getenv("FUN_MAX_ODDS_U25", "3.20")),
+    "Draw":  float(os.getenv("FUN_MAX_ODDS_DRAW", "4.60")),
+}
+
+FUN_MIN_VALUE_PCT = float(os.getenv("FUN_MIN_VALUE_PCT", "4.0"))
+FUN_MIN_PROB      = float(os.getenv("FUN_MIN_PROB", "0.22"))
+
+FUN_MAX_PICKS_TOTAL = int(os.getenv("FUN_MAX_PICKS_TOTAL", "8"))   # target 7–8, not 10
+FUN_MIN_PICKS_TOTAL = int(os.getenv("FUN_MIN_PICKS_TOTAL", "6"))
+
+FUN_SINGLES_K = int(os.getenv("FUN_SINGLES_K", "4"))               # 3–5 typical
+FUN_SINGLES_MIN = int(os.getenv("FUN_SINGLES_MIN", "3"))
+FUN_SINGLES_MAX = int(os.getenv("FUN_SINGLES_MAX", "5"))
+
+# System pool size (overlap with singles allowed)
+FUN_SYSTEM_POOL_MAX = int(os.getenv("FUN_SYSTEM_POOL_MAX", "6"))   # keep breakeven sane
+FUN_SYSTEM_POOL_MIN = int(os.getenv("FUN_SYSTEM_POOL_MIN", "5"))
+
+# FUN stakes
+def fun_single_stake(odds: float) -> float:
+    # keep current behavior: 6–8€
+    if odds <= 2.30:
+        return 8.0
+    if odds <= 3.20:
+        return 7.0
+    if odds <= 4.60:
+        return 6.0
+    return 0.0
+
+FUN_CAP_SPLIT_SINGLES = float(os.getenv("FUN_CAP_SPLIT_SINGLES", "0.40"))
+FUN_CAP_SPLIT_SINGLES = max(0.10, min(0.80, FUN_CAP_SPLIT_SINGLES))
+
+FUN_SYSTEM_UNIT_BASE = float(os.getenv("FUN_SYSTEM_UNIT_BASE", "1.0"))
+FUN_SYSTEM_UNIT_MIN  = float(os.getenv("FUN_SYSTEM_UNIT_MIN",  "0.50"))
+FUN_SYSTEM_UNIT_MAX  = float(os.getenv("FUN_SYSTEM_UNIT_MAX",  "1.00"))
+
+FUN_AVOID_CORE_OVERLAP = os.getenv("FUN_AVOID_CORE_OVERLAP", "true").lower() == "true"
+
+# System coverage thresholds (conservative)
+# We evaluate payout/cost ratios at k hits using the k LOWEST odds in pool.
+SYS_TARGET_RATIO_AT_R    = float(os.getenv("SYS_TARGET_RATIO_AT_R",    "0.50"))
+SYS_TARGET_RATIO_AT_RP1  = float(os.getenv("SYS_TARGET_RATIO_AT_RP1",  "0.90"))
+
+# ------------------------- HELPERS -------------------------
 def safe_float(v, d=None):
     try:
         return float(v)
     except Exception:
         return d
 
-
 def band_lookup(x, band_map, default=None):
     for (a, b), val in band_map.items():
         if a <= x <= b:
             return val
     return default
-
-
-def load_thursday_fixtures():
-    with open(THURSDAY_REPORT_PATH, "r", encoding="utf-8") as f:
-        data = json.load(f)
-    return data["fixtures"], data
-
 
 def odds_match_ok(fx, min_score):
     om = fx.get("odds_match") or {}
@@ -134,40 +174,37 @@ def odds_match_ok(fx, min_score):
     score = safe_float(om.get("score"), 0.0)
     return score >= min_score
 
-
 def confidence_ok(fx, min_conf):
     flags = fx.get("flags") or {}
     c = safe_float(flags.get("confidence"), None)
     if c is None:
-        return True  # if missing, don't block
+        return True
     return c >= min_conf
 
+def load_thursday():
+    with open(THURSDAY_REPORT_PATH, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    return data["fixtures"], data
 
 def _get_over_value_and_penalty(fx):
-    """Return (val_raw, penalty_pts, val_adj) for Over 2.5.
-
-    Contract:
-    - If selection_value_pct_over exists, it is treated as ALREADY adjusted.
-      We keep penalty_pts for transparency but do NOT subtract again.
-    - Otherwise we fall back to value_pct_over and subtract penalty_pts (if present).
-    """
-    sel = fx.get("selection_value_pct_over")
-    pen = safe_float(fx.get("over_value_penalty_pts"), 0.0) or 0.0
-
-    if sel is not None:
-        v = safe_float(sel, None)
-        if v is None:
-            return None, 0.0, None
-        return v, pen, v
-
-    v_raw = fx.get("value_pct_over")
+    v_raw = fx.get("selection_value_pct_over")
+    if v_raw is None:
+        v_raw = fx.get("value_pct_over")
     v_raw = safe_float(v_raw, None)
+    pen = safe_float(fx.get("over_value_penalty_pts"), 0.0) or 0.0
     if v_raw is None:
         return None, 0.0, None
-
     v_adj = v_raw - pen
     return v_raw, pen, v_adj
 
+def ev(prob, odds):
+    if prob is None or odds is None:
+        return None
+    p = safe_float(prob, None)
+    o = safe_float(odds, None)
+    if p is None or o is None:
+        return None
+    return round(p * o - 1.0, 4)
 
 def build_rows(fixtures):
     rows = []
@@ -184,7 +221,7 @@ def build_rows(fixtures):
 
         for market, pkey, fkey, okey, vkey in markets:
             odds = safe_float(fx.get(okey))
-            if not odds or odds <= 1:
+            if not odds or odds <= 1.0:
                 continue
 
             if market == "Over 2.5":
@@ -200,6 +237,8 @@ def build_rows(fixtures):
                 val_adj = val_raw
                 pen_pts = 0.0
 
+            prob = safe_float(fx.get(pkey), None)
+
             rows.append({
                 "fixture_id": fx.get("fixture_id"),
                 "date": fx.get("date"),
@@ -208,59 +247,45 @@ def build_rows(fixtures):
                 "match": f'{fx.get("home")} – {fx.get("away")}',
                 "market": market,
                 "market_code": MARKET_CODE[market],
-                "prob": safe_float(fx.get(pkey), 0.0),
+                "prob": prob,
                 "fair": safe_float(fx.get(fkey)),
                 "odds": odds,
                 "value_pct": val_raw,
                 "value_adj": val_adj,
                 "penalty_pts": pen_pts,
+                "ev": ev(prob, odds),
                 "flags": fx.get("flags") or {},
                 "odds_match": fx.get("odds_match") or {},
             })
     return rows
 
-
-def scale_stakes(items, cap_amount, stake_key="stake"):
-    total = sum(safe_float(x.get(stake_key), 0.0) for x in items)
+def scale_stakes(items, cap_amount, key="stake"):
+    total = sum(safe_float(x.get(key), 0.0) for x in items)
     if total <= 0:
         return items, 0.0, total
     if total <= cap_amount:
         return items, 1.0, total
-
     s = cap_amount / total
     for x in items:
-        x[stake_key] = round(safe_float(x.get(stake_key), 0.0) * s, 1)
+        x[key] = round(safe_float(x.get(key), 0.0) * s, 1)
     return items, s, total
 
-
-# ------------------------- CORE PICKER -------------------------
-
+# ------------------------- CORE -------------------------
 def core_single_stake(odds: float) -> float:
-    # 40–50 zone, slightly odds-weighted
-    if odds <= 1.65:
+    # 30–50, lower odds -> higher stake
+    if odds <= 1.55:
         return CORE_STAKE_HIGH
-    if odds <= 2.00:
+    if odds <= 1.65:
         return CORE_STAKE_MID
     return CORE_STAKE_LOW
 
-
-def _core_flag_match(fx_flags, market: str) -> bool:
-    """Thursday flags optionally mark core_1/core_2/core_over/core_under."""
-    if not fx_flags:
-        return False
-    if market == "Home":
-        return bool(fx_flags.get("core_1"))
-    if market == "Away":
-        return bool(fx_flags.get("core_2"))
-    if market == "Over 2.5":
-        return bool(fx_flags.get("core_over"))
-    if market == "Under 2.5":
-        return bool(fx_flags.get("core_under"))
-    return False
-
-
 def pick_core(rows, fixtures_by_id):
-    core_candidates = []
+    # candidate singles
+    candidates = []
+    lowlegs = []
+
+    overs_count = 0
+
     for r in rows:
         fx = fixtures_by_id.get(r["fixture_id"])
         if not fx:
@@ -269,160 +294,248 @@ def pick_core(rows, fixtures_by_id):
             continue
         if not confidence_ok(fx, CORE_MIN_CONFIDENCE):
             continue
-
         if r["market"] not in CORE_ALLOWED_MARKETS:
             continue
-        if r["odds"] < CORE_MIN_ODDS or r["odds"] > CORE_MAX_ODDS:
-            continue
 
-        # Value gate (banded). If Thursday flags says core_* True, allow slightly softer gate.
         min_val = band_lookup(r["odds"], CORE_MIN_VALUE_BANDS, default=9999)
-        hinted = _core_flag_match(r.get("flags") or {}, r["market"])
-        if not hinted and r["value_adj"] < min_val:
-            continue
-        if hinted and r["value_adj"] < (min_val - 0.8):
+        # For CORE singles we still apply a minimal edge gate.
+        # For CORE low-odds legs (<1.50), we prioritize "high probability" over value.
+        if CORE_DOUBLE_LEG_MIN_ODDS <= r["odds"] <= CORE_DOUBLE_LEG_MAX_ODDS:
+            p = safe_float(r.get("prob"), 0.0) or 0.0
+            if p < CORE_DOUBLE_LOWLEG_MIN_PROB:
+                continue
+            lowlegs.append(r)
             continue
 
-        stake = core_single_stake(r["odds"])
-        core_candidates.append({**r, "stake": float(stake), "tag": "core"})
+        if r["value_adj"] < min_val:
+            continue
 
+
+        if CORE_SINGLES_MIN_ODDS <= r["odds"] <= CORE_SINGLES_MAX_ODDS:
+            # optional overs cap
+            if r["market"] == "Over 2.5" and overs_count >= CORE_MAX_OVERS:
+                continue
+            candidates.append(r)
+            if r["market"] == "Over 2.5":
+                overs_count += 1
+
+    # sort by value_adj then prob
     def _conf(x):
         return safe_float((x.get("flags") or {}).get("confidence"), 0.0)
+    candidates.sort(key=lambda x: (x["value_adj"], _conf(x), safe_float(x["prob"], 0.0)), reverse=True)
+    lowlegs.sort(key=lambda x: (x["value_adj"], _conf(x), safe_float(x["prob"], 0.0)), reverse=True)
 
-    core_candidates.sort(key=lambda x: (x["value_adj"], _conf(x), x["prob"]), reverse=True)
-
-    # Pick 3–4 singles, one market per match
-    core_singles = []
+    # pick singles (unique matches)
+    singles = []
     used_matches = set()
-    for r in core_candidates:
+    for r in candidates:
         if r["match"] in used_matches:
             continue
-        core_singles.append(r)
+        singles.append({**r, "stake": float(core_single_stake(r["odds"])), "tag": "core"})
         used_matches.add(r["match"])
-        if len(core_singles) >= CORE_TARGET_SINGLES:
+        if len(singles) >= min(CORE_TARGET_SINGLES, CORE_MAX_SINGLES):
             break
 
-    # Ensure minimum 3 if possible
-    if len(core_singles) < CORE_MIN_SINGLES:
-        for r in core_candidates:
+    # ensure minimum singles if possible
+    if len(singles) < CORE_MIN_SINGLES:
+        for r in candidates:
             if r["match"] in used_matches:
                 continue
-            core_singles.append(r)
+            singles.append({**r, "stake": float(core_single_stake(r["odds"])), "tag": "core"})
             used_matches.add(r["match"])
-            if len(core_singles) >= CORE_MIN_SINGLES:
+            if len(singles) >= CORE_MIN_SINGLES:
                 break
 
-    # Optional double from low-odds legs (<=1.55)
-    def best_double(pool):
-        best = None
-        best_score = -1e18
-        for a, b in combinations(pool, 2):
-            if a["match"] == b["match"]:
+    # build up to N doubles, requiring at least one leg <1.50
+    doubles = []
+    if lowlegs and CORE_MAX_DOUBLES > 0:
+        # partner pool can be from singles candidates + other non-low rows in a wider range
+        partner_pool = [r for r in rows if r["market"] in CORE_ALLOWED_MARKETS]
+        # filter partners
+        tmp = []
+        for r in partner_pool:
+            fx = fixtures_by_id.get(r["fixture_id"])
+            if not fx:
                 continue
-            combo_odds = a["odds"] * b["odds"]
-            if not (CORE_DOUBLE_TARGET_MIN <= combo_odds <= CORE_DOUBLE_TARGET_MAX):
+            if not odds_match_ok(fx, ODDS_MATCH_MIN_SCORE_CORE):
                 continue
-            score = (a["value_adj"] + b["value_adj"]) + (a["prob"] + b["prob"]) * 10
-            if score > best_score:
-                best_score = score
-                best = {
+            if not confidence_ok(fx, CORE_MIN_CONFIDENCE):
+                continue
+            if r["odds"] < CORE_DOUBLE_PARTNER_MIN_ODDS or r["odds"] > CORE_DOUBLE_PARTNER_MAX_ODDS:
+                continue
+            min_val = band_lookup(r["odds"], CORE_MIN_VALUE_BANDS, default=9999)
+            if r["value_adj"] < min_val:
+                continue
+            tmp.append(r)
+
+        tmp.sort(key=lambda x: (x["value_adj"], _conf(x), safe_float(x["prob"], 0.0)), reverse=True)
+
+        used_dbl_matches = set()
+        for leg1 in lowlegs:
+            if len(doubles) >= CORE_MAX_DOUBLES:
+                break
+            # pick best partner not same match and not reusing double matches
+            for leg2 in tmp:
+                if leg2["match"] == leg1["match"]:
+                    continue
+                if leg1["match"] in used_dbl_matches or leg2["match"] in used_dbl_matches:
+                    continue
+                combo_odds = leg1["odds"] * leg2["odds"]
+                if not (CORE_DOUBLE_TARGET_MIN <= combo_odds <= CORE_DOUBLE_TARGET_MAX):
+                    continue
+
+                doubles.append({
                     "legs": [
-                        {"pick_id": f'{a["fixture_id"]}:{a["market_code"]}', "match": a["match"], "market": a["market"], "odds": a["odds"]},
-                        {"pick_id": f'{b["fixture_id"]}:{b["market_code"]}', "match": b["match"], "market": b["market"], "odds": b["odds"]},
+                        {"pick_id": f'{leg1["fixture_id"]}:{leg1["market_code"]}', "match": leg1["match"], "market": leg1["market"], "odds": leg1["odds"]},
+                        {"pick_id": f'{leg2["fixture_id"]}:{leg2["market_code"]}', "match": leg2["match"], "market": leg2["market"], "odds": leg2["odds"]},
                     ],
                     "combo_odds": round(combo_odds, 2),
+                    "stake": round(float(CORE_DOUBLE_STAKE), 1),
                     "tag": "core_double",
-                }
-        return best
+                })
+                used_dbl_matches.add(leg1["match"])
+                used_dbl_matches.add(leg2["match"])
+                break
 
-    double_pool = [x for x in core_singles if x["odds"] <= CORE_DOUBLE_LEG_MAX_ODDS]
-    core_double = best_double(double_pool) if len(double_pool) >= 2 else None
-
-    # Stakes & cap management (include double stake in exposure)
     cap_amount = BANKROLL_CORE * CORE_EXPOSURE_CAP
+    open_total = sum(x["stake"] for x in singles) + sum(d.get("stake", 0.0) for d in doubles)
 
-    double_stake = 0.0
-    if core_double:
-        base = 0.045 * BANKROLL_CORE
-        double_stake = max(CORE_DOUBLE_STAKE_MIN, min(CORE_DOUBLE_STAKE_MAX, base))
-        core_double["stake"] = round(double_stake, 1)
+    # scale singles first; if still above cap, scale doubles too
+    scale_applied = 1.0
+    if open_total > cap_amount and singles:
+        remaining = max(0.0, cap_amount - sum(d.get("stake", 0.0) for d in doubles))
+        if remaining <= 0:
+            remaining = cap_amount
+        singles, s1, _ = scale_stakes(singles, remaining, "stake")
+        scale_applied = s1 if s1 else 1.0
 
-    singles_total = sum(x["stake"] for x in core_singles)
-    open_total = singles_total + double_stake
-
-    core_scale = 1.0
-    if open_total > cap_amount and singles_total > 0:
-        remaining_for_singles = max(0.0, cap_amount - double_stake)
-        if remaining_for_singles <= 0:
-            remaining_for_singles = cap_amount
-        core_singles, core_scale, _ = scale_stakes(core_singles, remaining_for_singles, "stake")
-        singles_total = sum(x["stake"] for x in core_singles)
-        open_total = singles_total + double_stake
-
-    if open_total > cap_amount and core_double and double_stake > 0:
+    open_total = sum(x["stake"] for x in singles) + sum(d.get("stake", 0.0) for d in doubles)
+    if open_total > cap_amount and doubles:
         s = cap_amount / open_total if open_total > 0 else 1.0
-        for x in core_singles:
+        for x in singles:
             x["stake"] = round(x["stake"] * s, 1)
-        core_double["stake"] = round(core_double["stake"] * s, 1)
-        core_scale = round(core_scale * s, 3)
-        singles_total = sum(x["stake"] for x in core_singles)
-        double_stake = core_double["stake"]
-        open_total = singles_total + double_stake
+        for d in doubles:
+            d["stake"] = round(float(d.get("stake", 0.0)) * s, 1)
+        scale_applied = round(scale_applied * s, 3)
+        open_total = sum(x["stake"] for x in singles) + sum(d.get("stake", 0.0) for d in doubles)
 
-    core_meta = {
+    meta = {
         "bankroll": BANKROLL_CORE,
         "exposure_cap_pct": CORE_EXPOSURE_CAP,
         "open": round(open_total, 1),
         "after_open": round(BANKROLL_CORE - open_total, 1),
-        "picks_count": len(core_singles),
-        "scale_applied": round(core_scale, 3),
+        "picks_count": len(singles),
+        "scale_applied": round(scale_applied, 3),
     }
-    return core_singles, core_double, core_meta
 
+    # keep backward compatibility: "double" = first double (if any)
+    core_double = doubles[0] if doubles else None
+    return singles, core_double, doubles, meta
 
-# ------------------------- FUN: STAKES -------------------------
+# ------------------------- FUN SYSTEM COVERAGE -------------------------
+def _columns_for_sizes(n: int, sizes):
+    return sum(comb(n, r) for r in sizes if 1 <= r <= n)
 
-def fun_single_stake(odds: float) -> float:
-    # New plan: 6–8€ each.
-    if odds <= 2.30:
-        return 8.0
-    if odds <= 3.20:
-        return 7.0
-    if odds <= 4.60:
-        return 6.0
-    return 0.0
+def _payout_for_exact_k_hits(k_odds, sizes, k: int):
+    # k_odds length == k, represents the odds of the picks that HIT.
+    # payout per 1€ unit: sum of products for all winning combos within the k hits.
+    out = 0.0
+    for r in sizes:
+        if r > k or r < 1:
+            continue
+        for idxs in combinations(range(k), r):
+            prod = 1.0
+            for i in idxs:
+                prod *= max(1.01, float(k_odds[i]))
+            out += prod
+    return out
 
+def system_coverage(odds_list, sizes):
+    """
+    Conservative coverage ratios (payout/cost) at:
+      - k = r_min (minimum hits)
+      - k = r_min + 1
+    using the k LOWEST odds in the pool (worst-case payout).
+    """
+    n = len(odds_list)
+    if n <= 0:
+        return None
+    sizes = [int(x) for x in sizes if int(x) >= 1]
+    if not sizes:
+        return None
+    r_min = min(sizes)
+    cols = _columns_for_sizes(n, sizes)
+    if cols <= 0:
+        return None
 
-def _fun_flag_match(fx_flags, market: str) -> bool:
-    if not fx_flags:
-        return False
-    if market == "Home":
-        return bool(fx_flags.get("fun_1"))
-    if market == "Draw":
-        return bool(fx_flags.get("fun_x"))
-    if market == "Away":
-        return bool(fx_flags.get("fun_2"))
-    if market == "Over 2.5":
-        return bool(fx_flags.get("fun_over"))
-    if market == "Under 2.5":
-        return bool(fx_flags.get("fun_under"))
-    return False
+    odds_sorted = sorted([float(x) for x in odds_list])
+    k0 = r_min
+    k1 = min(n, r_min + 1)
 
+    pay0 = _payout_for_exact_k_hits(odds_sorted[:k0], sizes, k0)
+    pay1 = _payout_for_exact_k_hits(odds_sorted[:k1], sizes, k1)
 
-def _choose_fun_system(n: int):
-    # Align with notes: prefer 3/n for ~5 picks, 4/n for ~6 picks.
-    if n >= 6:
-        return 4, f"4/{n}"
-    if n >= 5:
-        return 3, f"3/{n}"
-    if n == 4:
-        return 3, f"3/{n}"
-    if n == 3:
-        return 2, f"2/{n}"
-    return None, None
+    ratio0 = pay0 / cols
+    ratio1 = pay1 / cols
+    return {
+        "r_min": r_min,
+        "columns": cols,
+        "ratio_at_r": round(ratio0, 4),
+        "ratio_at_rp1": round(ratio1, 4),
+    }
 
+def choose_fun_system(system_pool):
+    """
+    Pick system type AND optionally shrink pool to keep coverage sane.
+    Returns: (chosen_pool, system_dict) or ([], None)
+    """
+    if len(system_pool) < FUN_SYSTEM_POOL_MIN:
+        return system_pool, None
 
-# ------------------------- FUN PICKER -------------------------
+    # candidates to evaluate (sizes, label)
+    def candidates_for_n(n):
+        c = []
+        if n >= 6:
+            c += [([4], f"4/{n}"), ([3,4], f"3-4/{n}"), ([3], f"3/{n}")]
+        if n == 5:
+            c += [([3], f"3/5"), ([2,3], f"2-3/5"), ([2], f"2/5")]
+        if n == 4:
+            c += [([3], f"3/4"), ([2,3], f"2-3/4"), ([2], f"2/4")]
+        return c
+
+    # try shrinking n from max down to min
+    for n in range(min(FUN_SYSTEM_POOL_MAX, len(system_pool)), FUN_SYSTEM_POOL_MIN - 1, -1):
+        pool = system_pool[:n]
+        odds_list = [p["odds"] for p in pool]
+
+        best = None
+        best_key = (-1e9, -1e9)  # (ratio_at_rp1, ratio_at_r)
+        for sizes, label in candidates_for_n(n):
+            cov = system_coverage(odds_list, sizes)
+            if not cov:
+                continue
+            # coverage constraints
+            if cov["ratio_at_r"] < SYS_TARGET_RATIO_AT_R:
+                continue
+            if cov["ratio_at_rp1"] < SYS_TARGET_RATIO_AT_RP1:
+                continue
+
+            key = (cov["ratio_at_rp1"], cov["ratio_at_r"])
+            if key > best_key:
+                best_key = key
+                best = {"label": label, "sizes": sizes, "columns": cov["columns"], "coverage": cov}
+
+        if best:
+            return pool, best
+
+    # fallback: choose a simple 3/5 on the first 5 picks if possible, even if coverage isn't perfect
+    if len(system_pool) >= 5:
+        pool = system_pool[:5]
+        odds_list = [p["odds"] for p in pool]
+        best = {"label": "3/5", "sizes": [3], "columns": comb(5,3), "coverage": system_coverage(odds_list, [3])}
+        return pool, best
+
+    return system_pool, None
 
 def pick_fun(rows, fixtures_by_id, core_singles):
     core_fixture_ids = {x["fixture_id"] for x in core_singles}
@@ -436,34 +549,24 @@ def pick_fun(rows, fixtures_by_id, core_singles):
             continue
         if not confidence_ok(fx, FUN_MIN_CONFIDENCE):
             continue
-
         if r["market"] not in FUN_ALLOWED_MARKETS:
             continue
         if FUN_AVOID_CORE_OVERLAP and r["fixture_id"] in core_fixture_ids:
             continue
 
         max_odds = FUN_MAX_ODDS_BY_MARKET.get(r["market"], 3.00)
-        hinted = _fun_flag_match(r.get("flags") or {}, r["market"])
-
-        if not hinted:
-            if r["odds"] < FUN_MIN_ODDS_DEFAULT or r["odds"] > max_odds:
-                continue
-        else:
-            if r["odds"] < (FUN_MIN_ODDS_DEFAULT - 0.20) or r["odds"] > (max_odds + 0.40):
-                continue
-
+        if r["odds"] < FUN_MIN_ODDS_DEFAULT or r["odds"] > max_odds:
+            continue
         if r["value_adj"] < FUN_MIN_VALUE_PCT:
             continue
-
-        pmin = FUN_MIN_PROB - (0.03 if hinted else 0.0)
-        if r["prob"] < pmin:
+        if r["prob"] is not None and r["prob"] < FUN_MIN_PROB:
             continue
 
         fun_candidates.append(r)
 
-    fun_candidates.sort(key=lambda x: (x["value_adj"], x["prob"]), reverse=True)
+    fun_candidates.sort(key=lambda x: (x["value_adj"], safe_float(x["prob"], 0.0)), reverse=True)
 
-    # take up to 10 UNIQUE matches (one market per match)
+    # take up to 7–8 unique matches (one market per match)
     fun_picks = []
     used_matches = set()
     for r in fun_candidates:
@@ -474,9 +577,20 @@ def pick_fun(rows, fixtures_by_id, core_singles):
         if len(fun_picks) >= FUN_MAX_PICKS_TOTAL:
             break
 
-    # ---- singles subset: top 1–3 ----
+    # if too few, allow up to 10 as a fallback (still unique matches)
+    if len(fun_picks) < FUN_MIN_PICKS_TOTAL:
+        for r in fun_candidates:
+            if r["match"] in used_matches:
+                continue
+            fun_picks.append(r)
+            used_matches.add(r["match"])
+            if len(fun_picks) >= 10:
+                break
+
+    # ---- singles: top K (3–5), stakes by odds ----
+    k = max(FUN_SINGLES_MIN, min(FUN_SINGLES_MAX, FUN_SINGLES_K))
     fun_singles = []
-    for r in fun_picks[:FUN_MAX_SINGLES]:
+    for r in fun_picks[:k]:
         st = fun_single_stake(r["odds"])
         if st <= 0:
             continue
@@ -490,40 +604,23 @@ def pick_fun(rows, fixtures_by_id, core_singles):
             "odds": r["odds"],
             "prob": r["prob"],
             "value_adj": r["value_adj"],
+            "ev": r.get("ev"),
             "stake": float(st),
         })
 
-    if len(fun_singles) < FUN_MIN_SINGLES and fun_picks:
-        r = fun_picks[0]
-        st = fun_single_stake(r["odds"])
-        if st > 0 and not fun_singles:
-            fun_singles.append({
-                "pick_id": f'{r["fixture_id"]}:{r["market_code"]}',
-                "fixture_id": r["fixture_id"],
-                "market_code": r["market_code"],
-                "match": r["match"],
-                "league": r["league"],
-                "market": r["market"],
-                "odds": r["odds"],
-                "prob": r["prob"],
-                "value_adj": r["value_adj"],
-                "stake": float(st),
-            })
+    # ---- system pool (overlap allowed): top 5–6 ----
+    system_pool_raw = fun_picks[:max(FUN_SYSTEM_POOL_MIN, min(FUN_SYSTEM_POOL_MAX, len(fun_picks)))]
+    system_pool, sys_choice = choose_fun_system(system_pool_raw)
 
-    single_ids = {x["pick_id"] for x in fun_singles}
-    remaining = [r for r in fun_picks if f'{r["fixture_id"]}:{r["market_code"]}' not in single_ids]
-
-    system_pool = remaining[:FUN_SYSTEM_MAX_MATCHES]
-    n_sys = len(system_pool)
-
-    r_size, system_label = _choose_fun_system(n_sys)
-    cols = comb(n_sys, r_size) if (r_size and n_sys >= r_size) else 0
+    cols = sys_choice["columns"] if sys_choice else 0
+    system_label = sys_choice["label"] if sys_choice else None
 
     # ---- bankroll caps (split singles/system) ----
     cap_amount = BANKROLL_FUN * FUN_EXPOSURE_CAP
     cap_singles = cap_amount * FUN_CAP_SPLIT_SINGLES
     cap_system  = cap_amount * (1.0 - FUN_CAP_SPLIT_SINGLES)
 
+    # scale singles into cap_singles
     singles_total = sum(x["stake"] for x in fun_singles)
     singles_scale = 1.0
     if singles_total > 0 and singles_total > cap_singles:
@@ -531,6 +628,7 @@ def pick_fun(rows, fixtures_by_id, core_singles):
         for x in fun_singles:
             x["stake"] = round(x["stake"] * singles_scale, 1)
 
+    # system unit: 0.5–1.0 per combo, scaled into cap_system
     unit = 0.0
     system_stake = 0.0
     system_scale = 1.0
@@ -547,25 +645,19 @@ def pick_fun(rows, fixtures_by_id, core_singles):
     payload = {
         "bankroll": BANKROLL_FUN,
         "exposure_cap_pct": FUN_EXPOSURE_CAP,
-        "cap_split": {
-            "singles_pct": round(FUN_CAP_SPLIT_SINGLES, 2),
-            "system_pct": round(1.0 - FUN_CAP_SPLIT_SINGLES, 2)
-        },
-        "scales": {
-            "singles_scale": round(singles_scale, 3),
-            "system_scale": round(system_scale, 3)
-        },
+        "cap_split": {"singles_pct": round(FUN_CAP_SPLIT_SINGLES, 2), "system_pct": round(1.0 - FUN_CAP_SPLIT_SINGLES, 2)},
+        "scales": {"singles_scale": round(singles_scale, 3), "system_scale": round(system_scale, 3)},
         "rules": {
             "odds_match_min_score_fun": ODDS_MATCH_MIN_SCORE_FUN,
             "min_value_pct": FUN_MIN_VALUE_PCT,
             "min_prob": FUN_MIN_PROB,
-            "max_picks_total": FUN_MAX_PICKS_TOTAL,
-            "max_system_matches": FUN_SYSTEM_MAX_MATCHES,
-            "max_singles": FUN_MAX_SINGLES,
-            "max_odds_by_market": FUN_MAX_ODDS_BY_MARKET,
             "min_odds_default": FUN_MIN_ODDS_DEFAULT,
+            "max_picks_total": FUN_MAX_PICKS_TOTAL,
+            "singles_k": k,
+            "system_pool_range": [FUN_SYSTEM_POOL_MIN, FUN_SYSTEM_POOL_MAX],
             "avoid_core_overlap": FUN_AVOID_CORE_OVERLAP,
-            "system_preference": "3/n for 5, 4/n for 6 (scaled unit 0.5–1)",
+            "system_coverage_targets": {"ratio_at_r": SYS_TARGET_RATIO_AT_R, "ratio_at_rp1": SYS_TARGET_RATIO_AT_RP1},
+            "system_overlap_with_singles": True,
         },
 
         "picks_total": [
@@ -581,6 +673,7 @@ def pick_fun(rows, fixtures_by_id, core_singles):
                 "odds": r["odds"],
                 "value_pct": r["value_pct"],
                 "value_adj": r["value_adj"],
+                "ev": r.get("ev"),
                 "penalty_pts": r.get("penalty_pts", 0.0),
             }
             for r in fun_picks
@@ -599,6 +692,7 @@ def pick_fun(rows, fixtures_by_id, core_singles):
                 "prob": r["prob"],
                 "odds": r["odds"],
                 "value_adj": r["value_adj"],
+                "ev": r.get("ev"),
             }
             for r in system_pool
         ],
@@ -608,7 +702,8 @@ def pick_fun(rows, fixtures_by_id, core_singles):
             "columns": cols,
             "unit": unit,
             "stake": system_stake,
-            "ev_per_euro": None,  # deterministic system mode
+            "coverage": (sys_choice.get("coverage") if sys_choice else None),
+            "ev_per_euro": None,
         },
 
         "open": open_amount,
@@ -625,16 +720,14 @@ def pick_fun(rows, fixtures_by_id, core_singles):
     }
     return payload
 
-
 # ------------------------- MAIN -------------------------
-
 def main():
-    fixtures, th_meta = load_thursday_fixtures()
+    fixtures, th_meta = load_thursday()
     fixtures_by_id = {fx.get("fixture_id"): fx for fx in fixtures}
 
     rows = build_rows(fixtures)
 
-    core_singles, core_double, core_meta = pick_core(rows, fixtures_by_id)
+    core_singles, core_double, core_doubles, core_meta = pick_core(rows, fixtures_by_id)
     fun_payload = pick_fun(rows, fixtures_by_id, core_singles)
 
     report = {
@@ -646,18 +739,16 @@ def main():
             "bankroll": BANKROLL_CORE,
             "exposure_cap_pct": CORE_EXPOSURE_CAP,
             "rules": {
-                "odds_range": [CORE_MIN_ODDS, CORE_MAX_ODDS],
+                "singles_odds_range": [CORE_SINGLES_MIN_ODDS, CORE_SINGLES_MAX_ODDS],
+                "double_low_leg_odds_range": [CORE_DOUBLE_LEG_MIN_ODDS, CORE_DOUBLE_LEG_MAX_ODDS],
+                "double_partner_odds_range": [CORE_DOUBLE_PARTNER_MIN_ODDS, CORE_DOUBLE_PARTNER_MAX_ODDS],
+                "double_target_combo_odds": [CORE_DOUBLE_TARGET_MIN, CORE_DOUBLE_TARGET_MAX],
                 "allowed_markets": sorted(list(CORE_ALLOWED_MARKETS)),
                 "odds_match_min_score_core": ODDS_MATCH_MIN_SCORE_CORE,
                 "min_confidence": CORE_MIN_CONFIDENCE,
-                "min_value_bands": {
-                    "1.50-1.65": CORE_MIN_VALUE_BANDS[(1.50, 1.65)],
-                    "1.65-2.00": CORE_MIN_VALUE_BANDS[(1.65, 2.00)],
-                    "2.00-2.20": CORE_MIN_VALUE_BANDS[(2.00, 2.20)],
-                },
-                "stake_plan": "3–4 singles @ 40–50€ + optional double @ 30–40€",
-                "double_leg_max_odds": CORE_DOUBLE_LEG_MAX_ODDS,
-                "double_target_combo_odds": [CORE_DOUBLE_TARGET_MIN, CORE_DOUBLE_TARGET_MAX],
+                "stake_plan": "Singles 30–50€ (odds-weighted) + doubles only to carry <1.50 legs",
+                "double_stake": CORE_DOUBLE_STAKE,
+                "min_value_bands": {f"{a:.2f}-{b:.2f}": v for (a,b),v in CORE_MIN_VALUE_BANDS.items()},
             },
             "singles": [
                 {
@@ -672,6 +763,7 @@ def main():
                     "odds": x["odds"],
                     "value_pct": x["value_pct"],
                     "value_adj": x["value_adj"],
+                    "ev": x.get("ev"),
                     "penalty_pts": x.get("penalty_pts", 0.0),
                     "stake": x["stake"],
                     "tag": x.get("tag", "core"),
@@ -679,7 +771,7 @@ def main():
                 for x in core_singles
             ],
             "double": core_double,
-            "doubles": [core_double] if core_double else [],
+            "doubles": core_doubles,
             "open": core_meta["open"],
             "after_open": core_meta["after_open"],
             "picks_count": core_meta["picks_count"],
@@ -692,7 +784,6 @@ def main():
     os.makedirs("logs", exist_ok=True)
     with open(FRIDAY_REPORT_PATH, "w", encoding="utf-8") as f:
         json.dump(report, f, indent=2, ensure_ascii=False)
-
 
 if __name__ == "__main__":
     main()
