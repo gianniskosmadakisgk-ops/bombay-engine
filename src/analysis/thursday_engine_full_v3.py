@@ -8,19 +8,21 @@ import re
 from dateutil import parser
 
 # ============================================================
-#  BOMBAY THURSDAY ENGINE v3 (STABILIZED) — DROP-IN REPLACEMENT
+#  BOMBAY THURSDAY FULL ENGINE v3 (STABILIZED) — PRODUCTION
 #
 #  Output contract:
-#   - Writes logs/thursday_report_v3.json
+#   - Writes: logs/thursday_report_v3.json
 #   - Keeps existing fixture JSON keys intact (schema-safe)
+#   - Adds (schema-additive):
+#       ev_1 / ev_x / ev_2 / ev_over / ev_under  (prob * offered - 1)
+#       score_draw / score_over                 (aliases for ev_x / ev_over)
 #
-#  Integrations from the new research notes:
-#   A) "Form" → rolling, recency-weighted last-5 goals (still shrinkage-stabilized)
-#   B) Value/Confidence layer → adds confidence + core/fun candidate hints (in flags only)
-#   C) Keeps: Poisson + Dixon-Coles + stabilization; market-snap is display-only
-#
-#  Extra (schema-safe additions):
-#   - ev_* fields: EV per 1 unit = (prob * offered) - 1  (only when offered exists)
+#  Notes:
+#   - FAIR + VALUE% are computed from MODEL probabilities (stabilized),
+#     NOT from market-snap probabilities.
+#   - market-snap probabilities are saved separately as snap_* (display-only).
+#   - Selection-only hints (Over penalty + core/fun candidate flags) DO NOT
+#     change the model probabilities; they are stored for downstream (Friday).
 # ============================================================
 
 API_FOOTBALL_KEY = os.getenv("FOOTBALL_API_KEY")
@@ -81,11 +83,11 @@ BASELINES_LAST_N = int(os.getenv("BASELINES_LAST_N", "180"))
 TIGHT_DRAW_THRESHOLD = float(os.getenv("TIGHT_DRAW_THRESHOLD", "0.28"))
 TIGHT_LTOTAL_THRESHOLD = float(os.getenv("TIGHT_LTOTAL_THRESHOLD", "2.55"))
 
-# Penalty (in VALUE% points) applied ONLY to selection_value_pct_over
+# Penalty (VALUE% points) applied ONLY to selection_value_pct_over (not to model fair/value)
 OVER_TIGHT_PENALTY_PTS = float(os.getenv("OVER_TIGHT_PENALTY_PTS", "12.0"))
 OVER_LOW_TEMPO_EXTRA_PENALTY_PTS = float(os.getenv("OVER_LOW_TEMPO_EXTRA_PENALTY_PTS", "6.0"))
 
-# Core/Fun candidate hints (stored only in flags)
+# Candidate hints (stored in flags)
 CORE_ODDS_MIN = float(os.getenv("CORE_ODDS_MIN", "1.50"))
 CORE_ODDS_MAX = float(os.getenv("CORE_ODDS_MAX", "1.90"))
 CORE_VALUE_MIN_PCT = float(os.getenv("CORE_VALUE_MIN_PCT", "10.0"))
@@ -255,6 +257,9 @@ def fetch_fixtures(league_id: int, league_name: str):
 
 # ------------------------- TEAM RECENT GOALS (API-FOOTBALL) -------------------------
 def _recency_weights(n: int):
+    """
+    Recency weights for last-n (n<=5). Most recent gets max weight.
+    """
     base = [1.0, 0.85, 0.72, 0.61, 0.52]
     w = base[: max(0, min(5, n))]
     s = sum(w) if w else 1.0
@@ -262,6 +267,13 @@ def _recency_weights(n: int):
 
 
 def fetch_team_recent_stats(team_id: int, league_id: int, want_home_context: bool = None):
+    """
+    Returns:
+      - matches_count
+      - avg_goals_for
+      - avg_goals_against
+    Averages are recency-weighted over last 5, then shrinkage-stabilized downstream.
+    """
     ck = (team_id, league_id, want_home_context)
     if ck in TEAM_STATS_CACHE:
         return TEAM_STATS_CACHE[ck]
@@ -285,6 +297,7 @@ def fetch_team_recent_stats(team_id: int, league_id: int, want_home_context: boo
         TEAM_STATS_CACHE[ck] = {}
         return TEAM_STATS_CACHE[ck]
 
+    # Optional home/away context filter
     resp = []
     if want_home_context is None:
         resp = resp_all
@@ -329,8 +342,9 @@ def fetch_team_recent_stats(team_id: int, league_id: int, want_home_context: boo
 
     stats = {
         "matches_count": m,
-        "avg_goals_for": gf,
+        "avg_goals_for": gf,  # weighted mean per match
         "avg_goals_against": ga,
+        # extras (safe to ignore)
         "avg_goals_for_unweighted": (gf_raw / m) if m else None,
         "avg_goals_against_unweighted": (ga_raw / m) if m else None,
     }
@@ -440,6 +454,7 @@ def compute_expected_goals(home_stats: dict, away_stats: dict, league_baseline: 
         k = max(0.0, SHRINKAGE_K)
         denom = (n + k) if (n + k) > 0 else 1.0
 
+        # shrink recent-form means toward league mean (stability)
         gf_shrunk = (n * gf_mle + k * league_avg_team) / denom
         ga_shrunk = (n * ga_mle + k * league_avg_team) / denom
 
@@ -682,16 +697,11 @@ def pick_best_odds_for_fixture(fx, league_events_cache):
         return {}, {"matched": False, "reason": f"low_similarity(score={best_score:.2f})"}
 
     odds = _best_odds_from_event(best["raw"], best["home_norm"], best["away_norm"], best_swap)
-    debug = {
-        "matched": True,
-        "score": round(best_score, 3),
-        "swap": best_swap,
-        "time_diff_h": None if best_diff is None else round(best_diff, 2),
-    }
+    debug = {"matched": True, "score": round(best_score, 3), "swap": best_swap, "time_diff_h": None if best_diff is None else round(best_diff, 2)}
     return odds, debug
 
 
-# ------------------------- VALUE% -------------------------
+# ------------------------- VALUE% + EV -------------------------
 def value_pct(offered, fair):
     if offered is None or fair is None:
         return None
@@ -701,6 +711,19 @@ def value_pct(offered, fair):
         return round((offered / fair - 1.0) * 100.0, 1)
     except Exception:
         return None
+
+
+def ev_per_unit(prob, offered):
+    """
+    EV per 1 unit staked: (prob * offered) - 1
+    """
+    prob = safe_float(prob, None)
+    offered = safe_float(offered, None)
+    if prob is None or offered is None:
+        return None
+    if prob <= 0 or offered <= 1.0:
+        return None
+    return round((prob * offered) - 1.0, 4)
 
 
 # ------------------------- STABILIZATION -------------------------
@@ -769,14 +792,17 @@ def stabilize_probs(
     offo,
     offu,
 ):
+    # outcome caps
     ph = _clamp(ph, CAP_OUTCOME_MIN, 1.0)
     pa = _clamp(pa, CAP_OUTCOME_MIN, 1.0)
     pd = _clamp(pd, CAP_DRAW_MIN, CAP_DRAW_MAX)
 
+    # draw normalization by lambda gap
     gap = abs((lam_h or 0) - (lam_a or 0))
     if gap > DRAW_LAMBDA_GAP_MAX:
         pd = min(pd, DRAW_IF_GAP_CAP)
 
+    # draw baseline by league
     league_draw = safe_float((league_baseline or {}).get("avg_draw_rate"), None)
     if league_draw is not None:
         pd = min(pd, league_draw + DRAW_LEAGUE_PLUS, CAP_DRAW_MAX)
@@ -784,8 +810,10 @@ def stabilize_probs(
 
     ph, pd, pa = _renorm_1x2(ph, pd, pa)
 
+    # favorite protection
     ph, pd, pa = _apply_favorite_protection(ph, pd, pa, off1, off2)
 
+    # Over/Under blockers from lambdas + low tempo caps
     ltot = (lam_h or 0) + (lam_a or 0)
 
     if ltot < OVER_BLOCK_LTOTAL or (lam_h or 0) < OVER_BLOCK_LMIN or (lam_a or 0) < OVER_BLOCK_LMIN:
@@ -797,6 +825,7 @@ def stabilize_probs(
     if ltot > UNDER_BLOCK_LTOTAL or ((lam_h or 0) > UNDER_BLOCK_BOTH_GT and (lam_a or 0) > UNDER_BLOCK_BOTH_GT):
         pu = min(pu, 0.70)
 
+    # clamp & renorm O/U
     po = _clamp(po, CAP_OUTCOME_MIN, CAP_OVER)
     pu = _clamp(pu, CAP_OUTCOME_MIN, CAP_UNDER)
     s2 = po + pu
@@ -841,16 +870,26 @@ def _candidate(offered, v_pct, prob, odds_lo, odds_hi, v_min, p_min=0.0):
 
 
 def _confidence_score(home_stats, away_stats, match_debug, lam_h, lam_a):
+    """
+    0..1 conservative confidence:
+      - more recent games -> higher
+      - odds matched -> higher
+      - extreme totals (very low/high lambda total) -> lower
+    """
     n_h = int((home_stats or {}).get("matches_count") or 0)
     n_a = int((away_stats or {}).get("matches_count") or 0)
     n = min(n_h, n_a)
 
-    score = 0.40
+    score = 0.40  # base
+
+    # sample size (0..0.20)
     score += 0.20 * _clamp(n / 5.0, 0.0, 1.0)
 
+    # odds match (0..0.15)
     if (match_debug or {}).get("matched"):
         score += 0.15
 
+    # lambda sanity (penalize extremes)
     ltot = (lam_h or 0.0) + (lam_a or 0.0)
     if ltot < 2.1:
         score -= 0.10
@@ -862,15 +901,6 @@ def _confidence_score(home_stats, away_stats, match_debug, lam_h, lam_a):
         score -= 0.05
 
     return _clamp(score, 0.05, 0.95)
-
-
-def _ev(prob, offered):
-    """EV per 1 unit stake: prob*odds - 1. Returns None if no offered."""
-    p = safe_float(prob, None)
-    o = safe_float(offered, None)
-    if p is None or o is None or o <= 1.0:
-        return None
-    return round((p * o) - 1.0, 4)
 
 
 # ------------------------- MAIN PIPELINE -------------------------
@@ -930,6 +960,7 @@ def build_fixture_blocks():
         off_o = offered.get("over")
         off_u = offered.get("under")
 
+        # 1) MODEL probs (stabilized, NO market snap) => used for FAIR + VALUE
         m_ph, m_pd, m_pa, m_po, m_pu = stabilize_probs(
             league_name=league_name,
             league_baseline=league_baseline,
@@ -947,8 +978,12 @@ def build_fixture_blocks():
             offu=off_u,
         )
 
-        s_ph, s_pd, s_pa, s_po, s_pu = market_snap_probs(m_ph, m_pd, m_pa, m_po, m_pu, off_1, off_x, off_2, off_o, off_u)
+        # 2) SNAP probs (display-only)
+        s_ph, s_pd, s_pa, s_po, s_pu = market_snap_probs(
+            m_ph, m_pd, m_pa, m_po, m_pu, off_1, off_x, off_2, off_o, off_u
+        )
 
+        # FAIR + VALUE from MODEL probs
         fair_1 = implied(m_ph)
         fair_x = implied(m_pd)
         fair_2 = implied(m_pa)
@@ -961,6 +996,14 @@ def build_fixture_blocks():
         vo = value_pct(off_o, fair_over)
         vu = value_pct(off_u, fair_under)
 
+        # EV (prob * odds - 1) — as requested ("probability, απόδοση μείον 1")
+        ev1 = ev_per_unit(m_ph, off_1)
+        evx = ev_per_unit(m_pd, off_x)
+        ev2 = ev_per_unit(m_pa, off_2)
+        evo = ev_per_unit(m_po, off_o)
+        evu = ev_per_unit(m_pu, off_u)
+
+        # -------------------- SELECTION HINTS (NO MODEL DISTORTION) --------------------
         ltot = (lam_h or 0.0) + (lam_a or 0.0)
         tight_game = (m_pd >= TIGHT_DRAW_THRESHOLD) or (ltot <= TIGHT_LTOTAL_THRESHOLD)
         low_tempo = league_name in LOW_TEMPO_LEAGUES
@@ -971,11 +1014,11 @@ def build_fixture_blocks():
         if low_tempo:
             over_penalty_pts += OVER_LOW_TEMPO_EXTRA_PENALTY_PTS
 
-        # selection_value_pct_over is ALREADY adjusted (vo - penalty)
         selection_vo = None
         if vo is not None:
             selection_vo = round(vo - over_penalty_pts, 1)
 
+        # Confidence & core/fun candidate hints (stored only in flags)
         conf = _confidence_score(home_stats, away_stats, match_debug, lam_h, lam_a)
         conf_band = "high" if conf >= 0.70 else ("mid" if conf >= 0.55 else "low")
 
@@ -998,6 +1041,7 @@ def build_fixture_blocks():
             "fun_over": _candidate(off_o, vo, m_po, FUN_ODDS_MIN, FUN_ODDS_MAX, FUN_VALUE_MIN_PCT, FUN_MIN_PROB),
             "fun_under": _candidate(off_u, vu, m_pu, FUN_ODDS_MIN, FUN_ODDS_MAX, FUN_VALUE_MIN_PCT, FUN_MIN_PROB),
         }
+        # ---------------------------------------------------------------------------
 
         dt = fx["commence_utc"]
 
@@ -1015,12 +1059,14 @@ def build_fixture_blocks():
                 "lambda_home": round(lam_h, 3),
                 "lambda_away": round(lam_a, 3),
 
+                # MODEL probabilities (used for fair/value)
                 "home_prob": round(m_ph, 3),
                 "draw_prob": round(m_pd, 3),
                 "away_prob": round(m_pa, 3),
                 "over_2_5_prob": round(m_po, 3),
                 "under_2_5_prob": round(m_pu, 3),
 
+                # SNAP probabilities (display only)
                 "snap_home_prob": round(s_ph, 3),
                 "snap_draw_prob": round(s_pd, 3),
                 "snap_away_prob": round(s_pa, 3),
@@ -1039,19 +1085,25 @@ def build_fixture_blocks():
                 "offered_over_2_5": off_o,
                 "offered_under_2_5": off_u,
 
+                # VALUE% computed from MODEL fair (correct)
                 "value_pct_1": v1,
                 "value_pct_x": vx,
                 "value_pct_2": v2,
                 "value_pct_over": vo,
                 "value_pct_under": vu,
 
-                # EV per 1 unit (schema-safe additions)
-                "ev_1": _ev(m_ph, off_1),
-                "ev_x": _ev(m_pd, off_x),
-                "ev_2": _ev(m_pa, off_2),
-                "ev_over": _ev(m_po, off_o),
-                "ev_under": _ev(m_pu, off_u),
+                # EV (prob * odds - 1) — additive fields
+                "ev_1": ev1,
+                "ev_x": evx,
+                "ev_2": ev2,
+                "ev_over": evo,
+                "ev_under": evu,
 
+                # Aliases expected by the Custom GPT Thursday table
+                "score_draw": evx,
+                "score_over": evo,
+
+                # Selection-only hints (for Friday shortlist / allocation)
                 "selection_value_pct_over": selection_vo,
                 "over_value_penalty_pts": round(over_penalty_pts, 2),
                 "flags": flags,
@@ -1081,7 +1133,7 @@ def main():
     with open("logs/thursday_report_v3.json", "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, indent=2)
 
-    log(f"✅ Thursday v3 STABILIZED READY. Fixtures: {len(fixtures)}")
+    log(f"✅ Thursday v3 FULL READY. Fixtures: {len(fixtures)}")
 
 
 if __name__ == "__main__":
