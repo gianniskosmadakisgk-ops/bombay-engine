@@ -8,13 +8,16 @@ import re
 from dateutil import parser
 
 # ============================================================
-#  BOMBAY THURSDAY ENGINE v3 (STABILIZED) — FIXED
-#  KEY FIXES:
-#   1) VALUE% computed from MODEL probabilities (post-stabilization, PRE market-snap)
-#   2) Market-snap probabilities are saved separately as snap_* fields (display-only)
-#  NEW (Selection-Hints Layer):
-#   3) Adds flags + penalty-adjusted "selection_value_pct_over"
-#      WITHOUT altering model probs or fair odds.
+#  BOMBAY THURSDAY ENGINE v3 (STABILIZED) — DROP-IN REPLACEMENT
+#
+#  Output contract:
+#   - Writes logs/thursday_report_v3.json
+#   - Keeps existing fixture JSON keys intact (schema-safe)
+#
+#  Integrations from the new research notes:
+#   A) "Form" → rolling, recency-weighted last-5 goals (still shrinkage-stabilized)
+#   B) Value/Confidence layer → adds confidence + core/fun candidate hints (in flags only)
+#   C) Keeps: Poisson + Dixon-Coles + stabilization; market-snap is display-only
 # ============================================================
 
 API_FOOTBALL_KEY = os.getenv("FOOTBALL_API_KEY")
@@ -83,6 +86,17 @@ OVER_TIGHT_PENALTY_PTS = float(os.getenv("OVER_TIGHT_PENALTY_PTS", "12.0"))
 
 # Optional extra penalty for low-tempo leagues (points)
 OVER_LOW_TEMPO_EXTRA_PENALTY_PTS = float(os.getenv("OVER_LOW_TEMPO_EXTRA_PENALTY_PTS", "6.0"))
+
+# ---- Core/Fun candidate hints (Thursday → Friday uses them, but stored only in flags) ----
+# From research notes: core ~ odds 1.50–1.90 & value >= 10%; fun ~ odds 2.10–4.00 & value >= 5%
+CORE_ODDS_MIN = float(os.getenv("CORE_ODDS_MIN", "1.50"))
+CORE_ODDS_MAX = float(os.getenv("CORE_ODDS_MAX", "1.90"))
+CORE_VALUE_MIN_PCT = float(os.getenv("CORE_VALUE_MIN_PCT", "10.0"))
+
+FUN_ODDS_MIN = float(os.getenv("FUN_ODDS_MIN", "2.10"))
+FUN_ODDS_MAX = float(os.getenv("FUN_ODDS_MAX", "4.00"))
+FUN_VALUE_MIN_PCT = float(os.getenv("FUN_VALUE_MIN_PCT", "5.0"))
+FUN_MIN_PROB = float(os.getenv("FUN_MIN_PROB", "0.25"))  # avoid lottery tickets by default
 # ---------------------------------------------------------------------------
 
 LEAGUES = {
@@ -243,7 +257,25 @@ def fetch_fixtures(league_id: int, league_name: str):
 
 
 # ------------------------- TEAM RECENT GOALS (API-FOOTBALL) -------------------------
+def _recency_weights(n: int):
+    """
+    Recency weights for last-n (n<=5 ideally). Most recent gets max weight.
+    """
+    base = [1.0, 0.85, 0.72, 0.61, 0.52]
+    w = base[: max(0, min(5, n))]
+    s = sum(w) if w else 1.0
+    return [x / s for x in w]
+
+
 def fetch_team_recent_stats(team_id: int, league_id: int, want_home_context: bool = None):
+    """
+    Returns a small stats dict used by the model:
+      - matches_count
+      - avg_goals_for
+      - avg_goals_against
+    New: averages are recency-weighted over last 5 games (form layer),
+    but still shrinkage-stabilized later to avoid overreaction.
+    """
     ck = (team_id, league_id, want_home_context)
     if ck in TEAM_STATS_CACHE:
         return TEAM_STATS_CACHE[ck]
@@ -267,6 +299,7 @@ def fetch_team_recent_stats(team_id: int, league_id: int, want_home_context: boo
         TEAM_STATS_CACHE[ck] = {}
         return TEAM_STATS_CACHE[ck]
 
+    # Optional home/away context filter
     resp = []
     if want_home_context is None:
         resp = resp_all
@@ -280,23 +313,43 @@ def fetch_team_recent_stats(team_id: int, league_id: int, want_home_context: boo
         if len(resp) < 3:
             resp = resp_all
 
-    gf = ga = m = 0
-    for fx in resp[:5]:
-        m += 1
-        g_home = fx["goals"]["home"] or 0
-        g_away = fx["goals"]["away"] or 0
+    # Use last 5 (as per research notes), but weighted by recency
+    sample = resp[:5]
+    m = len(sample)
+    if m == 0:
+        TEAM_STATS_CACHE[ck] = {}
+        return TEAM_STATS_CACHE[ck]
+
+    w = _recency_weights(m)
+
+    gf = ga = 0.0
+    gf_raw = ga_raw = 0
+    for idx, fx in enumerate(sample):
+        g_home = fx.get("goals", {}).get("home")
+        g_away = fx.get("goals", {}).get("away")
+        if g_home is None or g_away is None:
+            continue
+        g_home = int(g_home)
+        g_away = int(g_away)
         is_home = fx["teams"]["home"]["id"] == team_id
+
         if is_home:
-            gf += g_home
-            ga += g_away
+            gf_i, ga_i = g_home, g_away
         else:
-            gf += g_away
-            ga += g_home
+            gf_i, ga_i = g_away, g_home
+
+        gf_raw += gf_i
+        ga_raw += ga_i
+        gf += w[idx] * gf_i
+        ga += w[idx] * ga_i
 
     stats = {
         "matches_count": m,
-        "avg_goals_for": (gf / m) if m else None,
-        "avg_goals_against": (ga / m) if m else None,
+        "avg_goals_for": gf,          # weighted mean per match (weights sum to 1)
+        "avg_goals_against": ga,      # weighted mean per match (weights sum to 1)
+        # extras (safe to ignore)
+        "avg_goals_for_unweighted": (gf_raw / m) if m else None,
+        "avg_goals_against_unweighted": (ga_raw / m) if m else None,
     }
     TEAM_STATS_CACHE[ck] = stats
     return stats
@@ -404,6 +457,7 @@ def compute_expected_goals(home_stats: dict, away_stats: dict, league_baseline: 
         k = max(0.0, SHRINKAGE_K)
         denom = (n + k) if (n + k) > 0 else 1.0
 
+        # shrink recent-form averages toward league mean (stability)
         gf_shrunk = (n * gf_mle + k * league_avg_team) / denom
         ga_shrunk = (n * ga_mle + k * league_avg_team) / denom
 
@@ -792,6 +846,53 @@ def market_snap_probs(ph, pd, pa, po, pu, off1, offx, off2, offo, offu):
     return ph2, pd2, pa2, po2, pu2
 
 
+# ------------------------- CONFIDENCE + CANDIDATE HELPERS -------------------------
+def _candidate(offered, v_pct, prob, odds_lo, odds_hi, v_min, p_min=0.0):
+    if offered is None or v_pct is None or prob is None:
+        return False
+    if offered < odds_lo or offered > odds_hi:
+        return False
+    if v_pct < v_min:
+        return False
+    if prob < p_min:
+        return False
+    return True
+
+
+def _confidence_score(home_stats, away_stats, match_debug, lam_h, lam_a):
+    """
+    Returns a 0..1 confidence score. It's intentionally simple and conservative:
+    - more recent games -> more confidence
+    - odds matched -> more confidence
+    - extreme totals (very low/high lambda total) -> lower confidence
+    """
+    n_h = int((home_stats or {}).get("matches_count") or 0)
+    n_a = int((away_stats or {}).get("matches_count") or 0)
+    n = min(n_h, n_a)
+
+    score = 0.40  # base
+
+    # sample size (0..0.20)
+    score += 0.20 * _clamp(n / 5.0, 0.0, 1.0)
+
+    # odds match (0..0.15)
+    if (match_debug or {}).get("matched"):
+        score += 0.15
+
+    # lambda sanity (penalize extremes)
+    ltot = (lam_h or 0.0) + (lam_a or 0.0)
+    if ltot < 2.1:
+        score -= 0.10
+    elif ltot < 2.3:
+        score -= 0.06
+    if ltot > 3.6:
+        score -= 0.08
+    elif ltot > 3.3:
+        score -= 0.05
+
+    return _clamp(score, 0.05, 0.95)
+
+
 # ------------------------- MAIN PIPELINE -------------------------
 def build_fixture_blocks():
     fixtures_out = []
@@ -901,10 +1002,30 @@ def build_fixture_blocks():
         if vo is not None:
             selection_vo = round(vo - over_penalty_pts, 1)
 
+        # Confidence & core/fun candidate hints (stored only in flags)
+        conf = _confidence_score(home_stats, away_stats, match_debug, lam_h, lam_a)
+        conf_band = "high" if conf >= 0.70 else ("mid" if conf >= 0.55 else "low")
+
         flags = {
             "tight_game": bool(tight_game),
             "low_tempo_league": bool(low_tempo),
             "odds_matched": bool(match_debug.get("matched")),
+            "confidence": round(conf, 3),
+            "confidence_band": conf_band,
+
+            # Core candidates (low odds + higher edge)
+            "core_1": _candidate(off_1, v1, m_ph, CORE_ODDS_MIN, CORE_ODDS_MAX, CORE_VALUE_MIN_PCT, 0.0),
+            "core_x": _candidate(off_x, vx, m_pd, CORE_ODDS_MIN, CORE_ODDS_MAX, CORE_VALUE_MIN_PCT, 0.0),
+            "core_2": _candidate(off_2, v2, m_pa, CORE_ODDS_MIN, CORE_ODDS_MAX, CORE_VALUE_MIN_PCT, 0.0),
+            "core_over": _candidate(off_o, vo, m_po, CORE_ODDS_MIN, CORE_ODDS_MAX, CORE_VALUE_MIN_PCT, 0.0),
+            "core_under": _candidate(off_u, vu, m_pu, CORE_ODDS_MIN, CORE_ODDS_MAX, CORE_VALUE_MIN_PCT, 0.0),
+
+            # Fun candidates (higher odds + smaller edge, but with prob floor)
+            "fun_1": _candidate(off_1, v1, m_ph, FUN_ODDS_MIN, FUN_ODDS_MAX, FUN_VALUE_MIN_PCT, FUN_MIN_PROB),
+            "fun_x": _candidate(off_x, vx, m_pd, FUN_ODDS_MIN, FUN_ODDS_MAX, FUN_VALUE_MIN_PCT, FUN_MIN_PROB),
+            "fun_2": _candidate(off_2, v2, m_pa, FUN_ODDS_MIN, FUN_ODDS_MAX, FUN_VALUE_MIN_PCT, FUN_MIN_PROB),
+            "fun_over": _candidate(off_o, vo, m_po, FUN_ODDS_MIN, FUN_ODDS_MAX, FUN_VALUE_MIN_PCT, FUN_MIN_PROB),
+            "fun_under": _candidate(off_u, vu, m_pu, FUN_ODDS_MIN, FUN_ODDS_MAX, FUN_VALUE_MIN_PCT, FUN_MIN_PROB),
         }
         # ---------------------------------------------------------------------------
 
