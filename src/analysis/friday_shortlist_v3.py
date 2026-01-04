@@ -1,9 +1,13 @@
 # =========================
-# FRIDAY SHORTLIST v3.4 — CORE 800 (3–4 singles + optional double) / FUN 400 (1–3 singles + system)
+# FRIDAY SHORTLIST v3.4.1 — CORE 800 (3–4 singles + optional double) / FUN 400 (1–3 singles + system)
 # Drop-in replacement for: src/analysis/friday_shortlist_v3.py
 #
 # Output: logs/friday_shortlist_v3.json
 # Schema-safe: keeps the same top-level report keys and structures.
+#
+# Fix v3.4.1:
+# - Over value penalty is NOT double-subtracted when selection_value_pct_over is already adjusted.
+# - CORE_MAX_ODDS default tightened to 1.90 (can override via env).
 # =========================
 
 import os
@@ -35,7 +39,7 @@ FUN_MIN_CONFIDENCE  = float(os.getenv("FUN_MIN_CONFIDENCE",  "0.45"))
 CORE_ALLOWED_MARKETS = {"Home", "Away", "Over 2.5", "Under 2.5"}
 
 CORE_MIN_ODDS = float(os.getenv("CORE_MIN_ODDS", "1.50"))
-CORE_MAX_ODDS = float(os.getenv("CORE_MAX_ODDS", "2.20"))
+CORE_MAX_ODDS = float(os.getenv("CORE_MAX_ODDS", "1.90"))  # tightened default
 
 CORE_TARGET_SINGLES = int(os.getenv("CORE_TARGET_SINGLES", "4"))  # 3–4 by default logic below
 CORE_MIN_SINGLES = int(os.getenv("CORE_MIN_SINGLES", "3"))
@@ -102,11 +106,13 @@ MARKET_CODE = {
     "Under 2.5": "U25",
 }
 
+
 def safe_float(v, d=None):
     try:
         return float(v)
     except Exception:
         return d
+
 
 def band_lookup(x, band_map, default=None):
     for (a, b), val in band_map.items():
@@ -114,10 +120,12 @@ def band_lookup(x, band_map, default=None):
             return val
     return default
 
+
 def load_thursday_fixtures():
     with open(THURSDAY_REPORT_PATH, "r", encoding="utf-8") as f:
         data = json.load(f)
     return data["fixtures"], data
+
 
 def odds_match_ok(fx, min_score):
     om = fx.get("odds_match") or {}
@@ -126,6 +134,7 @@ def odds_match_ok(fx, min_score):
     score = safe_float(om.get("score"), 0.0)
     return score >= min_score
 
+
 def confidence_ok(fx, min_conf):
     flags = fx.get("flags") or {}
     c = safe_float(flags.get("confidence"), None)
@@ -133,19 +142,32 @@ def confidence_ok(fx, min_conf):
         return True  # if missing, don't block
     return c >= min_conf
 
-def _get_over_value_and_penalty(fx):
-    v_raw = fx.get("selection_value_pct_over")
-    if v_raw is None:
-        v_raw = fx.get("value_pct_over")
-    v_raw = safe_float(v_raw, None)
 
+def _get_over_value_and_penalty(fx):
+    """Return (val_raw, penalty_pts, val_adj) for Over 2.5.
+
+    Contract:
+    - If selection_value_pct_over exists, it is treated as ALREADY adjusted.
+      We keep penalty_pts for transparency but do NOT subtract again.
+    - Otherwise we fall back to value_pct_over and subtract penalty_pts (if present).
+    """
+    sel = fx.get("selection_value_pct_over")
     pen = safe_float(fx.get("over_value_penalty_pts"), 0.0) or 0.0
 
+    if sel is not None:
+        v = safe_float(sel, None)
+        if v is None:
+            return None, 0.0, None
+        return v, pen, v
+
+    v_raw = fx.get("value_pct_over")
+    v_raw = safe_float(v_raw, None)
     if v_raw is None:
         return None, 0.0, None
 
     v_adj = v_raw - pen
     return v_raw, pen, v_adj
+
 
 def build_rows(fixtures):
     rows = []
@@ -197,6 +219,7 @@ def build_rows(fixtures):
             })
     return rows
 
+
 def scale_stakes(items, cap_amount, stake_key="stake"):
     total = sum(safe_float(x.get(stake_key), 0.0) for x in items)
     if total <= 0:
@@ -209,7 +232,9 @@ def scale_stakes(items, cap_amount, stake_key="stake"):
         x[stake_key] = round(safe_float(x.get(stake_key), 0.0) * s, 1)
     return items, s, total
 
+
 # ------------------------- CORE PICKER -------------------------
+
 def core_single_stake(odds: float) -> float:
     # 40–50 zone, slightly odds-weighted
     if odds <= 1.65:
@@ -218,11 +243,9 @@ def core_single_stake(odds: float) -> float:
         return CORE_STAKE_MID
     return CORE_STAKE_LOW
 
+
 def _core_flag_match(fx_flags, market: str) -> bool:
-    """
-    Thursday flags optionally mark "core_1/core_2/core_over/core_under".
-    If present and True, we treat as strong hint. If missing, ignore.
-    """
+    """Thursday flags optionally mark core_1/core_2/core_over/core_under."""
     if not fx_flags:
         return False
     if market == "Home":
@@ -234,6 +257,7 @@ def _core_flag_match(fx_flags, market: str) -> bool:
     if market == "Under 2.5":
         return bool(fx_flags.get("core_under"))
     return False
+
 
 def pick_core(rows, fixtures_by_id):
     core_candidates = []
@@ -262,7 +286,6 @@ def pick_core(rows, fixtures_by_id):
         stake = core_single_stake(r["odds"])
         core_candidates.append({**r, "stake": float(stake), "tag": "core"})
 
-    # Sort: prioritize value_adj, then confidence (if exists), then prob
     def _conf(x):
         return safe_float((x.get("flags") or {}).get("confidence"), 0.0)
 
@@ -281,7 +304,6 @@ def pick_core(rows, fixtures_by_id):
 
     # Ensure minimum 3 if possible
     if len(core_singles) < CORE_MIN_SINGLES:
-        # try to fill up to min from remaining candidates (still unique match)
         for r in core_candidates:
             if r["match"] in used_matches:
                 continue
@@ -290,7 +312,7 @@ def pick_core(rows, fixtures_by_id):
             if len(core_singles) >= CORE_MIN_SINGLES:
                 break
 
-    # Optional double from low-odds legs (<=1.55), prefer different matches
+    # Optional double from low-odds legs (<=1.55)
     def best_double(pool):
         best = None
         best_score = -1e18
@@ -319,7 +341,6 @@ def pick_core(rows, fixtures_by_id):
     # Stakes & cap management (include double stake in exposure)
     cap_amount = BANKROLL_CORE * CORE_EXPOSURE_CAP
 
-    # set double stake (30–40) if exists
     double_stake = 0.0
     if core_double:
         base = 0.045 * BANKROLL_CORE
@@ -329,18 +350,15 @@ def pick_core(rows, fixtures_by_id):
     singles_total = sum(x["stake"] for x in core_singles)
     open_total = singles_total + double_stake
 
-    # If over cap, scale singles first, then double if still over
     core_scale = 1.0
     if open_total > cap_amount and singles_total > 0:
-        # keep double as-is first, scale singles into remaining cap
         remaining_for_singles = max(0.0, cap_amount - double_stake)
         if remaining_for_singles <= 0:
-            remaining_for_singles = cap_amount  # fallback: scale everything together later
+            remaining_for_singles = cap_amount
         core_singles, core_scale, _ = scale_stakes(core_singles, remaining_for_singles, "stake")
         singles_total = sum(x["stake"] for x in core_singles)
         open_total = singles_total + double_stake
 
-    # Still over cap? scale double too
     if open_total > cap_amount and core_double and double_stake > 0:
         s = cap_amount / open_total if open_total > 0 else 1.0
         for x in core_singles:
@@ -361,11 +379,11 @@ def pick_core(rows, fixtures_by_id):
     }
     return core_singles, core_double, core_meta
 
+
 # ------------------------- FUN: STAKES -------------------------
+
 def fun_single_stake(odds: float) -> float:
-    """
-    New plan: 6–8€ each.
-    """
+    # New plan: 6–8€ each.
     if odds <= 2.30:
         return 8.0
     if odds <= 3.20:
@@ -374,10 +392,8 @@ def fun_single_stake(odds: float) -> float:
         return 6.0
     return 0.0
 
+
 def _fun_flag_match(fx_flags, market: str) -> bool:
-    """
-    Thursday flags optionally mark "fun_1/fun_x/fun_2/fun_over/fun_under".
-    """
     if not fx_flags:
         return False
     if market == "Home":
@@ -392,10 +408,9 @@ def _fun_flag_match(fx_flags, market: str) -> bool:
         return bool(fx_flags.get("fun_under"))
     return False
 
+
 def _choose_fun_system(n: int):
-    """
-    Align with notes: prefer 3/n for ~5 picks, 4/n for ~6 picks.
-    """
+    # Align with notes: prefer 3/n for ~5 picks, 4/n for ~6 picks.
     if n >= 6:
         return 4, f"4/{n}"
     if n >= 5:
@@ -406,7 +421,9 @@ def _choose_fun_system(n: int):
         return 2, f"2/{n}"
     return None, None
 
+
 # ------------------------- FUN PICKER -------------------------
+
 def pick_fun(rows, fixtures_by_id, core_singles):
     core_fixture_ids = {x["fixture_id"] for x in core_singles}
 
@@ -428,7 +445,6 @@ def pick_fun(rows, fixtures_by_id, core_singles):
         max_odds = FUN_MAX_ODDS_BY_MARKET.get(r["market"], 3.00)
         hinted = _fun_flag_match(r.get("flags") or {}, r["market"])
 
-        # Odds gate: if hinted, allow a bit looser; otherwise enforce.
         if not hinted:
             if r["odds"] < FUN_MIN_ODDS_DEFAULT or r["odds"] > max_odds:
                 continue
@@ -436,11 +452,9 @@ def pick_fun(rows, fixtures_by_id, core_singles):
             if r["odds"] < (FUN_MIN_ODDS_DEFAULT - 0.20) or r["odds"] > (max_odds + 0.40):
                 continue
 
-        # Value gate
         if r["value_adj"] < FUN_MIN_VALUE_PCT:
             continue
 
-        # Prob floor (soft): if hinted allow slightly lower
         pmin = FUN_MIN_PROB - (0.03 if hinted else 0.0)
         if r["prob"] < pmin:
             continue
@@ -479,7 +493,6 @@ def pick_fun(rows, fixtures_by_id, core_singles):
             "stake": float(st),
         })
 
-    # ensure at least 1 single if possible (fallback)
     if len(fun_singles) < FUN_MIN_SINGLES and fun_picks:
         r = fun_picks[0]
         st = fun_single_stake(r["odds"])
@@ -497,7 +510,6 @@ def pick_fun(rows, fixtures_by_id, core_singles):
                 "stake": float(st),
             })
 
-    # ---- system pool: remaining picks (exclude singles) ----
     single_ids = {x["pick_id"] for x in fun_singles}
     remaining = [r for r in fun_picks if f'{r["fixture_id"]}:{r["market_code"]}' not in single_ids]
 
@@ -512,7 +524,6 @@ def pick_fun(rows, fixtures_by_id, core_singles):
     cap_singles = cap_amount * FUN_CAP_SPLIT_SINGLES
     cap_system  = cap_amount * (1.0 - FUN_CAP_SPLIT_SINGLES)
 
-    # scale singles into cap_singles if needed
     singles_total = sum(x["stake"] for x in fun_singles)
     singles_scale = 1.0
     if singles_total > 0 and singles_total > cap_singles:
@@ -520,7 +531,6 @@ def pick_fun(rows, fixtures_by_id, core_singles):
         for x in fun_singles:
             x["stake"] = round(x["stake"] * singles_scale, 1)
 
-    # system unit: aim 0.5–1 per combo, scale down if cap_system tight
     unit = 0.0
     system_stake = 0.0
     system_scale = 1.0
@@ -598,7 +608,7 @@ def pick_fun(rows, fixtures_by_id, core_singles):
             "columns": cols,
             "unit": unit,
             "stake": system_stake,
-            "ev_per_euro": None,  # keep field but not used in this deterministic system mode
+            "ev_per_euro": None,  # deterministic system mode
         },
 
         "open": open_amount,
@@ -615,7 +625,9 @@ def pick_fun(rows, fixtures_by_id, core_singles):
     }
     return payload
 
+
 # ------------------------- MAIN -------------------------
+
 def main():
     fixtures, th_meta = load_thursday_fixtures()
     fixtures_by_id = {fx.get("fixture_id"): fx for fx in fixtures}
@@ -680,6 +692,7 @@ def main():
     os.makedirs("logs", exist_ok=True)
     with open(FRIDAY_REPORT_PATH, "w", encoding="utf-8") as f:
         json.dump(report, f, indent=2, ensure_ascii=False)
+
 
 if __name__ == "__main__":
     main()
