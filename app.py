@@ -15,7 +15,7 @@ def abs_path(rel_path: str) -> str:
     return os.path.join(PROJECT_ROOT, rel_path)
 
 # ------------------------------------------------------
-# Basic admin protection (optional)
+# Basic admin protection (optional but recommended)
 # Set ADMIN_KEY env var on Render (optional)
 # ------------------------------------------------------
 ADMIN_KEY = os.environ.get("ADMIN_KEY", "").strip()
@@ -113,12 +113,6 @@ def load_json_report(report_rel_path: str):
         print(f"⚠️ {msg}", flush=True)
         return None, msg
 
-def save_json_report(report_rel_path: str, payload: dict):
-    full_path = abs_path(report_rel_path)
-    os.makedirs(os.path.dirname(full_path), exist_ok=True)
-    with open(full_path, "w", encoding="utf-8") as f:
-        json.dump(payload, f, ensure_ascii=False, indent=2)
-
 # ------------------------------------------------------
 # HEALTHCHECK
 # ------------------------------------------------------
@@ -131,7 +125,7 @@ def healthcheck():
     })
 
 # ------------------------------------------------------
-# MANUAL RUN ENDPOINTS (admin)
+# MANUAL RUN ENDPOINTS (protected if ADMIN_KEY set)
 # ------------------------------------------------------
 @app.route("/run/thursday-v3", methods=["GET"])
 def manual_run_thursday_v3():
@@ -149,6 +143,7 @@ def manual_run_friday_shortlist_v3():
     r = run_script("src/analysis/friday_shortlist_v3.py")
     return jsonify({**r, "status": "ok" if r["ok"] else "error", "timestamp": datetime.utcnow().isoformat()})
 
+# NEW: Tuesday Recap v3 runner
 @app.route("/run/tuesday-recap-v3", methods=["GET"])
 def manual_run_tuesday_recap_v3():
     guard = require_admin()
@@ -157,42 +152,13 @@ def manual_run_tuesday_recap_v3():
     r = run_script("src/analysis/tuesday_recap_v3.py")
     return jsonify({**r, "status": "ok" if r["ok"] else "error", "timestamp": datetime.utcnow().isoformat()})
 
-# ------------------------------------------------------
-# UPLOAD ENDPOINT (admin)
-# Χρήσιμο στο free Render: ανεβάζεις παλιό Friday JSON -> μετά τρέχεις Tuesday recap.
-# ------------------------------------------------------
-@app.route("/upload/friday-shortlist-v3", methods=["POST"])
-def upload_friday_shortlist_v3():
-    guard = require_admin()
-    if guard:
-        return guard
-
-    if not request.is_json:
-        return jsonify({
-            "status": "error",
-            "message": "Expected application/json body",
-            "timestamp": datetime.utcnow().isoformat()
-        }), 400
-
-    payload = request.get_json(silent=True)
-    if payload is None:
-        return jsonify({
-            "status": "error",
-            "message": "Invalid JSON body",
-            "timestamp": datetime.utcnow().isoformat()
-        }), 400
-
-    # γράφει ακριβώς στο path που περιμένει το Tuesday Recap v3
-    save_json_report("logs/friday_shortlist_v3.json", payload)
-
-    return jsonify({
-        "status": "ok",
-        "message": "Saved logs/friday_shortlist_v3.json",
-        "timestamp": datetime.utcnow().isoformat()
-    })
+# Alias (so you can also hit /run/tuesday-recap)
+@app.route("/run/tuesday-recap", methods=["GET"])
+def manual_run_tuesday_recap_alias():
+    return manual_run_tuesday_recap_v3()
 
 # ------------------------------------------------------
-# DOWNLOAD ENDPOINTS (admin)
+# DOWNLOAD ENDPOINTS (protected if ADMIN_KEY set)
 # ------------------------------------------------------
 @app.route("/download/thursday-report-v3", methods=["GET"])
 def download_thursday_report_v3():
@@ -224,6 +190,23 @@ def download_friday_shortlist_v3():
         }), 404
     return send_file(full_path, mimetype="application/json", as_attachment=True)
 
+# Keep old v2 download (backwards)
+@app.route("/download/tuesday-recap-v2", methods=["GET"])
+def download_tuesday_recap_v2():
+    guard = require_admin()
+    if guard:
+        return guard
+    full_path = abs_path("logs/tuesday_recap_v2.json")
+    if not os.path.exists(full_path):
+        return jsonify({
+            "status": "error",
+            "message": "Tuesday recap v2 file not found",
+            "path": full_path,
+            "timestamp": datetime.utcnow().isoformat()
+        }), 404
+    return send_file(full_path, mimetype="application/json", as_attachment=True)
+
+# New v3 download
 @app.route("/download/tuesday-recap-v3", methods=["GET"])
 def download_tuesday_recap_v3():
     guard = require_admin()
@@ -240,7 +223,8 @@ def download_tuesday_recap_v3():
     return send_file(full_path, mimetype="application/json", as_attachment=True)
 
 # ------------------------------------------------------
-# FAST REPORT-ONLY ENDPOINTS (public) — δεν τρέχουν scripts
+# FAST "REPORT ONLY" ENDPOINTS (public - DO NOT run scripts)
+# These are what a Custom GPT should call.
 # ------------------------------------------------------
 @app.route("/thursday-report-v3", methods=["GET"])
 def api_thursday_report_v3():
@@ -260,15 +244,15 @@ def api_friday_report_v3():
     if report is None:
         return jsonify({
             "status": "error",
-            "message": "Friday report not available",
+            "message": "Friday shortlist v3 not available",
             "error": error,
             "timestamp": datetime.utcnow().isoformat(),
         }), 404
     return jsonify(report)
 
 # ------------------------------------------------------
-# GPT ACTION ENDPOINTS (public) — ΜΟΝΟ return JSON (no run)
-# αυτά πρέπει να χτυπάει το Custom GPT
+# GPT ENDPOINTS (public)
+# IMPORTANT: these endpoints return SAVED JSON only (no runs).
 # ------------------------------------------------------
 @app.route("/thursday-analysis-v3", methods=["GET"])
 def api_thursday_analysis_v3():
@@ -294,7 +278,7 @@ def api_friday_shortlist_v3():
     if report is None:
         return jsonify({
             "status": "error",
-            "message": "Friday report not available",
+            "message": "Friday shortlist v3 not available",
             "error": error,
             "timestamp": datetime.utcnow().isoformat(),
             "report": None
@@ -306,10 +290,9 @@ def api_friday_shortlist_v3():
         "report": report
     })
 
-# IMPORTANT: κρατάμε το path /tuesday-recap (γιατί αυτό έχεις στα Actions)
-# αλλά δείχνει v3 αρχείο
 @app.route("/tuesday-recap", methods=["GET"])
 def api_tuesday_recap():
+    # IMPORTANT: v3 is the primary recap file from now on
     report, error = load_json_report("logs/tuesday_recap_v3.json")
     if report is None:
         return jsonify({
@@ -319,12 +302,16 @@ def api_tuesday_recap():
             "timestamp": datetime.utcnow().isoformat(),
             "report": None
         }), 404
-
     return jsonify({
         "status": "ok",
         "timestamp": datetime.utcnow().isoformat(),
         "report": report
     })
+
+# Optional explicit v3 read endpoint
+@app.route("/tuesday-recap-v3", methods=["GET"])
+def api_tuesday_recap_v3():
+    return api_tuesday_recap()
 
 # ------------------------------------------------------
 # ENTRY POINT
