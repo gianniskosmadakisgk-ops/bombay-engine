@@ -1166,8 +1166,8 @@ def build_fixture_blocks():
     log(f"Thursday fixtures_out: {len(fixtures_out)} | odds matched: {matched_cnt}")
     try:
         from collections import Counter
-        c = Counter([f.get(\"league\") for f in fixtures_out])
-        log(f\"Fixtures per league: {dict(c)}\")
+        c = Counter([f.get("league") for f in fixtures_out])
+        log(f"Fixtures per league: {dict(c)}")
     except Exception:
         pass
     return fixtures_out
