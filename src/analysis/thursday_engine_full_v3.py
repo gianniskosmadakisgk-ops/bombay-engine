@@ -203,108 +203,58 @@ def jaccard(a: set, b: set) -> float:
 
 # ------------------------- FIXTURES (API-FOOTBALL) -------------------------
 def fetch_fixtures(league_id: int, league_name: str):
-    """
-    FULL-SLATE FIX:
-    Fetch only upcoming fixtures inside the WINDOW_HOURS range using API-side filters
-    (status=NS + from/to), with pagination support.
-
-    This avoids the classic "season pagination" issue where you only get a partial page and
-    end up with very few fixtures after client-side window filtering.
-    """
     if not API_FOOTBALL_KEY:
         log("❌ Missing FOOTBALL_API_KEY – NO fixtures will be fetched!")
         return []
 
     url = f"{API_FOOTBALL_BASE}/fixtures"
+    params = {"league": league_id, "season": FOOTBALL_SEASON}
 
-    now = datetime.datetime.now(datetime.timezone.utc)
-    to_dt = now + datetime.timedelta(hours=WINDOW_HOURS)
+    try:
+        r = requests.get(url, headers=HEADERS_FOOTBALL, params=params, timeout=25).json()
+    except Exception as e:
+        log(f"⚠️ Error fetching fixtures for {league_name}: {e}")
+        return []
 
-    base_params = {
-        "league": league_id,
-        "season": FOOTBALL_SEASON,
-        "status": "NS",
-        "from": now.date().isoformat(),
-        "to": to_dt.date().isoformat(),
-        "timezone": "UTC",
-    }
+    resp = r.get("response") or []
+    if not resp:
+        return []
 
     out = []
-    total_raw = 0
+    now = datetime.datetime.now(datetime.timezone.utc)
 
-    page = 1
-    total_pages = None
+    for fx in resp:
+        if fx["fixture"]["status"]["short"] != "NS":
+            continue
 
-    while True:
-        params = dict(base_params)
-        params["page"] = page
+        dt = parser.isoparse(fx["fixture"]["date"]).astimezone(datetime.timezone.utc)
+        diff_hours = (dt - now).total_seconds() / 3600.0
+        if not (0 <= diff_hours <= WINDOW_HOURS):
+            continue
 
-        try:
-            r = requests.get(url, headers=HEADERS_FOOTBALL, params=params, timeout=25).json()
-        except Exception as e:
-            log(f"⚠️ Error fetching fixtures for {league_name} (page={page}): {e}")
-            break
+        home = fx["teams"]["home"]
+        away = fx["teams"]["away"]
 
-        resp = r.get("response") or []
-        paging = r.get("paging") or {}
-        if total_pages is None:
-            tp = paging.get("total")
-            try:
-                total_pages = int(tp) if tp is not None else None
-            except Exception:
-                total_pages = None
+        out.append(
+            {
+                "id": fx["fixture"]["id"],
+                "league_id": league_id,
+                "league_name": league_name,
+                "home": home["name"],
+                "away": away["name"],
+                "home_id": home["id"],
+                "away_id": away["id"],
+                "home_norm": normalize_team_name(home["name"]),
+                "away_norm": normalize_team_name(away["name"]),
+                "date_raw": fx["fixture"]["date"],
+                "commence_utc": dt,
+            }
+        )
 
-        if not resp:
-            # no more results
-            break
-
-        total_raw += len(resp)
-
-        for fx in resp:
-            # Defensive: status should already be NS because of API filter
-            try:
-                if (fx.get("fixture", {}).get("status", {}) or {}).get("short") != "NS":
-                    continue
-            except Exception:
-                pass
-
-            try:
-                dt = parser.isoparse(fx["fixture"]["date"]).astimezone(datetime.timezone.utc)
-            except Exception:
-                continue
-
-            diff_hours = (dt - now).total_seconds() / 3600.0
-            if not (0 <= diff_hours <= WINDOW_HOURS):
-                continue
-
-            home = fx["teams"]["home"]
-            away = fx["teams"]["away"]
-
-            out.append(
-                {
-                    "id": fx["fixture"]["id"],
-                    "league_id": league_id,
-                    "league_name": league_name,
-                    "home": home["name"],
-                    "away": away["name"],
-                    "home_id": home["id"],
-                    "away_id": away["id"],
-                    "home_norm": normalize_team_name(home["name"]),
-                    "away_norm": normalize_team_name(away["name"]),
-                    "date_raw": fx["fixture"]["date"],
-                    "commence_utc": dt,
-                }
-            )
-
-        # pagination stop
-        if total_pages is not None and page >= total_pages:
-            break
-        page += 1
-        if page > 20:  # hard guardrail (should never happen for a 72h window)
-            break
-
-    log(f"→ {league_name}: API returned {total_raw} fixtures (NS, ranged) | kept {len(out)} within {WINDOW_HOURS}h")
+    log(f"→ {league_name}: {len(out)} fixtures within window")
     return out
+
+
 # ------------------------- TEAM RECENT GOALS (API-FOOTBALL) -------------------------
 def _recency_weights(n: int):
     """
@@ -1164,12 +1114,6 @@ def build_fixture_blocks():
         )
 
     log(f"Thursday fixtures_out: {len(fixtures_out)} | odds matched: {matched_cnt}")
-    try:
-        from collections import Counter
-        c = Counter([f.get("league") for f in fixtures_out])
-        log(f"Fixtures per league: {dict(c)}")
-    except Exception:
-        pass
     return fixtures_out
 
 
