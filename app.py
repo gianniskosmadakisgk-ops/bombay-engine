@@ -14,6 +14,8 @@ PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 def abs_path(rel_path: str) -> str:
     return os.path.join(PROJECT_ROOT, rel_path)
 
+LOGS_DIR = abs_path("logs")
+
 # ------------------------------------------------------
 # Basic admin protection (optional)
 # Set ADMIN_KEY env var on Render (optional)
@@ -21,7 +23,6 @@ def abs_path(rel_path: str) -> str:
 ADMIN_KEY = os.environ.get("ADMIN_KEY", "").strip()
 
 def require_admin():
-    # If ADMIN_KEY is not set, protection is disabled
     if not ADMIN_KEY:
         return None
     if request.headers.get("X-ADMIN-KEY") != ADMIN_KEY:
@@ -113,12 +114,36 @@ def load_json_report(report_rel_path: str):
         print(f"⚠️ {msg}", flush=True)
         return None, msg
 
+def atomic_write_json(full_path: str, obj: dict):
+    os.makedirs(os.path.dirname(full_path) or ".", exist_ok=True)
+    tmp_path = full_path + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(obj, f, ensure_ascii=False, indent=2)
+    os.replace(tmp_path, full_path)
+
 def save_json_report(report_rel_path: str, obj: dict):
     full_path = abs_path(report_rel_path)
-    os.makedirs(os.path.dirname(full_path) or ".", exist_ok=True)
-    with open(full_path, "w", encoding="utf-8") as f:
-        json.dump(obj, f, ensure_ascii=False, indent=2)
+    atomic_write_json(full_path, obj)
     return full_path
+
+def list_logs_dir():
+    try:
+        if not os.path.exists(LOGS_DIR):
+            return {"exists": False, "path": LOGS_DIR, "files": []}
+        files = []
+        for name in sorted(os.listdir(LOGS_DIR)):
+            p = os.path.join(LOGS_DIR, name)
+            try:
+                files.append({
+                    "name": name,
+                    "size": os.path.getsize(p),
+                    "mtime": datetime.utcfromtimestamp(os.path.getmtime(p)).isoformat() + "Z"
+                })
+            except Exception:
+                files.append({"name": name})
+        return {"exists": True, "path": LOGS_DIR, "files": files}
+    except Exception as e:
+        return {"exists": None, "path": LOGS_DIR, "error": str(e), "files": []}
 
 # ------------------------------------------------------
 # HEALTHCHECK
@@ -132,7 +157,24 @@ def healthcheck():
     })
 
 # ------------------------------------------------------
-# UPLOAD (for free Render: re-inject Friday JSON before Tuesday)
+# DEBUG: τι υπάρχει μέσα στο logs/ ΤΩΡΑ (στο instance που χτυπάς)
+# ------------------------------------------------------
+@app.route("/debug/logs", methods=["GET"])
+def debug_logs():
+    # άστο public για τώρα. Αν βάλεις ADMIN_KEY, θα στο προστατεύει αυτόματα.
+    guard = require_admin()
+    if guard:
+        return guard
+    return jsonify({
+        "status": "ok",
+        "timestamp": datetime.utcnow().isoformat(),
+        "cwd": os.getcwd(),
+        "project_root": PROJECT_ROOT,
+        "logs": list_logs_dir(),
+    })
+
+# ------------------------------------------------------
+# UPLOAD UI (writes directly into logs/)
 # ------------------------------------------------------
 UPLOAD_HTML = """<!doctype html>
 <html>
@@ -150,7 +192,7 @@ UPLOAD_HTML = """<!doctype html>
 <body>
   <div class="box">
     <h2>Upload JSON into server logs</h2>
-    <p>Ανεβάζεις JSON ώστε να υπάρχει στο <code>logs/</code> του server (free Render μπορεί να τα “χάνει”).</p>
+    <p>Ανεβάζεις JSON ώστε να υπάρχει στο <code>logs/</code> του server.</p>
 
     <form method="post" action="/upload" enctype="multipart/form-data">
       <label>Τύπος report</label>
@@ -167,12 +209,7 @@ UPLOAD_HTML = """<!doctype html>
     </form>
 
     <hr/>
-    <p><b>Manual σειρά:</b></p>
-    <ol>
-      <li><code>/run/thursday-v3</code></li>
-      <li><code>/run/friday-shortlist-v3</code></li>
-      <li><code>/run/tuesday-recap</code></li>
-    </ol>
+    <p>Debug: <code>/debug/logs</code></p>
   </div>
 </body>
 </html>
@@ -208,15 +245,24 @@ def upload_post():
         return jsonify({"status": "error", "message": "invalid kind", "timestamp": datetime.utcnow().isoformat()}), 400
 
     full = save_json_report(rel, payload)
+
+    # VERIFY
+    exists = os.path.exists(full)
+    size = os.path.getsize(full) if exists else None
+    logs_listing = list_logs_dir()
+
     return jsonify({
         "status": "ok",
+        "timestamp": datetime.utcnow().isoformat(),
         "saved_to": rel,
         "full_path": full,
-        "timestamp": datetime.utcnow().isoformat()
+        "exists_after_write": exists,
+        "size_bytes": size,
+        "logs_dir": logs_listing,
     })
 
 # ------------------------------------------------------
-# MANUAL RUN ENDPOINTS (protected if ADMIN_KEY set)
+# MANUAL RUN ENDPOINTS
 # ------------------------------------------------------
 @app.route("/run/thursday-v3", methods=["GET"])
 def manual_run_thursday_v3():
@@ -247,7 +293,7 @@ def manual_run_tuesday_recap_alias():
     return manual_run_tuesday_recap_v3()
 
 # ------------------------------------------------------
-# DOWNLOAD ENDPOINTS (protected if ADMIN_KEY set)
+# DOWNLOAD ENDPOINTS
 # ------------------------------------------------------
 @app.route("/download/thursday-report-v3", methods=["GET"])
 def download_thursday_report_v3():
@@ -260,6 +306,7 @@ def download_thursday_report_v3():
             "status": "error",
             "message": "Thursday report file not found",
             "path": full_path,
+            "logs_dir": list_logs_dir(),
             "timestamp": datetime.utcnow().isoformat()
         }), 404
     return send_file(full_path, mimetype="application/json", as_attachment=True)
@@ -275,21 +322,7 @@ def download_friday_shortlist_v3():
             "status": "error",
             "message": "Friday shortlist v3 file not found",
             "path": full_path,
-            "timestamp": datetime.utcnow().isoformat()
-        }), 404
-    return send_file(full_path, mimetype="application/json", as_attachment=True)
-
-@app.route("/download/tuesday-recap-v2", methods=["GET"])
-def download_tuesday_recap_v2():
-    guard = require_admin()
-    if guard:
-        return guard
-    full_path = abs_path("logs/tuesday_recap_v2.json")
-    if not os.path.exists(full_path):
-        return jsonify({
-            "status": "error",
-            "message": "Tuesday recap v2 file not found",
-            "path": full_path,
+            "logs_dir": list_logs_dir(),
             "timestamp": datetime.utcnow().isoformat()
         }), 404
     return send_file(full_path, mimetype="application/json", as_attachment=True)
@@ -305,12 +338,13 @@ def download_tuesday_recap_v3():
             "status": "error",
             "message": "Tuesday recap v3 file not found",
             "path": full_path,
+            "logs_dir": list_logs_dir(),
             "timestamp": datetime.utcnow().isoformat()
         }), 404
     return send_file(full_path, mimetype="application/json", as_attachment=True)
 
 # ------------------------------------------------------
-# GPT ENDPOINTS (public - report-only)
+# GPT READ ENDPOINTS (report-only)
 # ------------------------------------------------------
 @app.route("/thursday-analysis-v3", methods=["GET"])
 def api_thursday_analysis_v3():
