@@ -15,7 +15,7 @@ def abs_path(rel_path: str) -> str:
     return os.path.join(PROJECT_ROOT, rel_path)
 
 # ------------------------------------------------------
-# Basic admin protection (optional but recommended)
+# Basic admin protection (optional)
 # Set ADMIN_KEY env var on Render (optional)
 # ------------------------------------------------------
 ADMIN_KEY = os.environ.get("ADMIN_KEY", "").strip()
@@ -94,7 +94,7 @@ def run_script(script_rel_path: str):
         }
 
 # ------------------------------------------------------
-# Load JSON report from logs/
+# Load / Save JSON report from logs/
 # ------------------------------------------------------
 def load_json_report(report_rel_path: str):
     full_path = abs_path(report_rel_path)
@@ -132,7 +132,7 @@ def healthcheck():
     })
 
 # ------------------------------------------------------
-# UPLOAD (optional helper for free Render ephemeral disk)
+# UPLOAD (for free Render: re-inject Friday JSON before Tuesday)
 # ------------------------------------------------------
 UPLOAD_HTML = """<!doctype html>
 <html>
@@ -167,13 +167,12 @@ UPLOAD_HTML = """<!doctype html>
     </form>
 
     <hr/>
-    <p><b>Σειρά runs (manual):</b></p>
+    <p><b>Manual σειρά:</b></p>
     <ol>
       <li><code>/run/thursday-v3</code></li>
       <li><code>/run/friday-shortlist-v3</code></li>
-      <li><code>/run/tuesday-recap</code> (ή <code>/run/tuesday-recap-v3</code>)</li>
+      <li><code>/run/tuesday-recap</code></li>
     </ol>
-    <p><b>GPT read endpoints:</b> <code>/thursday-analysis-v3</code>, <code>/friday-shortlist-v3</code>, <code>/tuesday-recap</code></p>
   </div>
 </body>
 </html>
@@ -181,7 +180,6 @@ UPLOAD_HTML = """<!doctype html>
 
 @app.route("/upload", methods=["GET"])
 def upload_page():
-    # Αν θες να είναι προστατευμένο, βάζεις ADMIN_KEY env και στέλνεις header X-ADMIN-KEY.
     return Response(UPLOAD_HTML, mimetype="text/html")
 
 @app.route("/upload", methods=["POST"])
@@ -244,7 +242,6 @@ def manual_run_tuesday_recap_v3():
     r = run_script("src/analysis/tuesday_recap_v3.py")
     return jsonify({**r, "status": "ok" if r["ok"] else "error", "timestamp": datetime.utcnow().isoformat()})
 
-# Alias (so you can also hit /run/tuesday-recap)
 @app.route("/run/tuesday-recap", methods=["GET"])
 def manual_run_tuesday_recap_alias():
     return manual_run_tuesday_recap_v3()
@@ -282,7 +279,6 @@ def download_friday_shortlist_v3():
         }), 404
     return send_file(full_path, mimetype="application/json", as_attachment=True)
 
-# Keep old v2 download (backwards)
 @app.route("/download/tuesday-recap-v2", methods=["GET"])
 def download_tuesday_recap_v2():
     guard = require_admin()
@@ -298,7 +294,6 @@ def download_tuesday_recap_v2():
         }), 404
     return send_file(full_path, mimetype="application/json", as_attachment=True)
 
-# New v3 download
 @app.route("/download/tuesday-recap-v3", methods=["GET"])
 def download_tuesday_recap_v3():
     guard = require_admin()
@@ -315,36 +310,7 @@ def download_tuesday_recap_v3():
     return send_file(full_path, mimetype="application/json", as_attachment=True)
 
 # ------------------------------------------------------
-# FAST "REPORT ONLY" ENDPOINTS (public - DO NOT run scripts)
-# These are what a Custom GPT should call.
-# ------------------------------------------------------
-@app.route("/thursday-report-v3", methods=["GET"])
-def api_thursday_report_v3():
-    report, error = load_json_report("logs/thursday_report_v3.json")
-    if report is None:
-        return jsonify({
-            "status": "error",
-            "message": "Thursday report not available",
-            "error": error,
-            "timestamp": datetime.utcnow().isoformat(),
-        }), 404
-    return jsonify(report)
-
-@app.route("/friday-report-v3", methods=["GET"])
-def api_friday_report_v3():
-    report, error = load_json_report("logs/friday_shortlist_v3.json")
-    if report is None:
-        return jsonify({
-            "status": "error",
-            "message": "Friday shortlist v3 not available",
-            "error": error,
-            "timestamp": datetime.utcnow().isoformat(),
-        }), 404
-    return jsonify(report)
-
-# ------------------------------------------------------
-# GPT ENDPOINTS (public)
-# IMPORTANT: these endpoints return SAVED JSON only (no runs).
+# GPT ENDPOINTS (public - report-only)
 # ------------------------------------------------------
 @app.route("/thursday-analysis-v3", methods=["GET"])
 def api_thursday_analysis_v3():
@@ -357,7 +323,6 @@ def api_thursday_analysis_v3():
             "timestamp": datetime.utcnow().isoformat(),
             "report": None
         }), 404
-
     return jsonify({
         "status": "ok",
         "timestamp": datetime.utcnow().isoformat(),
@@ -375,7 +340,6 @@ def api_friday_shortlist_v3():
             "timestamp": datetime.utcnow().isoformat(),
             "report": None
         }), 404
-
     return jsonify({
         "status": "ok",
         "timestamp": datetime.utcnow().isoformat(),
