@@ -2,7 +2,7 @@ import os
 import json
 import subprocess
 from datetime import datetime
-from flask import Flask, jsonify, send_file, request
+from flask import Flask, jsonify, send_file, request, Response
 
 app = Flask(__name__)
 
@@ -113,6 +113,13 @@ def load_json_report(report_rel_path: str):
         print(f"⚠️ {msg}", flush=True)
         return None, msg
 
+def save_json_report(report_rel_path: str, obj: dict):
+    full_path = abs_path(report_rel_path)
+    os.makedirs(os.path.dirname(full_path) or ".", exist_ok=True)
+    with open(full_path, "w", encoding="utf-8") as f:
+        json.dump(obj, f, ensure_ascii=False, indent=2)
+    return full_path
+
 # ------------------------------------------------------
 # HEALTHCHECK
 # ------------------------------------------------------
@@ -121,6 +128,92 @@ def healthcheck():
     return jsonify({
         "status": "ok",
         "message": "Bombay Engine alive",
+        "timestamp": datetime.utcnow().isoformat()
+    })
+
+# ------------------------------------------------------
+# UPLOAD (optional helper for free Render ephemeral disk)
+# ------------------------------------------------------
+UPLOAD_HTML = """<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>Bombay Upload</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 24px; }
+    .box { max-width: 760px; padding: 16px; border: 1px solid #ddd; border-radius: 10px; }
+    label { display:block; margin-top: 12px; }
+    button { margin-top: 16px; padding: 10px 14px; }
+    code { background:#f6f6f6; padding:2px 6px; border-radius:6px; }
+  </style>
+</head>
+<body>
+  <div class="box">
+    <h2>Upload JSON into server logs</h2>
+    <p>Ανεβάζεις JSON ώστε να υπάρχει στο <code>logs/</code> του server (free Render μπορεί να τα “χάνει”).</p>
+
+    <form method="post" action="/upload" enctype="multipart/form-data">
+      <label>Τύπος report</label>
+      <select name="kind">
+        <option value="thursday">Thursday Report V3 (logs/thursday_report_v3.json)</option>
+        <option value="friday">Friday Shortlist V3 (logs/friday_shortlist_v3.json)</option>
+        <option value="tuesday">Tuesday Recap V3 (logs/tuesday_recap_v3.json)</option>
+      </select>
+
+      <label>JSON αρχείο</label>
+      <input type="file" name="file" accept=".json,application/json" required />
+
+      <button type="submit">Upload</button>
+    </form>
+
+    <hr/>
+    <p><b>Σειρά runs (manual):</b></p>
+    <ol>
+      <li><code>/run/thursday-v3</code></li>
+      <li><code>/run/friday-shortlist-v3</code></li>
+      <li><code>/run/tuesday-recap</code> (ή <code>/run/tuesday-recap-v3</code>)</li>
+    </ol>
+    <p><b>GPT read endpoints:</b> <code>/thursday-analysis-v3</code>, <code>/friday-shortlist-v3</code>, <code>/tuesday-recap</code></p>
+  </div>
+</body>
+</html>
+"""
+
+@app.route("/upload", methods=["GET"])
+def upload_page():
+    # Αν θες να είναι προστατευμένο, βάζεις ADMIN_KEY env και στέλνεις header X-ADMIN-KEY.
+    return Response(UPLOAD_HTML, mimetype="text/html")
+
+@app.route("/upload", methods=["POST"])
+def upload_post():
+    guard = require_admin()
+    if guard:
+        return guard
+
+    kind = (request.form.get("kind") or "").strip().lower()
+    f = request.files.get("file")
+    if not f:
+        return jsonify({"status": "error", "message": "missing file", "timestamp": datetime.utcnow().isoformat()}), 400
+
+    try:
+        payload = json.load(f)
+    except Exception as e:
+        return jsonify({"status": "error", "message": f"invalid json: {e}", "timestamp": datetime.utcnow().isoformat()}), 400
+
+    if kind == "thursday":
+        rel = "logs/thursday_report_v3.json"
+    elif kind == "friday":
+        rel = "logs/friday_shortlist_v3.json"
+    elif kind == "tuesday":
+        rel = "logs/tuesday_recap_v3.json"
+    else:
+        return jsonify({"status": "error", "message": "invalid kind", "timestamp": datetime.utcnow().isoformat()}), 400
+
+    full = save_json_report(rel, payload)
+    return jsonify({
+        "status": "ok",
+        "saved_to": rel,
+        "full_path": full,
         "timestamp": datetime.utcnow().isoformat()
     })
 
@@ -143,7 +236,6 @@ def manual_run_friday_shortlist_v3():
     r = run_script("src/analysis/friday_shortlist_v3.py")
     return jsonify({**r, "status": "ok" if r["ok"] else "error", "timestamp": datetime.utcnow().isoformat()})
 
-# NEW: Tuesday Recap v3 runner
 @app.route("/run/tuesday-recap-v3", methods=["GET"])
 def manual_run_tuesday_recap_v3():
     guard = require_admin()
@@ -292,7 +384,6 @@ def api_friday_shortlist_v3():
 
 @app.route("/tuesday-recap", methods=["GET"])
 def api_tuesday_recap():
-    # IMPORTANT: v3 is the primary recap file from now on
     report, error = load_json_report("logs/tuesday_recap_v3.json")
     if report is None:
         return jsonify({
@@ -308,7 +399,6 @@ def api_tuesday_recap():
         "report": report
     })
 
-# Optional explicit v3 read endpoint
 @app.route("/tuesday-recap-v3", methods=["GET"])
 def api_tuesday_recap_v3():
     return api_tuesday_recap()
