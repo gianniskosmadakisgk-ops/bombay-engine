@@ -1,4 +1,25 @@
-# FRIDAY SHORTLIST v3.10 — Week label + bankroll start from history + core<1.50 only as double + fun system refund fallback
+# =========================
+# FRIDAY SHORTLIST v3.10 — PRODUCTION
+# - Reads:  logs/thursday_report_v3.json
+# - (Optional) Reads: logs/tuesday_history_v3.json  (bankroll continuity + week numbering)
+# - Writes: logs/friday_shortlist_v3.json
+#
+# Key rules:
+#  CORE
+#   - Singles only in [1.50 .. 1.75] (default)
+#   - Anything <1.50 is NEVER a single — only allowed as DOUBLE leg
+#   - Doubles are created ONLY if we have at least one <1.50 leg
+#
+#  FUN
+#   - Threshold filters by EV/prob, Under is stricter
+#   - System chosen with refund ratio target 0.80, fallback 0.65
+#   - Fun singles stake ladder: 15/12/8
+#
+# Additive fields:
+#  - week_id, week_no, week_label
+#  - bankroll_start + bankroll_source (history/default)
+# =========================
+
 import os
 import json
 from datetime import datetime, date
@@ -8,8 +29,9 @@ THURSDAY_REPORT_PATH = os.getenv("THURSDAY_REPORT_PATH", "logs/thursday_report_v
 FRIDAY_REPORT_PATH   = os.getenv("FRIDAY_REPORT_PATH",   "logs/friday_shortlist_v3.json")
 TUESDAY_HISTORY_PATH = os.getenv("TUESDAY_HISTORY_PATH", "logs/tuesday_history_v3.json")
 
-BANKROLL_CORE = float(os.getenv("BANKROLL_CORE", "800"))
-BANKROLL_FUN  = float(os.getenv("BANKROLL_FUN",  "400"))
+# ------------------------- DEFAULT BANKROLLS -------------------------
+DEFAULT_BANKROLL_CORE = float(os.getenv("BANKROLL_CORE", "800"))
+DEFAULT_BANKROLL_FUN  = float(os.getenv("BANKROLL_FUN",  "400"))
 
 CORE_EXPOSURE_CAP = float(os.getenv("CORE_EXPOSURE_CAP", "0.15"))
 FUN_EXPOSURE_CAP  = float(os.getenv("FUN_EXPOSURE_CAP",  "0.20"))
@@ -20,14 +42,21 @@ ODDS_MATCH_MIN_SCORE_FUN  = float(os.getenv("ODDS_MATCH_MIN_SCORE_FUN",  "0.65")
 CORE_MIN_CONFIDENCE = float(os.getenv("CORE_MIN_CONFIDENCE", "0.55"))
 FUN_MIN_CONFIDENCE  = float(os.getenv("FUN_MIN_CONFIDENCE",  "0.45"))
 
+# ✅ IMPORTANT: was missing in your deployed file
+FUN_AVOID_CORE_OVERLAP = os.getenv("FUN_AVOID_CORE_OVERLAP", "true").lower() == "true"
+
+# ------------------------- MARKETS -------------------------
 CORE_ALLOWED_MARKETS = {"Home", "Away", "Over 2.5", "Under 2.5"}
 FUN_ALLOWED_MARKETS  = {"Home", "Draw", "Away", "Over 2.5", "Under 2.5"}
 
 MARKET_CODE = {"Home":"1","Draw":"X","Away":"2","Over 2.5":"O25","Under 2.5":"U25"}
 
+# ------------------------- HELPERS -------------------------
 def safe_float(v, d=None):
-    try: return float(v)
-    except Exception: return d
+    try:
+        return float(v)
+    except Exception:
+        return d
 
 def iso_week_id_from_window(window: dict | None) -> str:
     d = None
@@ -58,12 +87,10 @@ def load_history(path: str) -> dict:
 def get_week_fields(window: dict, history: dict):
     window_from = (window or {}).get("from")
     week_id = iso_week_id_from_window(window)
-
     if window_from and window_from in (history.get("weeks") or {}):
-        week_no = int((history["weeks"][window_from].get("week_no") or history.get("week_count") or 0) or 1)
+        week_no = int(history["weeks"][window_from].get("week_no") or 1)
     else:
         week_no = int(history.get("week_count") or 0) + 1
-
     return {"week_id": week_id, "week_no": week_no, "week_label": f"Week {week_no}", "window_from": window_from}
 
 def load_thursday():
@@ -169,7 +196,9 @@ def scale_stakes(items, cap_amount, key="stake"):
         x[key] = round(safe_float(x.get(key), 0.0) * s, 2)
     return items, round(s, 3)
 
-# ----- CORE config (rule you locked) -----
+# ============================================================
+# CORE — locked rules
+# ============================================================
 CORE_SINGLES_MIN_ODDS = 1.50
 CORE_SINGLES_MAX_ODDS = float(os.getenv("CORE_SINGLES_MAX_ODDS", "1.75"))
 
@@ -181,15 +210,15 @@ CORE_DOUBLE_PARTNER_MAX_ODDS = float(os.getenv("CORE_DOUBLE_PARTNER_MAX_ODDS", "
 
 CORE_DOUBLE_TARGET_MIN = float(os.getenv("CORE_DOUBLE_TARGET_MIN", "1.75"))
 CORE_DOUBLE_TARGET_MAX = float(os.getenv("CORE_DOUBLE_TARGET_MAX", "2.10"))
-CORE_MAX_DOUBLES = int(os.getenv("CORE_MAX_DOUBLES", "1"))
 
 CORE_TARGET_SINGLES = int(os.getenv("CORE_TARGET_SINGLES", "4"))
 CORE_MIN_SINGLES    = int(os.getenv("CORE_MIN_SINGLES", "3"))
 CORE_MAX_SINGLES    = int(os.getenv("CORE_MAX_SINGLES", "6"))
+CORE_MAX_DOUBLES    = int(os.getenv("CORE_MAX_DOUBLES", "1"))
 
 CORE_STAKE_HIGH = float(os.getenv("CORE_STAKE_HIGH", "50"))
-CORE_STAKE_MID  = float(os.getenv("CORE_STAKE_MID", "40"))
-CORE_STAKE_LOW  = float(os.getenv("CORE_STAKE_LOW", "30"))
+CORE_STAKE_MID  = float(os.getenv("CORE_STAKE_MID",  "40"))
+CORE_STAKE_LOW  = float(os.getenv("CORE_STAKE_LOW",  "30"))
 CORE_DOUBLE_STAKE = float(os.getenv("CORE_DOUBLE_STAKE", "25"))
 
 CORE_MIN_VALUE_BANDS = {(1.50,1.65):0.5,(1.65,1.75):0.5}
@@ -225,7 +254,7 @@ def pick_core(rows, fixtures_by_id):
         if o is None:
             continue
 
-        # low odds => ONLY double leg
+        # below 1.50 => ONLY double leg
         if CORE_DOUBLE_LEG_MIN_ODDS <= o <= CORE_DOUBLE_LEG_MAX_ODDS:
             if (safe_float(r.get("prob"), 0.0) or 0.0) >= CORE_DOUBLE_LOWLEG_MIN_PROB:
                 lowlegs.append(r)
@@ -284,10 +313,9 @@ def pick_core(rows, fixtures_by_id):
     if len(singles) < CORE_MAX_SINGLES:
         add(relaxed, CORE_MAX_SINGLES)
 
-    # doubles only if there are lowlegs
     doubles = []
     if lowlegs and CORE_MAX_DOUBLES > 0:
-        partner_pool = [r for r in strict + relaxed if CORE_DOUBLE_PARTNER_MIN_ODDS <= safe_float(r["odds"], 0.0) <= CORE_DOUBLE_PARTNER_MAX_ODDS]
+        partner_pool = [r for r in strict + relaxed if CORE_DOUBLE_PARTNER_MIN_ODDS <= safe_float(r["odds"],0.0) <= CORE_DOUBLE_PARTNER_MAX_ODDS]
         partner_pool.sort(key=lambda x: (safe_float(x.get("value_adj"), -9999.0), safe_float(x.get("prob"), 0.0)), reverse=True)
 
         used_d = set()
@@ -314,7 +342,7 @@ def pick_core(rows, fixtures_by_id):
                 used_d.add(leg1["match"]); used_d.add(leg2["match"])
                 break
 
-    cap_amount = BANKROLL_CORE * CORE_EXPOSURE_CAP
+    cap_amount = DEFAULT_BANKROLL_CORE * CORE_EXPOSURE_CAP
     open_total = sum(x["stake"] for x in singles) + sum(d.get("stake", 0.0) for d in doubles)
     scale = 1.0
     if open_total > cap_amount and open_total > 0:
@@ -326,36 +354,51 @@ def pick_core(rows, fixtures_by_id):
         scale = round(s, 3)
         open_total = sum(x["stake"] for x in singles) + sum(d.get("stake", 0.0) for d in doubles)
 
-    meta = {
-        "open": round(open_total, 2),
-        "after_open": round(BANKROLL_CORE - open_total, 2),
-        "picks_count": len(singles),
-        "scale_applied": scale,
-    }
+    meta = {"open": round(open_total, 2), "scale_applied": scale, "picks_count": len(singles)}
+    return singles, (doubles[0] if doubles else None), doubles, meta
 
-    core_double = doubles[0] if doubles else None
-    return singles, core_double, doubles, meta
-
-# ----- FUN config (strict under gates + refund system fallback) -----
+# ============================================================
+# FUN — thresholds + system refund fallback
+# ============================================================
 EV_MIN_GENERAL = float(os.getenv("EV_MIN_GENERAL", "0.05"))
 EV_MIN_UNDER   = float(os.getenv("EV_MIN_UNDER",   "0.08"))
+P_MIN_HOME     = float(os.getenv("P_MIN_HOME",     "0.30"))
+P_MIN_DRAW     = float(os.getenv("P_MIN_DRAW",     "0.25"))
+P_MIN_AWAY     = float(os.getenv("P_MIN_AWAY",     "0.22"))
+P_MIN_OVER     = float(os.getenv("P_MIN_OVER",     "0.40"))
+P_MIN_UNDER    = float(os.getenv("P_MIN_UNDER",    "0.55"))
 
-P_MIN_HOME  = float(os.getenv("P_MIN_HOME", "0.30"))
-P_MIN_DRAW  = float(os.getenv("P_MIN_DRAW", "0.25"))
-P_MIN_AWAY  = float(os.getenv("P_MIN_AWAY", "0.22"))
-P_MIN_OVER  = float(os.getenv("P_MIN_OVER", "0.40"))
-P_MIN_UNDER = float(os.getenv("P_MIN_UNDER", "0.55"))
-
-UNDER_DRAW_MIN = float(os.getenv("UNDER_DRAW_MIN", "0.30"))
+UNDER_DRAW_MIN   = float(os.getenv("UNDER_DRAW_MIN", "0.30"))
 UNDER_LTOTAL_MAX = float(os.getenv("UNDER_LTOTAL_MAX", "2.20"))
 
-SYS_REFUND_PRIMARY = float(os.getenv("SYS_REFUND_PRIMARY", "0.80"))
-SYS_REFUND_FALLBACK = float(os.getenv("SYS_REFUND_FALLBACK", "0.65"))
+FUN_MIN_ODDS_DEFAULT = float(os.getenv("FUN_MIN_ODDS_DEFAULT", "1.85"))
+FUN_MAX_ODDS_BY_MARKET = {
+    "Home":  float(os.getenv("FUN_MAX_ODDS_HOME", "3.20")),
+    "Away":  float(os.getenv("FUN_MAX_ODDS_AWAY", "3.20")),
+    "Over 2.5":  float(os.getenv("FUN_MAX_ODDS_O25", "3.20")),
+    "Under 2.5": float(os.getenv("FUN_MAX_ODDS_U25", "3.20")),
+    "Draw":  float(os.getenv("FUN_MAX_ODDS_DRAW", "4.60")),
+}
+
+FUN_MAX_PICKS_TOTAL = int(os.getenv("FUN_MAX_PICKS_TOTAL", "8"))
+FUN_MIN_PICKS_TOTAL = int(os.getenv("FUN_MIN_PICKS_TOTAL", "6"))
+FUN_SINGLES_K = int(os.getenv("FUN_SINGLES_K", "4"))
+FUN_SINGLES_MIN = int(os.getenv("FUN_SINGLES_MIN", "3"))
+FUN_SINGLES_MAX = int(os.getenv("FUN_SINGLES_MAX", "5"))
+
+FUN_CAP_SPLIT_SINGLES = float(os.getenv("FUN_CAP_SPLIT_SINGLES", "0.70"))
+FUN_CAP_SPLIT_SINGLES = max(0.10, min(0.90, FUN_CAP_SPLIT_SINGLES))
 
 FUN_SYSTEM_UNIT_MIN  = float(os.getenv("FUN_SYSTEM_UNIT_MIN",  "0.50"))
 FUN_SYSTEM_UNIT_MAX  = float(os.getenv("FUN_SYSTEM_UNIT_MAX",  "2.00"))
 FUN_SYSTEM_TARGET_MIN = float(os.getenv("FUN_SYSTEM_TARGET_MIN", "12.0"))
 FUN_SYSTEM_TARGET_MAX = float(os.getenv("FUN_SYSTEM_TARGET_MAX", "20.0"))
+
+SYS_REFUND_PRIMARY  = float(os.getenv("SYS_REFUND_PRIMARY", "0.80"))
+SYS_REFUND_FALLBACK = float(os.getenv("SYS_REFUND_FALLBACK", "0.65"))
+
+FUN_SYSTEM_POOL_MAX = int(os.getenv("FUN_SYSTEM_POOL_MAX", "7"))
+FUN_SYSTEM_POOL_MIN = int(os.getenv("FUN_SYSTEM_POOL_MIN", "5"))
 
 def fun_single_stake(odds: float) -> float:
     if odds < 1.85: return 0.0
@@ -381,9 +424,8 @@ def _try_system(pool, r_try: int, label: str):
     cols = _columns_for_r(n, r_try)
     if cols <= 0:
         return None
-    odds_list = [p["odds"] for p in pool]
-    rr = _refund_ratio_worst_case(odds_list, r_try, cols)
-    return {"label": label, "n": n, "r": r_try, "columns": cols, "min_hits": r_try, "refund_ratio_min_hits": round(rr, 4)}
+    rr = _refund_ratio_worst_case([p["odds"] for p in pool], r_try, cols)
+    return {"label": label, "n": n, "columns": cols, "min_hits": r_try, "refund_ratio_min_hits": round(rr, 4)}
 
 def choose_fun_system(fun_picks):
     for threshold in [SYS_REFUND_PRIMARY, SYS_REFUND_FALLBACK]:
@@ -400,11 +442,12 @@ def choose_fun_system(fun_picks):
             else:
                 trials = [_try_system(pool, 3, "3/5")]
 
-            trials = [t for t in trials if t is not None]
+            trials = [t for t in trials if t]
             passing = [t for t in trials if (t.get("refund_ratio_min_hits") or 0.0) >= threshold]
             if passing:
                 passing.sort(key=lambda x: (x["columns"], -float(x["refund_ratio_min_hits"])))
                 return pool, passing[0], threshold, breached, True
+
     return fun_picks[:min(len(fun_picks),7)], None, SYS_REFUND_PRIMARY, True, False
 
 def _system_unit_for_target(cols: int, cap_system: float):
@@ -437,6 +480,7 @@ def pick_fun(rows, fixtures_by_id, core_singles):
             continue
         if not confidence_ok(fx, FUN_MIN_CONFIDENCE):
             continue
+
         if FUN_AVOID_CORE_OVERLAP and r["fixture_id"] in core_fixture_ids:
             continue
 
@@ -519,7 +563,7 @@ def pick_fun(rows, fixtures_by_id, core_singles):
     system_pool, sys_choice, threshold_used, breached, has_system = choose_fun_system(system_pool_raw)
     cols = int(sys_choice["columns"]) if sys_choice else 0
 
-    cap_amount = BANKROLL_FUN * FUN_EXPOSURE_CAP
+    cap_amount = DEFAULT_BANKROLL_FUN * FUN_EXPOSURE_CAP
     cap_singles = cap_amount * FUN_CAP_SPLIT_SINGLES
     cap_system  = cap_amount * (1.0 - FUN_CAP_SPLIT_SINGLES)
 
@@ -537,9 +581,7 @@ def pick_fun(rows, fixtures_by_id, core_singles):
     open_amount = round(system_stake + sum(x["stake"] for x in fun_singles), 2)
 
     payload = {
-        "bankroll": BANKROLL_FUN,
-        "bankroll_start": None,
-        "bankroll_source": None,
+        "bankroll": DEFAULT_BANKROLL_FUN,
         "exposure_cap_pct": FUN_EXPOSURE_CAP,
         "cap_split": {"singles_pct": round(FUN_CAP_SPLIT_SINGLES, 2), "system_pct": round(1.0 - FUN_CAP_SPLIT_SINGLES, 2)},
         "scales": {"singles_scale": round(singles_scale, 3), "system_scale": round(system_scale, 3)},
@@ -586,7 +628,7 @@ def pick_fun(rows, fixtures_by_id, core_singles):
             "ev_per_euro": None,
         },
         "open": open_amount,
-        "after_open": round(BANKROLL_FUN - open_amount, 2),
+        "after_open": round(DEFAULT_BANKROLL_FUN - open_amount, 2),
         "counts": {"picks_total": len(fun_picks), "singles": len(fun_singles), "system_pool": len(system_pool)},
     }
     return payload
@@ -597,43 +639,31 @@ def main():
 
     history = load_history(TUESDAY_HISTORY_PATH)
     window = th_meta.get("window", {}) or {}
-    week_fields = get_week_fields(window, history)
+    wf = get_week_fields(window, history)
 
-    # bankroll starts from history if present
-    core_bankroll_start = safe_float(history.get("core", {}).get("bankroll_current"), None)
-    fun_bankroll_start  = safe_float(history.get("funbet", {}).get("bankroll_current"), None)
+    core_start = safe_float(history.get("core", {}).get("bankroll_current"), None)
+    fun_start  = safe_float(history.get("funbet", {}).get("bankroll_current"), None)
 
-    if core_bankroll_start is None:
-        core_bankroll_start = BANKROLL_CORE
-        core_bankroll_source = "default"
-    else:
-        core_bankroll_source = "history"
-
-    if fun_bankroll_start is None:
-        fun_bankroll_start = BANKROLL_FUN
-        fun_bankroll_source = "default"
-    else:
-        fun_bankroll_source = "history"
+    core_bankroll_start = core_start if core_start is not None else DEFAULT_BANKROLL_CORE
+    fun_bankroll_start  = fun_start if fun_start is not None else DEFAULT_BANKROLL_FUN
 
     rows = build_rows(fixtures)
 
     core_singles, core_double, core_doubles, core_meta = pick_core(rows, fixtures_by_id)
     fun_payload = pick_fun(rows, fixtures_by_id, core_singles)
-    fun_payload["bankroll_start"] = fun_bankroll_start
-    fun_payload["bankroll_source"] = fun_bankroll_source
 
     report = {
         "timestamp": datetime.utcnow().isoformat(),
-        "week_id": week_fields["week_id"],
-        "week_no": week_fields["week_no"],
-        "week_label": week_fields["week_label"],
+        "week_id": wf["week_id"],
+        "week_no": wf["week_no"],
+        "week_label": wf["week_label"],
         "window": window,
         "fixtures_total": th_meta.get("fixtures_total", len(fixtures)),
 
         "core": {
-            "bankroll": BANKROLL_CORE,
+            "bankroll": DEFAULT_BANKROLL_CORE,
             "bankroll_start": core_bankroll_start,
-            "bankroll_source": core_bankroll_source,
+            "bankroll_source": ("history" if core_start is not None else "default"),
             "exposure_cap_pct": CORE_EXPOSURE_CAP,
             "rules": {"no_singles_below": 1.50, "low_odds_policy": "Below 1.50 only as double leg"},
             "singles": core_singles,
@@ -645,7 +675,11 @@ def main():
             "scale_applied": core_meta["scale_applied"],
         },
 
-        "funbet": fun_payload,
+        "funbet": {
+            **fun_payload,
+            "bankroll_start": fun_bankroll_start,
+            "bankroll_source": ("history" if fun_start is not None else "default"),
+        },
     }
 
     os.makedirs("logs", exist_ok=True)
