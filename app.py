@@ -6,6 +6,9 @@ from flask import Flask, jsonify, send_file, request, Response
 
 app = Flask(__name__)
 
+# ------------------------------------------------------
+# Project root (εκεί που είναι το app.py)
+# ------------------------------------------------------
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 
 def abs_path(rel_path: str) -> str:
@@ -13,7 +16,9 @@ def abs_path(rel_path: str) -> str:
 
 LOGS_DIR = abs_path("logs")
 
+# ------------------------------------------------------
 # Optional admin protection
+# ------------------------------------------------------
 ADMIN_KEY = os.environ.get("ADMIN_KEY", "").strip()
 
 def require_admin():
@@ -27,12 +32,14 @@ def require_admin():
         }), 401
     return None
 
-SCRIPT_TIMEOUT_SEC = int(os.environ.get("SCRIPT_TIMEOUT_SEC", "180"))
-MAX_LOG_CHARS = int(os.environ.get("MAX_LOG_CHARS", "8000"))
+# ------------------------------------------------------
+# Script runner
+# ------------------------------------------------------
+SCRIPT_TIMEOUT_SEC = int(os.environ.get("SCRIPT_TIMEOUT_SEC", "240"))
+MAX_LOG_CHARS = int(os.environ.get("MAX_LOG_CHARS", "12000"))
 
 def run_script(script_rel_path: str):
     script_full = abs_path(script_rel_path)
-
     try:
         print(f"▶️ Running script: {script_rel_path}", flush=True)
 
@@ -67,24 +74,15 @@ def run_script(script_rel_path: str):
     except subprocess.TimeoutExpired:
         msg = f"Timeout: script exceeded {SCRIPT_TIMEOUT_SEC}s"
         print(f"⏳ {msg} ({script_rel_path})", flush=True)
-        return {
-            "ok": False,
-            "return_code": -2,
-            "stdout": "",
-            "stderr": msg,
-            "script": script_rel_path,
-        }
+        return {"ok": False, "return_code": -2, "stdout": "", "stderr": msg, "script": script_rel_path}
 
     except Exception as e:
         print(f"❌ Error running {script_rel_path}: {e}", flush=True)
-        return {
-            "ok": False,
-            "return_code": -1,
-            "stdout": "",
-            "stderr": str(e),
-            "script": script_rel_path,
-        }
+        return {"ok": False, "return_code": -1, "stdout": "", "stderr": str(e), "script": script_rel_path}
 
+# ------------------------------------------------------
+# JSON helpers (atomic)
+# ------------------------------------------------------
 def atomic_write_json(full_path: str, obj: dict):
     os.makedirs(os.path.dirname(full_path) or ".", exist_ok=True)
     tmp_path = full_path + ".tmp"
@@ -95,12 +93,12 @@ def atomic_write_json(full_path: str, obj: dict):
 def load_json_report(report_rel_path: str):
     full_path = abs_path(report_rel_path)
     if not os.path.exists(full_path):
-        return None, f"Report file not found: {full_path}"
+        return None, f"missing: {full_path}"
     try:
         with open(full_path, "r", encoding="utf-8") as f:
             return json.load(f), None
     except Exception as e:
-        return None, f"Failed to load report file {full_path}: {e}"
+        return None, f"failed to load: {full_path}: {e}"
 
 def save_json_report(report_rel_path: str, obj: dict):
     full_path = abs_path(report_rel_path)
@@ -126,6 +124,9 @@ def list_logs_dir():
     except Exception as e:
         return {"exists": None, "path": LOGS_DIR, "error": str(e), "files": []}
 
+# ------------------------------------------------------
+# HEALTHCHECK
+# ------------------------------------------------------
 @app.route("/healthcheck", methods=["GET"])
 def healthcheck():
     return jsonify({
@@ -134,6 +135,9 @@ def healthcheck():
         "timestamp": datetime.utcnow().isoformat()
     })
 
+# ------------------------------------------------------
+# DEBUG (shows what server REALLY has)
+# ------------------------------------------------------
 @app.route("/debug/logs", methods=["GET"])
 def debug_logs():
     guard = require_admin()
@@ -146,6 +150,49 @@ def debug_logs():
         "logs": list_logs_dir(),
     })
 
+@app.route("/debug/report-meta", methods=["GET"])
+def debug_report_meta():
+    """
+    Σκοπός: να βλέπεις τι ακριβώς διαβάζει ο Custom GPT.
+    """
+    guard = require_admin()
+    if guard:
+        return guard
+
+    th, _ = load_json_report("logs/thursday_report_v3.json")
+    fr, _ = load_json_report("logs/friday_shortlist_v3.json")
+    tu, _ = load_json_report("logs/tuesday_recap_v3.json")
+    hi, _ = load_json_report("logs/tuesday_history_v3.json")
+
+    def meta(x):
+        if not isinstance(x, dict):
+            return None
+        return {
+            "generated_at": x.get("generated_at") or x.get("timestamp"),
+            "week_label": x.get("week_label"),
+            "window": x.get("window"),
+            "engine_leagues": x.get("engine_leagues"),
+            "fixtures_total": x.get("fixtures_total"),
+        }
+
+    return jsonify({
+        "status": "ok",
+        "timestamp": datetime.utcnow().isoformat(),
+        "thursday": meta(th),
+        "friday": meta(fr),
+        "tuesday": meta(tu),
+        "history": {
+            "week_count": (hi or {}).get("week_count") if isinstance(hi, dict) else None,
+            "updated_at": (hi or {}).get("updated_at") if isinstance(hi, dict) else None,
+            "core_bankroll_current": ((hi or {}).get("core") or {}).get("bankroll_current") if isinstance(hi, dict) else None,
+            "fun_bankroll_current": ((hi or {}).get("funbet") or {}).get("bankroll_current") if isinstance(hi, dict) else None,
+            "draw_bankroll_current": ((hi or {}).get("drawbet") or {}).get("bankroll_current") if isinstance(hi, dict) else None,
+        }
+    })
+
+# ------------------------------------------------------
+# UPLOAD PAGE (Thursday / Friday / Tuesday / History)
+# ------------------------------------------------------
 UPLOAD_HTML = """<!doctype html>
 <html>
 <head>
@@ -175,7 +222,7 @@ UPLOAD_HTML = """<!doctype html>
       <button type="submit">Upload</button>
     </form>
     <hr/>
-    <p>Debug: <code>/debug/logs</code></p>
+    <p>Debug: <code>/debug/logs</code> &nbsp;|&nbsp; <code>/debug/report-meta</code></p>
   </div>
 </body>
 </html>
@@ -224,7 +271,9 @@ def upload_post():
         "logs_dir": list_logs_dir(),
     })
 
-# ---------------- RUN endpoints ----------------
+# ------------------------------------------------------
+# RUN endpoints
+# ------------------------------------------------------
 @app.route("/run/thursday-v3", methods=["GET"])
 def run_thursday():
     guard = require_admin()
@@ -253,7 +302,9 @@ def run_tuesday():
 def run_tuesday_alias():
     return run_tuesday()
 
-# ---------------- DOWNLOAD endpoints ----------------
+# ------------------------------------------------------
+# DOWNLOAD endpoints
+# ------------------------------------------------------
 @app.route("/download/thursday-report-v3", methods=["GET"])
 def download_thursday():
     guard = require_admin()
@@ -261,7 +312,7 @@ def download_thursday():
         return guard
     p = abs_path("logs/thursday_report_v3.json")
     if not os.path.exists(p):
-        return jsonify({"status":"error","message":"missing","path":p,"logs":list_logs_dir()}), 404
+        return jsonify({"status": "error", "message": "missing", "path": p, "logs": list_logs_dir()}), 404
     return send_file(p, mimetype="application/json", as_attachment=True)
 
 @app.route("/download/friday-shortlist-v3", methods=["GET"])
@@ -271,7 +322,7 @@ def download_friday():
         return guard
     p = abs_path("logs/friday_shortlist_v3.json")
     if not os.path.exists(p):
-        return jsonify({"status":"error","message":"missing","path":p,"logs":list_logs_dir()}), 404
+        return jsonify({"status": "error", "message": "missing", "path": p, "logs": list_logs_dir()}), 404
     return send_file(p, mimetype="application/json", as_attachment=True)
 
 @app.route("/download/tuesday-recap-v3", methods=["GET"])
@@ -281,7 +332,7 @@ def download_tuesday_recap():
         return guard
     p = abs_path("logs/tuesday_recap_v3.json")
     if not os.path.exists(p):
-        return jsonify({"status":"error","message":"missing","path":p,"logs":list_logs_dir()}), 404
+        return jsonify({"status": "error", "message": "missing", "path": p, "logs": list_logs_dir()}), 404
     return send_file(p, mimetype="application/json", as_attachment=True)
 
 @app.route("/download/tuesday-history-v3", methods=["GET"])
@@ -291,35 +342,40 @@ def download_tuesday_history():
         return guard
     p = abs_path("logs/tuesday_history_v3.json")
     if not os.path.exists(p):
-        return jsonify({"status":"error","message":"missing","path":p,"logs":list_logs_dir()}), 404
+        return jsonify({"status": "error", "message": "missing", "path": p, "logs": list_logs_dir()}), 404
     return send_file(p, mimetype="application/json", as_attachment=True)
 
-# ---------------- GPT read endpoints (report-only) ----------------
+# ------------------------------------------------------
+# GPT "report-only" endpoints (NO wrappers)
+# ------------------------------------------------------
 @app.route("/thursday-analysis-v3", methods=["GET"])
 def gpt_thursday():
     report, error = load_json_report("logs/thursday_report_v3.json")
     if report is None:
-        return jsonify({"status":"error","message":"Thursday report not available","error":error,"timestamp":datetime.utcnow().isoformat(),"report":None}), 404
-    return jsonify({"status":"ok","timestamp":datetime.utcnow().isoformat(),"report":report})
+        return jsonify({"status": "error", "message": "Thursday report not available", "error": error}), 404
+    return jsonify(report)
 
 @app.route("/friday-shortlist-v3", methods=["GET"])
 def gpt_friday():
     report, error = load_json_report("logs/friday_shortlist_v3.json")
     if report is None:
-        return jsonify({"status":"error","message":"Friday shortlist v3 not available","error":error,"timestamp":datetime.utcnow().isoformat(),"report":None}), 404
-    return jsonify({"status":"ok","timestamp":datetime.utcnow().isoformat(),"report":report})
+        return jsonify({"status": "error", "message": "Friday shortlist not available", "error": error}), 404
+    return jsonify(report)
 
 @app.route("/tuesday-recap", methods=["GET"])
 def gpt_tuesday():
     report, error = load_json_report("logs/tuesday_recap_v3.json")
     if report is None:
-        return jsonify({"status":"error","message":"Tuesday recap v3 not available","error":error,"timestamp":datetime.utcnow().isoformat(),"report":None}), 404
-    return jsonify({"status":"ok","timestamp":datetime.utcnow().isoformat(),"report":report})
+        return jsonify({"status": "error", "message": "Tuesday recap not available", "error": error}), 404
+    return jsonify(report)
 
 @app.route("/tuesday-recap-v3", methods=["GET"])
 def gpt_tuesday_v3():
     return gpt_tuesday()
 
+# ------------------------------------------------------
+# ENTRY POINT
+# ------------------------------------------------------
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     print(f"🚀 Starting Bombay Engine Flask Server on port {port}...", flush=True)
