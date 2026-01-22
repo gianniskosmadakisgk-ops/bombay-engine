@@ -1,4 +1,3 @@
-# src/analysis/thursday_engine_full_v3.py
 import os
 import json
 import math
@@ -7,24 +6,30 @@ import datetime
 import unicodedata
 import re
 from dateutil import parser
+from zoneinfo import ZoneInfo
 
 # ============================================================
-#  BOMBAY THURSDAY FULL ENGINE v3 — PRODUCTION (LOCKED LEAGUES + SHAPE FLAGS)
+#  BOMBAY THURSDAY FULL ENGINE v3 — PRODUCTION (LOCKED LEAGUES)
 #
 #  Writes: logs/thursday_report_v3.json
 #
-#  GUARANTEES:
-#   - League set is HARD-LOCKED: only the leagues in LEAGUES below can appear.
-#   - ALL fixtures within WINDOW_HOURS are included (no filtering by "value").
-#   - Outputs schema-safe keys + additive fields:
-#       total_lambda, abs_lambda_gap, dominance_index, balance_index
-#       flags.over_friendly_league / flags.draw_friendly_league / flags.low_tempo_league
-#       flags.home_shape / flags.away_shape / flags.draw_shape
-#       flags.under_elite / flags.over_good_shape
-#       season_used, engine_leagues
-#   - EV fields:
-#       ev_1 / ev_x / ev_2 / ev_over / ev_under (prob * offered - 1)
-#       score_draw / score_over (aliases)
+#  KEY GOALS
+#   - League allowlist is HARD-LOCKED (no extra leagues can appear).
+#   - Fixes "wrong season / wrong dates" by:
+#       (a) trying season candidates, selecting the first that yields fixtures in-window
+#       (b) always filtering by commence_time within next WINDOW_HOURS (UTC)
+#       (c) formatting output date/time in DISPLAY_TZ (default Europe/Athens)
+#
+#  Additive fields for downstream:
+#   - total_lambda, abs_lambda_gap, dominance_index, balance_index
+#   - flags: over_friendly_league, draw_friendly_league, low_tempo_league
+#           home_shape, away_shape, draw_shape
+#           under_elite, over_good_shape
+#   - season_used, engine_leagues, timezone
+#   - suitability_* (0..1), based on EV + confidence
+#
+#  EV fields:
+#   - ev_1 / ev_x / ev_2 / ev_over / ev_under = (prob * offered - 1)  when offered exists
 # ============================================================
 
 API_FOOTBALL_KEY = os.getenv("FOOTBALL_API_KEY")
@@ -34,9 +39,13 @@ HEADERS_FOOTBALL = {"x-apisports-key": API_FOOTBALL_KEY} if API_FOOTBALL_KEY els
 ODDS_API_KEY = os.getenv("ODDS_API_KEY")
 ODDS_BASE_URL = "https://api.the-odds-api.com/v4/sports"
 
-FOOTBALL_SEASON_ENV = os.getenv("FOOTBALL_SEASON", "").strip()  # e.g. "2025"
+# Season hint (often "2025" for 2025/26 season). We auto-fallback if wrong.
+FOOTBALL_SEASON_ENV = os.getenv("FOOTBALL_SEASON", "").strip()
+
 USE_ODDS_API = os.getenv("USE_ODDS_API", "true").lower() == "true"
 WINDOW_HOURS = int(os.getenv("WINDOW_HOURS", "72"))
+
+DISPLAY_TZ = os.getenv("DISPLAY_TZ", "Europe/Athens").strip() or "UTC"
 
 # Odds matching controls
 ODDS_TIME_GATE_HOURS = float(os.getenv("ODDS_TIME_GATE_HOURS", "6"))
@@ -60,11 +69,7 @@ CAP_OUTCOME_MIN = float(os.getenv("CAP_OUTCOME_MIN", "0.05"))
 
 FAIR_SNAP_RATIO = float(os.getenv("FAIR_SNAP_RATIO", "1.35"))
 
-# Low tempo legacy list (kept) + cap
-LOW_TEMPO_LEAGUES = set([x.strip() for x in os.getenv("LOW_TEMPO_LEAGUES", "Ligue 2,Serie B").split(",") if x.strip()])
-LOW_TEMPO_OVER_CAP = float(os.getenv("LOW_TEMPO_OVER_CAP", "0.65"))
-
-# Over / Under blockers
+# Over / Under blockers (model stabilization)
 OVER_BLOCK_LTOTAL = float(os.getenv("OVER_BLOCK_LTOTAL", "2.4"))
 OVER_BLOCK_LMIN = float(os.getenv("OVER_BLOCK_LMIN", "0.9"))
 UNDER_BLOCK_LTOTAL = float(os.getenv("UNDER_BLOCK_LTOTAL", "3.0"))
@@ -79,13 +84,13 @@ DRAW_LEAGUE_PLUS = float(os.getenv("DRAW_LEAGUE_PLUS", "0.03"))
 USE_DYNAMIC_LEAGUE_BASELINES = os.getenv("USE_DYNAMIC_LEAGUE_BASELINES", "true").lower() == "true"
 BASELINES_LAST_N = int(os.getenv("BASELINES_LAST_N", "240"))
 
-# Tight game + Over penalty (selection hint only)
+# Tight game hint + over penalty (selection hint only)
 TIGHT_DRAW_THRESHOLD = float(os.getenv("TIGHT_DRAW_THRESHOLD", "0.28"))
 TIGHT_LTOTAL_THRESHOLD = float(os.getenv("TIGHT_LTOTAL_THRESHOLD", "2.55"))
 OVER_TIGHT_PENALTY_PTS = float(os.getenv("OVER_TIGHT_PENALTY_PTS", "12.0"))
 OVER_LOW_TEMPO_EXTRA_PENALTY_PTS = float(os.getenv("OVER_LOW_TEMPO_EXTRA_PENALTY_PTS", "6.0"))
 
-# -------------------- LEAGUE PROFILING THRESHOLDS (FLAGS) --------------------
+# League profiling thresholds
 OVER_FRIENDLY_OVER25_RATE = float(os.getenv("OVER_FRIENDLY_OVER25_RATE", "0.56"))
 OVER_FRIENDLY_AVG_GOALS = float(os.getenv("OVER_FRIENDLY_AVG_GOALS", "2.75"))
 
@@ -94,7 +99,7 @@ DRAW_FRIENDLY_MAX_GOALS = float(os.getenv("DRAW_FRIENDLY_MAX_GOALS", "2.60"))
 
 LOW_TEMPO_MAX_GOALS = float(os.getenv("LOW_TEMPO_MAX_GOALS", "2.45"))
 
-# Match shape thresholds
+# Shape thresholds
 DOMINANCE_SHAPE_THRESHOLD = float(os.getenv("DOMINANCE_SHAPE_THRESHOLD", "0.12"))
 BALANCE_DRAW_THRESHOLD = float(os.getenv("BALANCE_DRAW_THRESHOLD", "0.85"))
 DRAW_SHAPE_DRAWPROB_MIN = float(os.getenv("DRAW_SHAPE_DRAWPROB_MIN", "0.30"))
@@ -111,8 +116,6 @@ OVER_SHAPE_PROB_MIN = float(os.getenv("OVER_SHAPE_PROB_MIN", "0.55"))
 OVER_SHAPE_TL_MIN = float(os.getenv("OVER_SHAPE_TL_MIN", "2.70"))
 
 # -------------------- HARD-LOCKED LEAGUES (ONLY THESE) --------------------
-# OUT: Liga Portugal 1, Serie B, Ligue 2
-# IN : Eredivisie, Belgium First Division A
 LEAGUES = {
     "Premier League": 39,
     "Championship": 40,
@@ -203,65 +206,41 @@ def jaccard(a: set, b: set) -> float:
     uni = len(a | b)
     return inter / uni if uni else 0.0
 
-# ------------------------- SEASON RESOLUTION -------------------------
-def resolve_season_candidates(now_utc: datetime.datetime):
-    """
-    If env is wrong, try adjacent years.
-    Keeps order, unique.
-    """
-    candidates = []
-    if FOOTBALL_SEASON_ENV:
-        candidates.append(FOOTBALL_SEASON_ENV)
-        try:
-            y = int(FOOTBALL_SEASON_ENV)
-            candidates += [str(y - 1), str(y + 1)]
-        except Exception:
-            pass
-
-    candidates += [str(now_utc.year - 1), str(now_utc.year)]
-    seen, out = set(), []
-    for c in candidates:
-        if c and c not in seen:
-            out.append(c)
-            seen.add(c)
-    return out[:4]
-
 # ------------------------- FIXTURES (API-FOOTBALL) -------------------------
-def fetch_fixtures(league_id: int, league_name: str, season_used: str, window_from_utc: datetime.datetime, window_to_utc: datetime.datetime):
+def fetch_fixtures(league_id: int, league_name: str, season_used: str, now_utc: datetime.datetime):
     if not API_FOOTBALL_KEY:
+        log("❌ Missing FOOTBALL_API_KEY – NO fixtures will be fetched!")
         return []
 
     url = f"{API_FOOTBALL_BASE}/fixtures"
-
-    # Prefer date range; fallback to season-only.
-    params = {
-        "league": league_id,
-        "season": season_used,
-        "from": window_from_utc.date().isoformat(),
-        "to": window_to_utc.date().isoformat(),
-    }
+    params = {"league": league_id, "season": season_used}
 
     try:
-        r = requests.get(url, headers=HEADERS_FOOTBALL, params=params, timeout=25).json()
-        resp = r.get("response") or []
-        if not resp:
-            params_fb = {"league": league_id, "season": season_used}
-            r = requests.get(url, headers=HEADERS_FOOTBALL, params=params_fb, timeout=25).json()
-            resp = r.get("response") or []
-    except Exception:
+        r = requests.get(url, headers=HEADERS_FOOTBALL, params=params, timeout=25)
+        if r.status_code != 200:
+            return []
+        js = r.json()
+    except Exception as e:
+        log(f"⚠️ Error fetching fixtures for {league_name}: {e}")
+        return []
+
+    resp = js.get("response") or []
+    if not resp:
         return []
 
     out = []
-    now = datetime.datetime.now(datetime.timezone.utc)
-
     for fx in resp:
         if fx.get("league", {}).get("id") != league_id:
             continue
         if (fx.get("fixture", {}).get("status", {}).get("short") or "") != "NS":
             continue
 
-        dt = parser.isoparse(fx["fixture"]["date"]).astimezone(datetime.timezone.utc)
-        diff_hours = (dt - now).total_seconds() / 3600.0
+        try:
+            dt = parser.isoparse(fx["fixture"]["date"]).astimezone(datetime.timezone.utc)
+        except Exception:
+            continue
+
+        diff_hours = (dt - now_utc).total_seconds() / 3600.0
         if not (0 <= diff_hours <= WINDOW_HOURS):
             continue
 
@@ -284,7 +263,7 @@ def fetch_fixtures(league_id: int, league_name: str, season_used: str, window_fr
 
     return out
 
-# ------------------------- TEAM RECENT GOALS (API-FOOTBALL) -------------------------
+# ------------------------- TEAM RECENT STATS -------------------------
 def _recency_weights(n: int):
     base = [1.0, 0.85, 0.72, 0.61, 0.52]
     w = base[: max(0, min(5, n))]
@@ -304,12 +283,16 @@ def fetch_team_recent_stats(team_id: int, league_id: int, season_used: str, want
     params = {"team": team_id, "league": league_id, "season": season_used, "last": 10}
 
     try:
-        r = requests.get(url, headers=HEADERS_FOOTBALL, params=params, timeout=25).json()
+        r = requests.get(url, headers=HEADERS_FOOTBALL, params=params, timeout=25)
+        if r.status_code != 200:
+            TEAM_STATS_CACHE[ck] = {}
+            return TEAM_STATS_CACHE[ck]
+        js = r.json()
     except Exception:
         TEAM_STATS_CACHE[ck] = {}
         return TEAM_STATS_CACHE[ck]
 
-    resp_all = r.get("response") or []
+    resp_all = js.get("response") or []
     if not resp_all:
         TEAM_STATS_CACHE[ck] = {}
         return TEAM_STATS_CACHE[ck]
@@ -335,34 +318,18 @@ def fetch_team_recent_stats(team_id: int, league_id: int, season_used: str, want
 
     w = _recency_weights(m)
     gf = ga = 0.0
-    gf_raw = ga_raw = 0
-
     for idx, fx in enumerate(sample):
         g_home = fx.get("goals", {}).get("home")
         g_away = fx.get("goals", {}).get("away")
         if g_home is None or g_away is None:
             continue
-        g_home = int(g_home)
-        g_away = int(g_away)
-
+        g_home = int(g_home); g_away = int(g_away)
         is_home = fx["teams"]["home"]["id"] == team_id
-        if is_home:
-            gf_i, ga_i = g_home, g_away
-        else:
-            gf_i, ga_i = g_away, g_home
-
-        gf_raw += gf_i
-        ga_raw += ga_i
+        gf_i, ga_i = (g_home, g_away) if is_home else (g_away, g_home)
         gf += w[idx] * gf_i
         ga += w[idx] * ga_i
 
-    stats = {
-        "matches_count": m,
-        "avg_goals_for": gf,
-        "avg_goals_against": ga,
-        "avg_goals_for_unweighted": (gf_raw / m) if m else None,
-        "avg_goals_against_unweighted": (ga_raw / m) if m else None,
-    }
+    stats = {"matches_count": m, "avg_goals_for": gf, "avg_goals_against": ga}
     TEAM_STATS_CACHE[ck] = stats
     return stats
 
@@ -391,31 +358,29 @@ def fetch_league_baselines_dynamic(league_id: int, season_used: str):
     params = {"league": league_id, "season": season_used, "status": "FT", "last": BASELINES_LAST_N}
 
     try:
-        r = requests.get(url, headers=HEADERS_FOOTBALL, params=params, timeout=25).json()
+        r = requests.get(url, headers=HEADERS_FOOTBALL, params=params, timeout=25)
+        if r.status_code != 200:
+            return fetch_league_baselines_static(league_id)
+        js = r.json()
     except Exception:
         return fetch_league_baselines_static(league_id)
 
-    resp = r.get("response") or []
+    resp = js.get("response") or []
     if not resp or len(resp) < 40:
         return fetch_league_baselines_static(league_id)
 
-    total = 0
-    home_goals = 0
-    away_goals = 0
-    draws = 0
-    overs = 0
-
+    total = home_goals = away_goals = draws = overs = 0
     for fx in resp:
         hg = fx.get("goals", {}).get("home")
         ag = fx.get("goals", {}).get("away")
         if hg is None or ag is None:
             continue
+        hg = int(hg); ag = int(ag)
         total += 1
-        home_goals += int(hg)
-        away_goals += int(ag)
-        if int(hg) == int(ag):
+        home_goals += hg; away_goals += ag
+        if hg == ag:
             draws += 1
-        if (int(hg) + int(ag)) >= 3:
+        if (hg + ag) >= 3:
             overs += 1
 
     if total < 30:
@@ -435,11 +400,9 @@ def fetch_league_baselines_dynamic(league_id: int, season_used: str):
     }
 
 def fetch_league_baselines(league_id: int, season_used: str):
-    if USE_DYNAMIC_LEAGUE_BASELINES:
-        return fetch_league_baselines_dynamic(league_id, season_used)
-    return fetch_league_baselines_static(league_id)
+    return fetch_league_baselines_dynamic(league_id, season_used) if USE_DYNAMIC_LEAGUE_BASELINES else fetch_league_baselines_static(league_id)
 
-# ------------------------- POISSON + DC -------------------------
+# ------------------------- POISSON + DIXON-COLES -------------------------
 def poisson_pmf(k: int, lam: float) -> float:
     if lam <= 0:
         return 0.0
@@ -534,19 +497,15 @@ def compute_probabilities(lambda_home: float, lambda_away: float):
     pu = 1.0 - po
     return {"home_prob": ph, "draw_prob": pd, "away_prob": pa, "over_2_5_prob": po, "under_2_5_prob": pu}
 
-# ------------------------- ODDS API (TheOddsAPI) -------------------------
+# ------------------------- ODDS (TheOddsAPI) -------------------------
 def _odds_request(sport_key: str, params: dict):
     url = f"{ODDS_BASE_URL}/{sport_key}/odds"
     try:
         res = requests.get(url, params=params, timeout=25)
-        rem = res.headers.get("x-requests-remaining")
-        used = res.headers.get("x-requests-used")
-        log(f"   TheOddsAPI status={res.status_code} remaining={rem} used={used}")
         if res.status_code != 200:
             return []
         return res.json() or []
-    except Exception as e:
-        log(f"   TheOddsAPI request error: {e}")
+    except Exception:
         return []
 
 def fetch_odds_for_league(league_name: str, window_from: datetime.datetime, window_to: datetime.datetime):
@@ -569,9 +528,7 @@ def fetch_odds_for_league(league_name: str, window_from: datetime.datetime, wind
     params1["commenceTimeTo"] = iso_z(window_to)
 
     data = _odds_request(sport_key, params1)
-    if data:
-        return data
-    return _odds_request(sport_key, base_params)
+    return data if data else _odds_request(sport_key, base_params)
 
 def build_events_cache(odds_events):
     out = []
@@ -778,13 +735,8 @@ def stabilize_probs(league_name, league_baseline, lam_h, lam_a, ph, pd, pa, po, 
     ph, pd, pa = _apply_favorite_protection(ph, pd, pa, off1, off2)
 
     ltot = (lam_h or 0) + (lam_a or 0)
-
     if ltot < OVER_BLOCK_LTOTAL or (lam_h or 0) < OVER_BLOCK_LMIN or (lam_a or 0) < OVER_BLOCK_LMIN:
         po = min(po, min(CAP_OVER, 0.66))
-
-    # league-based cap (legacy low tempo list)
-    if league_name in LOW_TEMPO_LEAGUES:
-        po = min(po, LOW_TEMPO_OVER_CAP)
 
     if ltot > UNDER_BLOCK_LTOTAL or ((lam_h or 0) > UNDER_BLOCK_BOTH_GT and (lam_a or 0) > UNDER_BLOCK_BOTH_GT):
         pu = min(pu, 0.70)
@@ -824,7 +776,6 @@ def confidence_score(home_stats, away_stats, match_debug, lam_h, lam_a):
 
     score = 0.40
     score += 0.20 * _clamp(n / 5.0, 0.0, 1.0)
-
     if (match_debug or {}).get("matched"):
         score += 0.15
 
@@ -849,56 +800,74 @@ def suitability_from(ev_val, conf_val):
     mult = _clamp(0.6 + 0.4 * conf_val, 0.0, 1.0)
     return round(base * mult, 3)
 
+# ------------------------- SEASON RESOLUTION -------------------------
+def resolve_season_candidates(now_utc: datetime.datetime):
+    candidates = []
+    if FOOTBALL_SEASON_ENV:
+        candidates.append(FOOTBALL_SEASON_ENV)
+        try:
+            y = int(FOOTBALL_SEASON_ENV)
+            candidates.append(str(y - 1))
+            candidates.append(str(y + 1))
+        except Exception:
+            pass
+    candidates.append(str(now_utc.year - 1))
+    candidates.append(str(now_utc.year))
+
+    seen = set()
+    out = []
+    for c in candidates:
+        if c and c not in seen:
+            out.append(c)
+            seen.add(c)
+    return out[:4]
+
 # ------------------------- MAIN PIPELINE -------------------------
 def build_fixture_blocks():
     fixtures_out = []
-    now = datetime.datetime.now(datetime.timezone.utc)
-    to_dt = now + datetime.timedelta(hours=WINDOW_HOURS)
-    odds_from = now - datetime.timedelta(hours=8)
+    now_utc = datetime.datetime.now(datetime.timezone.utc)
+    to_dt_utc = now_utc + datetime.timedelta(hours=WINDOW_HOURS)
+    odds_from = now_utc - datetime.timedelta(hours=8)
 
     if not API_FOOTBALL_KEY:
         log("❌ FOOTBALL_API_KEY is missing. Aborting.")
-        return [], None
+        return [], None, now_utc, to_dt_utc
 
-    season_candidates = resolve_season_candidates(now)
-
+    season_candidates = resolve_season_candidates(now_utc)
     season_used = None
     all_fixtures = []
+
     for s in season_candidates:
         tmp = []
         for lg_name, lg_id in LEAGUES.items():
-            tmp.extend(fetch_fixtures(lg_id, lg_name, s, now, to_dt))
+            tmp.extend(fetch_fixtures(lg_id, lg_name, s, now_utc))
         if tmp:
             season_used = s
             all_fixtures = tmp
             break
 
     if season_used is None:
-        season_used = season_candidates[0] if season_candidates else ""
+        season_used = season_candidates[0] if season_candidates else (FOOTBALL_SEASON_ENV or "")
         all_fixtures = []
 
-    log(f"Season used: {season_used} | Total fixtures collected: {len(all_fixtures)}")
+    log(f"Season used: {season_used} | window {WINDOW_HOURS}h | fixtures collected: {len(all_fixtures)}")
 
     odds_cache_by_league = {}
-    matched_cnt = 0
     if USE_ODDS_API and ODDS_API_KEY:
-        total_events = 0
         for lg_name in LEAGUES.keys():
-            odds_events = fetch_odds_for_league(lg_name, odds_from, to_dt)
-            total_events += len(odds_events or [])
+            odds_events = fetch_odds_for_league(lg_name, odds_from, to_dt_utc)
             odds_cache_by_league[lg_name] = build_events_cache(odds_events)
-        log(f"Odds events fetched total: {total_events}")
+
+    tz = ZoneInfo(DISPLAY_TZ)
 
     for fx in all_fixtures:
         league_id = fx["league_id"]
         league_name = fx["league_name"]
 
-        # HARD LOCK final
         if league_name not in LEAGUES:
             continue
 
         league_baseline = fetch_league_baselines(league_id, season_used)
-
         lb_goals = safe_float((league_baseline or {}).get("avg_goals_per_match"), None)
         lb_over = safe_float((league_baseline or {}).get("avg_over25_rate"), None)
         lb_draw = safe_float((league_baseline or {}).get("avg_draw_rate"), None)
@@ -918,8 +887,6 @@ def build_fixture_blocks():
         if USE_ODDS_API and ODDS_API_KEY:
             league_cache = odds_cache_by_league.get(league_name, [])
             offered, match_debug = pick_best_odds_for_fixture(fx, league_cache)
-            if match_debug.get("matched"):
-                matched_cnt += 1
 
         off_1 = offered.get("home")
         off_x = offered.get("draw")
@@ -927,21 +894,15 @@ def build_fixture_blocks():
         off_o = offered.get("over")
         off_u = offered.get("under")
 
-        # MODEL probs (stabilized)
         m_ph, m_pd, m_pa, m_po, m_pu = stabilize_probs(
             league_name=league_name,
             league_baseline=league_baseline,
-            lam_h=lam_h,
-            lam_a=lam_a,
-            ph=probs["home_prob"],
-            pd=probs["draw_prob"],
-            pa=probs["away_prob"],
-            po=probs["over_2_5_prob"],
-            pu=probs["under_2_5_prob"],
+            lam_h=lam_h, lam_a=lam_a,
+            ph=probs["home_prob"], pd=probs["draw_prob"], pa=probs["away_prob"],
+            po=probs["over_2_5_prob"], pu=probs["under_2_5_prob"],
             off1=off_1, offx=off_x, off2=off_2, offo=off_o, offu=off_u,
         )
 
-        # SNAP probs (display only)
         s_ph, s_pd, s_pa, s_po, s_pu = market_snap_probs(m_ph, m_pd, m_pa, m_po, m_pu, off_1, off_x, off_2, off_o, off_u)
 
         fair_1 = implied(m_ph)
@@ -964,11 +925,10 @@ def build_fixture_blocks():
 
         total_lambda = float((lam_h or 0.0) + (lam_a or 0.0))
         abs_gap = float(abs((lam_h or 0.0) - (lam_a or 0.0)))
-
-        dom = 0.0
+        dominance = 0.0
         if total_lambda > 1e-9:
-            dom = _clamp(((lam_h or 0.0) - (lam_a or 0.0)) / total_lambda, -1.0, 1.0)
-        bal = _clamp(1.0 - abs(dom), 0.0, 1.0)
+            dominance = _clamp(((lam_h or 0.0) - (lam_a or 0.0)) / total_lambda, -1.0, 1.0)
+        balance = _clamp(1.0 - abs(dominance), 0.0, 1.0)
 
         tight_game = (m_pd >= TIGHT_DRAW_THRESHOLD) or (total_lambda <= TIGHT_LTOTAL_THRESHOLD)
 
@@ -986,15 +946,18 @@ def build_fixture_blocks():
             and (total_lambda >= OVER_SHAPE_TL_MIN)
         )
 
-        home_shape = bool(dom >= DOMINANCE_SHAPE_THRESHOLD)
-        away_shape = bool(dom <= -DOMINANCE_SHAPE_THRESHOLD)
-        draw_shape = bool((bal >= BALANCE_DRAW_THRESHOLD) and (m_pd is not None and m_pd >= DRAW_SHAPE_DRAWPROB_MIN) and (total_lambda <= DRAW_SHAPE_TOTALLAMBDA_MAX))
+        home_shape = bool(dominance >= DOMINANCE_SHAPE_THRESHOLD)
+        away_shape = bool(dominance <= -DOMINANCE_SHAPE_THRESHOLD)
+        draw_shape = bool(
+            (balance >= BALANCE_DRAW_THRESHOLD)
+            and (m_pd is not None and m_pd >= DRAW_SHAPE_DRAWPROB_MIN)
+            and (total_lambda <= DRAW_SHAPE_TOTALLAMBDA_MAX)
+        )
 
-        # Selection-only over penalty (hint)
         over_penalty_pts = 0.0
         if tight_game:
             over_penalty_pts += OVER_TIGHT_PENALTY_PTS
-        if (league_name in LOW_TEMPO_LEAGUES) or low_tempo_dynamic:
+        if low_tempo_dynamic:
             over_penalty_pts += OVER_LOW_TEMPO_EXTRA_PENALTY_PTS
 
         selection_vo = None
@@ -1010,25 +973,23 @@ def build_fixture_blocks():
             "confidence": round(conf, 3),
             "confidence_band": conf_band,
             "tight_game": bool(tight_game),
-
             "over_friendly_league": bool(over_friendly),
             "draw_friendly_league": bool(draw_friendly),
-            "low_tempo_league": bool((league_name in LOW_TEMPO_LEAGUES) or low_tempo_dynamic),
-
+            "low_tempo_league": bool(low_tempo_dynamic),
             "home_shape": bool(home_shape),
             "away_shape": bool(away_shape),
             "draw_shape": bool(draw_shape),
-
             "under_elite": bool(under_elite),
             "over_good_shape": bool(over_good_shape),
         })
 
-        dt = fx["commence_utc"]
+        dt_utc = fx["commence_utc"]
+        dt_local = dt_utc.astimezone(tz)
 
         fixtures_out.append({
             "fixture_id": fx["id"],
-            "date": dt.date().isoformat(),
-            "time": dt.strftime("%H:%M"),
+            "date": dt_local.date().isoformat(),
+            "time": dt_local.strftime("%H:%M"),
             "league_id": league_id,
             "league": league_name,
             "home": fx["home"],
@@ -1040,8 +1001,8 @@ def build_fixture_blocks():
 
             "total_lambda": round(total_lambda, 3),
             "abs_lambda_gap": round(abs_gap, 3),
-            "dominance_index": round(dom, 3),
-            "balance_index": round(bal, 3),
+            "dominance_index": round(dominance, 3),
+            "balance_index": round(balance, 3),
 
             "home_prob": round(m_ph, 3),
             "draw_prob": round(m_pd, 3),
@@ -1079,7 +1040,6 @@ def build_fixture_blocks():
             "ev_over": evo,
             "ev_under": evu,
 
-            # suitability (additive)
             "suitability_home": suitability_from(ev1, conf),
             "suitability_away": suitability_from(ev2, conf),
             "suitability_draw": suitability_from(evx, conf),
@@ -1097,29 +1057,30 @@ def build_fixture_blocks():
             "league_baseline": league_baseline,
         })
 
-    log(f"Thursday fixtures_out: {len(fixtures_out)} | odds matched: {matched_cnt}")
-    return fixtures_out, season_used
+    return fixtures_out, season_used, now_utc, to_dt_utc
 
 def main():
-    now = datetime.datetime.now(datetime.timezone.utc)
-    to_dt = now + datetime.timedelta(hours=WINDOW_HOURS)
+    fixtures, season_used, now_utc, to_dt_utc = build_fixture_blocks()
 
-    fixtures, season_used = build_fixture_blocks()
-
-    out = {
-        "generated_at": now.isoformat(),
-        "season_used": str(season_used or ""),
+    report = {
+        "generated_at": now_utc.isoformat(),
+        "season_used": season_used,
+        "timezone": DISPLAY_TZ,
         "engine_leagues": list(LEAGUES.keys()),
-        "window": {"from": now.date().isoformat(), "to": to_dt.date().isoformat(), "hours": WINDOW_HOURS},
+        "window": {
+            "from": now_utc.date().isoformat(),
+            "to": to_dt_utc.date().isoformat(),
+            "hours": WINDOW_HOURS,
+        },
         "fixtures_total": len(fixtures),
         "fixtures": fixtures,
     }
 
     os.makedirs("logs", exist_ok=True)
     with open("logs/thursday_report_v3.json", "w", encoding="utf-8") as f:
-        json.dump(out, f, ensure_ascii=False, indent=2)
+        json.dump(report, f, ensure_ascii=False, indent=2)
 
-    log(f"✅ Thursday v3 written. Season={season_used} Fixtures={len(fixtures)}")
+    log(f"✅ Thursday v3 written: logs/thursday_report_v3.json | Season={season_used} Fixtures={len(fixtures)}")
 
 if __name__ == "__main__":
     main()
