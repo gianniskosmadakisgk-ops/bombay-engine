@@ -1,15 +1,19 @@
 openapi: 3.1.0
 info:
   title: Bombay Engine API
-  version: 1.1.0
+  version: 1.0.6
   description: |
-    Bombay Engine API for Agent Bombay v6.x.
+    Bombay Engine API for Agent Bombay Presenter.
 
-    IMPORTANT RULE:
-    - The Custom GPT MUST read ONLY response.report (never infer from anything else).
+    IMPORTANT (Presenter):
+    - /thursday-analysis-v3 returns the latest saved Thursday report (does NOT run engine).
+    - /friday-shortlist-v3 returns the latest saved Friday shortlist (does NOT run engine).
+    - /tuesday-recap returns the latest saved Tuesday recap (does NOT run engine).
 
-    Thursday is CHUNKED to avoid "ResponseTooLargeError".
-    Use query params cursor/per_page/lite on /thursday-analysis-v3.
+    Thursday supports chunking via query params to avoid large responses:
+      - cursor (int league-page cursor)
+      - per_page (int leagues per page)
+      - lite (true/false) to remove heavy fields per fixture
 
 servers:
   - url: https://bombay-engine.onrender.com
@@ -30,42 +34,44 @@ paths:
   /thursday-analysis-v3:
     get:
       operationId: runThursdayAnalysis
-      summary: Thursday Report V3 (latest saved) — chunked
+      summary: Thursday Report V3 (latest saved report; supports chunking)
       description: |
-        Returns the latest saved Thursday Report V3 from logs/thursday_report_v3.json.
+        Returns the latest saved Thursday report from logs/thursday_report_v3.json.
         Does NOT run the engine.
-        Supports chunking by leagues to avoid oversized responses.
 
-        The Custom GPT must read response.report only.
+        Optional query params:
+          - cursor: league-page cursor (0-based)
+          - per_page: number of leagues per page (default 3)
+          - lite: if true, strips heavy fixture fields (e.g. league_baseline, snap_*)
+
+        Response always contains: status, timestamp, report.
+        If chunking is used, report.chunk exists.
       parameters:
-        - name: cursor
-          in: query
-          required: false
+        - in: query
+          name: cursor
           schema:
             type: integer
             minimum: 0
-          description: League cursor (0-based). If omitted, defaults to 0.
-        - name: per_page
-          in: query
           required: false
+        - in: query
+          name: per_page
           schema:
             type: integer
             minimum: 1
             maximum: 10
-          description: Number of leagues per chunk. If omitted, defaults to 3.
-        - name: lite
-          in: query
           required: false
+        - in: query
+          name: lite
           schema:
             type: boolean
-          description: If true, returns a lighter fixture payload (drops heavy keys).
+          required: false
       responses:
         "200":
           description: ok
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ThursdayOkChunked"
+                $ref: "#/components/schemas/ThursdayOk"
         "404":
           description: report not available
           content:
@@ -76,11 +82,11 @@ paths:
   /friday-shortlist-v3:
     get:
       operationId: runFridayShortlist
-      summary: Friday Shortlist V3 (latest saved)
+      summary: Friday Shortlist V3 (latest saved report)
       description: |
         Returns the latest saved Friday shortlist from logs/friday_shortlist_v3.json.
         Does NOT run the engine.
-        The Custom GPT must read response.report only.
+        Response contains: status, timestamp, report.
       responses:
         "200":
           description: ok
@@ -98,11 +104,11 @@ paths:
   /tuesday-recap:
     get:
       operationId: runTuesdayRecap
-      summary: Tuesday Recap V3 (latest saved)
+      summary: Tuesday Recap V3 (latest saved report)
       description: |
         Returns the latest saved Tuesday recap from logs/tuesday_recap_v3.json.
         Does NOT run the engine.
-        The Custom GPT must read response.report only.
+        Response contains: status, timestamp, report.
       responses:
         "200":
           description: ok
@@ -111,7 +117,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/OkWithReport"
         "404":
-          description: recap not available
+          description: report not available
           content:
             application/json:
               schema:
@@ -134,76 +140,25 @@ components:
           type: string
           format: date-time
 
-    ThursdayChunk:
-      type: object
-      additionalProperties: false
-      required: [cursor, per_page, leagues, next_cursor, is_lite]
-      properties:
-        cursor:
-          type: integer
-          minimum: 0
-        per_page:
-          type: integer
-          minimum: 1
-          maximum: 10
-        leagues:
-          type: array
-          items:
-            type: string
-        next_cursor:
-          type:
-            - integer
-            - "null"
-          minimum: 0
-        is_lite:
-          type: boolean
-
-    ThursdayFixtureV3:
+    ErrorWithReportNull:
       type: object
       additionalProperties: true
-
-    ThursdayReportV3Chunked:
-      type: object
-      additionalProperties: true
-      required: [generated_at, window, fixtures_total, fixtures, chunk]
-      properties:
-        generated_at:
-          type: string
-        season_used:
-          type:
-            - string
-            - "null"
-        engine_leagues:
-          type:
-            - array
-            - "null"
-          items:
-            type: string
-        window:
-          type: object
-          additionalProperties: true
-        fixtures_total:
-          type: integer
-        fixtures:
-          type: array
-          items:
-            $ref: "#/components/schemas/ThursdayFixtureV3"
-        chunk:
-          $ref: "#/components/schemas/ThursdayChunk"
-
-    ThursdayOkChunked:
-      type: object
-      additionalProperties: true
-      required: [status, timestamp, report]
+      required: [status, message, timestamp, report]
       properties:
         status:
           type: string
-          example: ok
+          example: error
+        message:
+          type: string
+          example: Report not available
+        error:
+          type: ["string", "null"]
         timestamp:
           type: string
           format: date-time
         report:
-          $ref: "#/components/schemas/ThursdayReportV3Chunked"
+          type: ["object", "null"]
+          example: null
 
     OkWithReport:
       type: object
@@ -220,26 +175,111 @@ components:
           type: object
           additionalProperties: true
 
-    ErrorWithReportNull:
+    ThursdayOk:
       type: object
       additionalProperties: true
-      required: [status, message, timestamp, report]
+      required: [status, timestamp, report]
       properties:
         status:
           type: string
-          example: error
-        message:
-          type: string
-          example: Report not available
-        error:
-          type:
-            - string
-            - "null"
+          example: ok
         timestamp:
           type: string
           format: date-time
         report:
-          type:
-            - object
-            - "null"
-          example: null
+          $ref: "#/components/schemas/ThursdayReportV3"
+
+    ThursdayReportV3:
+      type: object
+      additionalProperties: true
+      required: [generated_at, window, fixtures_total, fixtures]
+      properties:
+        generated_at:
+          type: string
+        season_used:
+          type: ["string", "null"]
+        engine_leagues:
+          type: ["array", "null"]
+          items: { type: string }
+        window:
+          type: object
+          additionalProperties: true
+          required: [from, to, hours]
+          properties:
+            from: { type: string }
+            to: { type: string }
+            hours: { type: integer }
+        fixtures_total:
+          type: integer
+        fixtures_total_full:
+          type: ["integer", "null"]
+        leagues_total:
+          type: ["integer", "null"]
+        chunk:
+          type: ["object", "null"]
+          additionalProperties: true
+          properties:
+            cursor: { type: integer }
+            per_page: { type: integer }
+            leagues:
+              type: array
+              items: { type: string }
+            next_cursor:
+              type: ["integer", "null"]
+            total_leagues:
+              type: ["integer", "null"]
+        fixtures:
+          type: array
+          items:
+            $ref: "#/components/schemas/ThursdayFixtureV3"
+
+    ThursdayFixtureV3:
+      type: object
+      additionalProperties: true
+      required: [fixture_id, date, time, league, home, away, model]
+      properties:
+        fixture_id: { type: integer }
+        date: { type: string }
+        time: { type: string }
+        league_id: { type: ["integer", "null"] }
+        league: { type: string }
+        home: { type: string }
+        away: { type: string }
+        model: { type: string }
+
+        home_prob: { type: ["number", "null"] }
+        draw_prob: { type: ["number", "null"] }
+        away_prob: { type: ["number", "null"] }
+        over_2_5_prob: { type: ["number", "null"] }
+        under_2_5_prob: { type: ["number", "null"] }
+
+        fair_1: { type: ["number", "null"] }
+        fair_x: { type: ["number", "null"] }
+        fair_2: { type: ["number", "null"] }
+        fair_over_2_5: { type: ["number", "null"] }
+        fair_under_2_5: { type: ["number", "null"] }
+
+        offered_1: { type: ["number", "null"] }
+        offered_x: { type: ["number", "null"] }
+        offered_2: { type: ["number", "null"] }
+        offered_over_2_5: { type: ["number", "null"] }
+        offered_under_2_5: { type: ["number", "null"] }
+
+        value_pct_1: { type: ["number", "null"] }
+        value_pct_x: { type: ["number", "null"] }
+        value_pct_2: { type: ["number", "null"] }
+        value_pct_over: { type: ["number", "null"] }
+        value_pct_under: { type: ["number", "null"] }
+
+        ev_1: { type: ["number", "null"] }
+        ev_x: { type: ["number", "null"] }
+        ev_2: { type: ["number", "null"] }
+        ev_over: { type: ["number", "null"] }
+        ev_under: { type: ["number", "null"] }
+
+        flags:
+          type: ["object", "null"]
+          additionalProperties: true
+        odds_match:
+          type: ["object", "null"]
+          additionalProperties: true
