@@ -6,9 +6,6 @@ from flask import Flask, jsonify, send_file, request, Response
 
 app = Flask(__name__)
 
-# ------------------------------------------------------
-# Project root (where app.py lives)
-# ------------------------------------------------------
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 
 def abs_path(rel_path: str) -> str:
@@ -16,9 +13,7 @@ def abs_path(rel_path: str) -> str:
 
 LOGS_DIR = abs_path("logs")
 
-# ------------------------------------------------------
 # Optional admin protection
-# ------------------------------------------------------
 ADMIN_KEY = os.environ.get("ADMIN_KEY", "").strip()
 
 def require_admin():
@@ -32,9 +27,6 @@ def require_admin():
         }), 401
     return None
 
-# ------------------------------------------------------
-# Run script with correct cwd + absolute path
-# ------------------------------------------------------
 SCRIPT_TIMEOUT_SEC = int(os.environ.get("SCRIPT_TIMEOUT_SEC", "180"))
 MAX_LOG_CHARS = int(os.environ.get("MAX_LOG_CHARS", "8000"))
 
@@ -42,7 +34,6 @@ def run_script(script_rel_path: str):
     script_full = abs_path(script_rel_path)
     try:
         print(f"▶️ Running script: {script_rel_path}", flush=True)
-
         result = subprocess.run(
             ["python3", script_full],
             cwd=PROJECT_ROOT,
@@ -50,7 +41,6 @@ def run_script(script_rel_path: str):
             text=True,
             timeout=SCRIPT_TIMEOUT_SEC,
         )
-
         stdout = (result.stdout or "")[:MAX_LOG_CHARS]
         stderr = (result.stderr or "")[:MAX_LOG_CHARS]
 
@@ -58,7 +48,6 @@ def run_script(script_rel_path: str):
             print("----- SCRIPT OUTPUT START -----", flush=True)
             print(stdout, flush=True)
             print("----- SCRIPT OUTPUT END -----", flush=True)
-
         if stderr:
             print("⚠️ SCRIPT ERRORS:", flush=True)
             print(stderr, flush=True)
@@ -70,19 +59,14 @@ def run_script(script_rel_path: str):
             "stderr": stderr,
             "script": script_rel_path,
         }
-
     except subprocess.TimeoutExpired:
         msg = f"Timeout: script exceeded {SCRIPT_TIMEOUT_SEC}s"
         print(f"⏳ {msg} ({script_rel_path})", flush=True)
         return {"ok": False, "return_code": -2, "stdout": "", "stderr": msg, "script": script_rel_path}
-
     except Exception as e:
         print(f"❌ Error running {script_rel_path}: {e}", flush=True)
         return {"ok": False, "return_code": -1, "stdout": "", "stderr": str(e), "script": script_rel_path}
 
-# ------------------------------------------------------
-# Atomic write helpers
-# ------------------------------------------------------
 def atomic_write_json(full_path: str, obj: dict):
     os.makedirs(os.path.dirname(full_path) or ".", exist_ok=True)
     tmp_path = full_path + ".tmp"
@@ -124,9 +108,6 @@ def list_logs_dir():
     except Exception as e:
         return {"exists": None, "path": LOGS_DIR, "error": str(e), "files": []}
 
-# ------------------------------------------------------
-# HEALTHCHECK
-# ------------------------------------------------------
 @app.route("/healthcheck", methods=["GET"])
 def healthcheck():
     return jsonify({
@@ -135,9 +116,6 @@ def healthcheck():
         "timestamp": datetime.utcnow().isoformat()
     })
 
-# ------------------------------------------------------
-# DEBUG
-# ------------------------------------------------------
 @app.route("/debug/logs", methods=["GET"])
 def debug_logs():
     guard = require_admin()
@@ -150,9 +128,6 @@ def debug_logs():
         "logs": list_logs_dir(),
     })
 
-# ------------------------------------------------------
-# UPLOAD PAGE + POST (manual overwrite logs/*.json)
-# ------------------------------------------------------
 UPLOAD_HTML = """<!doctype html>
 <html>
 <head>
@@ -231,9 +206,7 @@ def upload_post():
         "logs_dir": list_logs_dir(),
     })
 
-# ------------------------------------------------------
-# RUN endpoints (manual runs)
-# ------------------------------------------------------
+# ---------------- RUN endpoints ----------------
 @app.route("/run/thursday-v3", methods=["GET"])
 def run_thursday():
     guard = require_admin()
@@ -262,9 +235,7 @@ def run_tuesday():
 def run_tuesday_alias():
     return run_tuesday()
 
-# ------------------------------------------------------
-# DOWNLOAD endpoints
-# ------------------------------------------------------
+# ---------------- DOWNLOAD endpoints ----------------
 @app.route("/download/thursday-report-v3", methods=["GET"])
 def download_thursday():
     guard = require_admin()
@@ -305,10 +276,54 @@ def download_tuesday_history():
         return jsonify({"status":"error","message":"missing","path":p,"logs":list_logs_dir()}), 404
     return send_file(p, mimetype="application/json", as_attachment=True)
 
-# ------------------------------------------------------
-# GPT endpoints (report-only)
-# NOTE: Thursday is CHUNKED to avoid ResponseTooLargeError
-# ------------------------------------------------------
+# ---------------- GPT read endpoints (report-only) ----------------
+def _parse_int(q, default, lo=None, hi=None):
+    try:
+        v = int(q)
+    except Exception:
+        v = default
+    if lo is not None:
+        v = max(lo, v)
+    if hi is not None:
+        v = min(hi, v)
+    return v
+
+def _parse_bool(q, default=False):
+    if q is None:
+        return default
+    s = str(q).strip().lower()
+    if s in ("1","true","yes","y","on"):
+        return True
+    if s in ("0","false","no","n","off"):
+        return False
+    return default
+
+def _get_engine_leagues(report: dict):
+    # Prefer explicit engine_leagues; fallback to ordered unique leagues from fixtures.
+    eng = report.get("engine_leagues")
+    if isinstance(eng, list) and all(isinstance(x, str) for x in eng) and eng:
+        return eng
+    fx = report.get("fixtures") or []
+    seen = []
+    for it in fx:
+        lg = it.get("league")
+        if isinstance(lg, str) and lg and lg not in seen:
+            seen.append(lg)
+    return seen
+
+def _lite_fixture(fx: dict):
+    # Keep only what presenter needs; drop heavy blobs.
+    keep = {
+        "fixture_id","date","time","league_id","league","home","away",
+        "home_prob","draw_prob","away_prob","over_2_5_prob","under_2_5_prob",
+        "fair_1","fair_x","fair_2","fair_over_2_5","fair_under_2_5",
+        "offered_1","offered_x","offered_2","offered_over_2_5","offered_under_2_5",
+        "value_pct_1","value_pct_x","value_pct_2","value_pct_over","value_pct_under",
+        "ev_1","ev_x","ev_2","ev_over","ev_under",
+        "flags","odds_match"
+    }
+    return {k: fx.get(k) for k in keep if k in fx}
+
 @app.route("/thursday-analysis-v3", methods=["GET"])
 def gpt_thursday():
     report, error = load_json_report("logs/thursday_report_v3.json")
@@ -316,76 +331,44 @@ def gpt_thursday():
         return jsonify({
             "status":"error",
             "message":"Thursday report not available",
-            "error": error,
-            "timestamp": datetime.utcnow().isoformat(),
-            "report": None
+            "error":error,
+            "timestamp":datetime.utcnow().isoformat(),
+            "report":None
         }), 404
 
-    fixtures = report.get("fixtures") or []
-    engine_leagues = report.get("engine_leagues") or sorted({f.get("league") for f in fixtures if f.get("league")})
+    cursor = _parse_int(request.args.get("cursor"), 0, lo=0, hi=10_000)
+    per_page = _parse_int(request.args.get("per_page"), 3, lo=1, hi=10)
+    lite = _parse_bool(request.args.get("lite"), True)
 
-    # ---- Chunking params ----
-    try:
-        per_page = int(request.args.get("per_page", "3"))
-    except Exception:
-        per_page = 3
-    per_page = max(1, min(5, per_page))
+    leagues = _get_engine_leagues(report)
+    total_leagues = len(leagues)
 
-    try:
-        cursor = int(request.args.get("cursor", "0"))
-    except Exception:
-        cursor = 0
-    cursor = max(0, cursor)
+    start = min(cursor, total_leagues)
+    end = min(start + per_page, total_leagues)
+    chunk_leagues = leagues[start:end]
+    next_cursor = end if end < total_leagues else None
 
-    leagues_param = (request.args.get("leagues") or "").strip()
-    leagues_filter = [x.strip() for x in leagues_param.split(",") if x.strip()] if leagues_param else []
-
-    lite = (request.args.get("lite", "1").lower() in ("1", "true", "yes"))
-
-    if leagues_filter:
-        chosen_leagues = [lg for lg in engine_leagues if lg in leagues_filter]
-        next_cursor = None
-    else:
-        chosen_leagues = engine_leagues[cursor:cursor + per_page]
-        next_cursor = cursor + per_page if (cursor + per_page) < len(engine_leagues) else None
-
-    chosen_set = set(chosen_leagues)
-    chunk_fixtures = [f for f in fixtures if f.get("league") in chosen_set]
+    fixtures_all = report.get("fixtures") or []
+    fixtures_chunk = [fx for fx in fixtures_all if fx.get("league") in chunk_leagues]
 
     if lite:
-        keep = {
-            "fixture_id","date","time","league_id","league","home","away","model",
-            "lambda_home","lambda_away","total_lambda","abs_lambda_gap",
-            "home_prob","draw_prob","away_prob","over_2_5_prob","under_2_5_prob",
-            "fair_1","fair_x","fair_2","fair_over_2_5","fair_under_2_5",
-            "offered_1","offered_x","offered_2","offered_over_2_5","offered_under_2_5",
-            "value_pct_1","value_pct_x","value_pct_2","value_pct_over","value_pct_under",
-            "ev_1","ev_x","ev_2","ev_over","ev_under",
-            "flags","odds_match"
-        }
-        def slim(x):
-            return {k: x.get(k) for k in keep if k in x}
-        chunk_fixtures = [slim(f) for f in chunk_fixtures]
+        fixtures_chunk = [_lite_fixture(fx) for fx in fixtures_chunk]
 
-    chunk_report = {
-        "generated_at": report.get("generated_at"),
-        "season_used": report.get("season_used"),
-        "window": report.get("window"),
-        "engine_leagues": engine_leagues,
-        "fixtures_total": len(fixtures),
-        "chunk": {
-            "cursor": cursor,
-            "per_page": per_page,
-            "leagues": chosen_leagues,
-            "next_cursor": next_cursor
-        },
-        "fixtures": chunk_fixtures
+    chunked_report = dict(report)
+    chunked_report["fixtures"] = fixtures_chunk
+    chunked_report["chunk"] = {
+        "cursor": start,
+        "per_page": per_page,
+        "leagues": chunk_leagues,
+        "next_cursor": next_cursor,
+        "total_leagues": total_leagues,
+        "lite": bool(lite),
     }
 
     return jsonify({
         "status":"ok",
-        "timestamp": datetime.utcnow().isoformat(),
-        "report": chunk_report
+        "timestamp":datetime.utcnow().isoformat(),
+        "report":chunked_report
     })
 
 @app.route("/friday-shortlist-v3", methods=["GET"])
@@ -395,15 +378,11 @@ def gpt_friday():
         return jsonify({
             "status":"error",
             "message":"Friday shortlist v3 not available",
-            "error": error,
-            "timestamp": datetime.utcnow().isoformat(),
-            "report": None
+            "error":error,
+            "timestamp":datetime.utcnow().isoformat(),
+            "report":None
         }), 404
-    return jsonify({
-        "status":"ok",
-        "timestamp": datetime.utcnow().isoformat(),
-        "report": report
-    })
+    return jsonify({"status":"ok","timestamp":datetime.utcnow().isoformat(),"report":report})
 
 @app.route("/tuesday-recap", methods=["GET"])
 def gpt_tuesday():
@@ -412,23 +391,17 @@ def gpt_tuesday():
         return jsonify({
             "status":"error",
             "message":"Tuesday recap v3 not available",
-            "error": error,
-            "timestamp": datetime.utcnow().isoformat(),
-            "report": None
+            "error":error,
+            "timestamp":datetime.utcnow().isoformat(),
+            "report":None
         }), 404
-    return jsonify({
-        "status":"ok",
-        "timestamp": datetime.utcnow().isoformat(),
-        "report": report
-    })
+    return jsonify({"status":"ok","timestamp":datetime.utcnow().isoformat(),"report":report})
 
 @app.route("/tuesday-recap-v3", methods=["GET"])
 def gpt_tuesday_v3():
     return gpt_tuesday()
 
-# ------------------------------------------------------
-# ENTRY POINT
-# ------------------------------------------------------
+# ---------------- ENTRY POINT ----------------
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     print(f"🚀 Starting Bombay Engine Flask Server on port {port}...", flush=True)
