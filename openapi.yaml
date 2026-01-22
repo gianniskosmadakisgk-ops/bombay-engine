@@ -1,339 +1,151 @@
-openapi: 3.1.1
+openapi: 3.1.0
 info:
   title: Bombay Engine API
-  version: "1.0.0"
-  description: >
-    Internal API for Agent Bombay – Thursday v3, Friday Shortlist, Tuesday Recap.
-    Το GPT διαβάζει έτοιμα reports και δεν τρέχει το engine.
-
+  version: 1.1.0
+  description: |
+    Internal API for Agent Bombay.
+    IMPORTANT:
+    - Thursday endpoint is CHUNKED to avoid ResponseTooLargeError.
+    - Custom GPT MUST read ONLY response.report.
 servers:
   - url: https://bombay-engine.onrender.com
 
 paths:
-
-  # ------------------------------------------------------
-  # HEALTHCHECK
-  # ------------------------------------------------------
   /healthcheck:
     get:
       operationId: healthcheck
-      summary: Healthcheck for Bombay Engine
+      summary: Health check
       responses:
         "200":
-          description: Engine is alive
+          description: ok
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthcheckResponse"
 
-  # ------------------------------------------------------
-  # THURSDAY ANALYSIS (v3)
-  # ------------------------------------------------------
   /thursday-analysis-v3:
     get:
       operationId: runThursdayAnalysis
-      summary: Get latest Thursday analysis (v3)
-      description: >
-        Διαβάζει το αρχείο logs/thursday_report_v3.json.
-        Το engine πρέπει να έχει τρέξει πριν (endpoint /run/thursday-v3).
+      summary: Thursday Report V3 (latest saved report) - CHUNKED
+      description: |
+        Returns the latest saved Thursday Report V3 from logs/thursday_report_v3.json.
+        Does NOT run the engine.
+        Returns response.report with chunk metadata + fixtures filtered by league page.
+        Custom GPT must read response.report.
+      parameters:
+        - in: query
+          name: cursor
+          schema:
+            type: integer
+            minimum: 0
+          description: League page cursor (default 0)
+        - in: query
+          name: per_page
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 5
+          description: Leagues per response (default 3)
+        - in: query
+          name: lite
+          schema:
+            type: boolean
+          description: If true, drops heavy fields (default true)
+        - in: query
+          name: leagues
+          schema:
+            type: string
+          description: Comma-separated league names override cursor paging
       responses:
         "200":
-          description: Thursday analysis successfully returned
+          description: ok
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ThursdayAnalysisResponse"
-        "503":
-          description: Thursday report not available
+                $ref: "#/components/schemas/OkWithReport"
+        "404":
+          description: report not available
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ErrorResponse"
+                $ref: "#/components/schemas/ErrorWithReportNull"
 
-  # ------------------------------------------------------
-  # FRIDAY SHORTLIST (v3)
-  # ------------------------------------------------------
   /friday-shortlist-v3:
     get:
       operationId: runFridayShortlist
-      summary: Get latest Friday shortlist (value + Kelly)
-      description: >
-        Διαβάζει το αρχείο logs/friday_shortlist_v3.json
-        που παράγεται αφού υπάρχει διαθέσιμο Thursday report.
+      summary: Friday Shortlist V3 (latest saved report)
+      description: |
+        Returns the latest saved Friday shortlist from logs/friday_shortlist_v3.json.
+        Does NOT run scripts.
+        Custom GPT must read response.report.
       responses:
         "200":
-          description: Friday shortlist returned successfully
+          description: ok
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/FridayShortlistResponse"
-        "503":
-          description: Shortlist not available
+                $ref: "#/components/schemas/OkWithReport"
+        "404":
+          description: report not available
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ErrorResponse"
+                $ref: "#/components/schemas/ErrorWithReportNull"
 
-  # ------------------------------------------------------
-  # TUESDAY WEEKLY RECAP
-  # ------------------------------------------------------
   /tuesday-recap:
     get:
       operationId: runTuesdayRecap
-      summary: Get Tuesday weekly recap
-      description: >
-        Διαβάζει logs/tuesday_recap_v2.json (weekly performance report).
+      summary: Tuesday Recap (latest saved report)
+      description: |
+        Returns the latest saved Tuesday recap from logs/tuesday_recap_v3.json.
+        Does NOT run scripts.
+        Custom GPT must read response.report.
       responses:
         "200":
-          description: Tuesday recap returned successfully
+          description: ok
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/TuesdayRecapResponse"
-        "503":
-          description: Recap not available
+                $ref: "#/components/schemas/OkWithReport"
+        "404":
+          description: recap not available
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ErrorResponse"
+                $ref: "#/components/schemas/ErrorWithReportNull"
 
-# =========================================================
-# SCHEMAS
-# =========================================================
 components:
   schemas:
-
-    # --------------------------
-    # BASIC
-    # --------------------------
     HealthcheckResponse:
       type: object
-      properties:
-        status:
-          type: string
-          example: "ok"
-        message:
-          type: string
-          example: "Bombay Engine alive"
-
-    ErrorResponse:
-      type: object
-      properties:
-        status:
-          type: string
-          example: "error"
-        message:
-          type: string
-          example: "Report not available"
-        error:
-          type: string
-          example: "File missing"
-        timestamp:
-          type: string
-          example: "2025-12-03T13:33:11.351547"
-
-    # --------------------------
-    # THURSDAY
-    # --------------------------
-    ThursdayFixture:
-      type: object
-      properties:
-        date:
-          type: string
-          description: "Ημερομηνία αγώνα (YYYY-MM-DD)"
-          example: "2025-12-06"
-        time:
-          type: string
-          description: "Ώρα αγώνα (HH:MM)"
-          example: "17:00"
-        league:
-          type: string
-          example: "Premier League"
-        league_id:
-          type: integer
-          example: 39
-        home:
-          type: string
-          example: "Arsenal"
-        away:
-          type: string
-          example: "Chelsea"
-        model:
-          type: string
-          description: "Ποιο engine / μοντέλο χρησιμοποίησε το backend"
-          example: "draw"
-        fair_1:
-          type: number
-          format: float
-          example: 1.95
-        fair_x:
-          type: number
-          format: float
-          example: 3.40
-        fair_2:
-          type: number
-          format: float
-          example: 4.00
-        fair_over_2_5:
-          type: number
-          format: float
-          example: 1.85
-        fair_under_2_5:
-          type: number
-          format: float
-          example: 2.10
-        score_home:
-          type: number
-          format: float
-          example: 1.6
-        score_away:
-          type: number
-          format: float
-          example: 0.9
-        draw_prob:
-          type: number
-          format: float
-          description: "Πιθανότητα για ισοπαλία από το μοντέλο"
-          example: 0.29
-        over_2_5_prob:
-          type: number
-          format: float
-          description: "Πιθανότητα για Over 2.5"
-          example: 0.63
-        under_2_5_prob:
-          type: number
-          format: float
-          description: "Πιθανότητα για Under 2.5"
-          example: 0.37
       additionalProperties: true
-
-    ThursdayAnalysisReport:
-      type: object
+      required: [status, message, timestamp]
       properties:
-        fixtures:
-          type: array
-          items:
-            $ref: "#/components/schemas/ThursdayFixture"
-        window:
+        status: { type: string, example: "ok" }
+        message: { type: string, example: "Bombay Engine alive" }
+        timestamp: { type: string, format: date-time }
+
+    OkWithReport:
+      type: object
+      additionalProperties: true
+      required: [status, timestamp, report]
+      properties:
+        status: { type: string, example: "ok" }
+        timestamp: { type: string, format: date-time }
+        report:
           type: object
-          properties:
-            date_from:
-              type: string
-            date_to:
-              type: string
-            season:
-              type: integer
-        generated_at:
-          type: string
+          additionalProperties: true
 
-    ThursdayAnalysisResponse:
+    ErrorWithReportNull:
       type: object
-      properties:
-        status:
-          type: string
-        script:
-          type: string
-        timestamp:
-          type: string
-        report:
-          $ref: "#/components/schemas/ThursdayAnalysisReport"
-
-    # --------------------------
-    # FRIDAY SHORTLIST
-    # --------------------------
-    FridayShortlistItem:
-      type: object
-      properties:
-        league:
-          type: string
-          example: "Bundesliga"
-        match:
-          type: string
-          example: "Dortmund – Bayern"
-        pick_type:
-          type: string
-          description: "Τύπος επιλογής (Draw / Over / FunBet κλπ)"
-          example: "Over 2.5"
-        edge:
-          type: number
-          format: float
-          description: "Value edge vs αγορά"
-          example: 0.07
-        kelly_stake:
-          type: number
-          format: float
-          description: "Προτεινόμενο ποσοστό Kelly"
-          example: 0.025
-        odds:
-          type: number
-          format: float
-          description: "Odds της επιλογής στην αγορά"
-          example: 1.90
       additionalProperties: true
-
-    FridayShortlistReport:
-      type: object
+      required: [status, message, timestamp, report]
       properties:
-        picks:
-          type: array
-          items:
-            $ref: "#/components/schemas/FridayShortlistItem"
-        generated_at:
-          type: string
-
-    FridayShortlistResponse:
-      type: object
-      properties:
-        status:
-          type: string
-        timestamp:
-          type: string
+        status: { type: string, example: "error" }
+        message: { type: string, example: "Report not available" }
+        error:
+          type: ["string","null"]
+        timestamp: { type: string, format: date-time }
         report:
-          $ref: "#/components/schemas/FridayShortlistReport"
-
-    # --------------------------
-    # TUESDAY RECAP
-    # --------------------------
-    TuesdayRecapStats:
-      type: object
-      properties:
-        total_bets:
-          type: integer
-          example: 42
-        wins:
-          type: integer
-          example: 24
-        losses:
-          type: integer
-          example: 16
-        pushes:
-          type: integer
-          example: 2
-        roi:
-          type: number
-          format: float
-          description: "Return on Investment για την εβδομάδα"
-          example: 0.123
-        bankroll_start:
-          type: number
-          format: float
-          example: 1000.0
-        bankroll_end:
-          type: number
-          format: float
-          example: 1112.3
-        max_drawdown:
-          type: number
-          format: float
-          example: -0.08
-      additionalProperties: true
-
-    TuesdayRecapResponse:
-      type: object
-      properties:
-        status:
-          type: string
-        timestamp:
-          type: string
-        report:
-          $ref: "#/components/schemas/TuesdayRecapStats"
+          type: ["object","null"]
+          example: null
