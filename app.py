@@ -32,8 +32,10 @@ MAX_LOG_CHARS = int(os.environ.get("MAX_LOG_CHARS", "8000"))
 
 def run_script(script_rel_path: str):
     script_full = abs_path(script_rel_path)
+
     try:
         print(f"▶️ Running script: {script_rel_path}", flush=True)
+
         result = subprocess.run(
             ["python3", script_full],
             cwd=PROJECT_ROOT,
@@ -124,6 +126,64 @@ def list_logs_dir():
     except Exception as e:
         return {"exists": None, "path": LOGS_DIR, "error": str(e), "files": []}
 
+# ---------------- Chunk helper for Thursday ----------------
+def _league_order(report: dict) -> list:
+    # prefer explicit engine_leagues if present
+    leagues = report.get("engine_leagues")
+    if isinstance(leagues, list) and leagues:
+        return [str(x) for x in leagues]
+    # fallback: derive from fixtures in first-seen order
+    out = []
+    seen = set()
+    for fx in (report.get("fixtures") or []):
+        lg = fx.get("league")
+        if not lg:
+            continue
+        if lg not in seen:
+            seen.add(lg)
+            out.append(lg)
+    return out
+
+def chunk_thursday_report(full_report: dict, cursor: int, per_page: int, lite: bool):
+    leagues = _league_order(full_report)
+    total_leagues = len(leagues)
+
+    cursor = max(0, int(cursor))
+    per_page = max(1, min(10, int(per_page)))  # hard safety
+
+    chunk_leagues = leagues[cursor: cursor + per_page]
+    next_cursor = cursor + per_page
+    if next_cursor >= total_leagues:
+        next_cursor = None
+
+    fixtures = full_report.get("fixtures") or []
+    fixtures_chunk = [fx for fx in fixtures if fx.get("league") in set(chunk_leagues)]
+
+    # optional lite trimming
+    if lite:
+        trimmed = []
+        for fx in fixtures_chunk:
+            fx2 = dict(fx)
+            fx2.pop("league_baseline", None)  # large
+            fx2.pop("odds_match", None)       # can be large
+            # keep essentials
+            trimmed.append(fx2)
+        fixtures_chunk = trimmed
+
+    rep = dict(full_report)
+    rep["fixtures"] = fixtures_chunk
+    rep["fixtures_total"] = len(fixtures_chunk)
+    rep["chunk"] = {
+        "cursor": cursor,
+        "per_page": per_page,
+        "leagues": chunk_leagues,
+        "total_leagues": total_leagues,
+        "next_cursor": next_cursor,
+        "lite": bool(lite),
+    }
+    return rep
+
+# ---------------- Health / Debug ----------------
 @app.route("/healthcheck", methods=["GET"])
 def healthcheck():
     return jsonify({
@@ -223,7 +283,7 @@ def upload_post():
         "logs_dir": list_logs_dir(),
     })
 
-# ---------------- RUN endpoints (manual) ----------------
+# ---------------- RUN endpoints ----------------
 @app.route("/run/thursday-v3", methods=["GET"])
 def run_thursday():
     guard = require_admin()
@@ -293,146 +353,35 @@ def download_tuesday_history():
         return jsonify({"status":"error","message":"missing","path":p,"logs":list_logs_dir()}), 404
     return send_file(p, mimetype="application/json", as_attachment=True)
 
-# ---------------- GPT read endpoints (report-only) ----------------
-def _group_leagues(report: dict) -> list:
-    # Prefer engine_leagues ordering if present
-    eng = report.get("engine_leagues")
-    if isinstance(eng, list) and eng:
-        return [str(x) for x in eng]
-    # fallback: derive from fixtures
-    leagues = []
-    seen = set()
-    for fx in report.get("fixtures", []) or []:
-        lg = fx.get("league")
-        if lg and lg not in seen:
-            seen.add(lg)
-            leagues.append(lg)
-    return leagues
-
-def _apply_lite_fixture(fx: dict) -> dict:
-    # Keep only what Presenter needs (drop big fields)
-    drop = {
-        "league_baseline",
-        "snap_home_prob","snap_draw_prob","snap_away_prob","snap_over_2_5_prob","snap_under_2_5_prob",
-    }
-    out = {}
-    for k, v in fx.items():
-        if k in drop:
-            continue
-        out[k] = v
-    return out
-
+# ---------------- GPT read endpoints ----------------
 @app.route("/thursday-analysis-v3", methods=["GET"])
 def gpt_thursday():
     report, error = load_json_report("logs/thursday_report_v3.json")
     if report is None:
-        return jsonify({
-            "status":"error",
-            "message":"Thursday report not available",
-            "error":error,
-            "timestamp":datetime.utcnow().isoformat(),
-            "report":None
-        }), 404
+        return jsonify({"status":"error","message":"Thursday report not available","error":error,"timestamp":datetime.utcnow().isoformat(),"report":None}), 404
 
-    # Optional chunking to avoid ResponseTooLargeError in GPT connector
-    cursor = request.args.get("cursor", default=None, type=int)
-    per_page = request.args.get("per_page", default=3, type=int)
-    lite = request.args.get("lite", default="false").lower() in ("1","true","yes","y")
+    # chunk mode only when params provided
+    if ("cursor" in request.args) or ("per_page" in request.args) or ("lite" in request.args):
+        cursor = int(request.args.get("cursor", "0") or 0)
+        per_page = int(request.args.get("per_page", "3") or 3)
+        lite = (request.args.get("lite", "false").lower() == "true")
+        report = chunk_thursday_report(report, cursor=cursor, per_page=per_page, lite=lite)
 
-    leagues = _group_leagues(report)
-    total_leagues = len(leagues)
-
-    # If cursor is provided OR lite requested, we attach chunk info.
-    if cursor is not None:
-        if cursor < 0:
-            cursor = 0
-        if per_page < 1:
-            per_page = 3
-        if per_page > 10:
-            per_page = 10
-
-        start = cursor
-        end = min(cursor + per_page, total_leagues)
-        page_leagues = leagues[start:end]
-        next_cursor = end if end < total_leagues else None
-
-        fixtures = report.get("fixtures", []) or []
-        filtered = [fx for fx in fixtures if fx.get("league") in set(page_leagues)]
-
-        if lite:
-            filtered = [_apply_lite_fixture(fx) for fx in filtered]
-
-        out_report = dict(report)
-        out_report["fixtures_total_full"] = int(report.get("fixtures_total") or len(fixtures))
-        out_report["leagues_total"] = total_leagues
-        out_report["fixtures"] = filtered
-        out_report["fixtures_total"] = len(filtered)
-        out_report["chunk"] = {
-            "cursor": start,
-            "per_page": per_page,
-            "leagues": page_leagues,
-            "next_cursor": next_cursor,
-            "total_leagues": total_leagues,
-        }
-
-        return jsonify({
-            "status":"ok",
-            "timestamp": datetime.utcnow().isoformat(),
-            "report": out_report
-        })
-
-    # No cursor: return full (optionally lite)
-    if lite:
-        fixtures = report.get("fixtures", []) or []
-        out_report = dict(report)
-        out_report["fixtures"] = [_apply_lite_fixture(fx) for fx in fixtures]
-        out_report["fixtures_total"] = len(out_report["fixtures"])
-        out_report["chunk"] = None
-        return jsonify({
-            "status":"ok",
-            "timestamp": datetime.utcnow().isoformat(),
-            "report": out_report
-        })
-
-    return jsonify({
-        "status":"ok",
-        "timestamp": datetime.utcnow().isoformat(),
-        "report": report
-    })
+    return jsonify({"status":"ok","timestamp":datetime.utcnow().isoformat(),"report":report})
 
 @app.route("/friday-shortlist-v3", methods=["GET"])
 def gpt_friday():
     report, error = load_json_report("logs/friday_shortlist_v3.json")
     if report is None:
-        return jsonify({
-            "status":"error",
-            "message":"Friday shortlist v3 not available",
-            "error":error,
-            "timestamp":datetime.utcnow().isoformat(),
-            "report":None
-        }), 404
-    return jsonify({
-        "status":"ok",
-        "timestamp":datetime.utcnow().isoformat(),
-        "report":report
-    })
+        return jsonify({"status":"error","message":"Friday shortlist v3 not available","error":error,"timestamp":datetime.utcnow().isoformat(),"report":None}), 404
+    return jsonify({"status":"ok","timestamp":datetime.utcnow().isoformat(),"report":report})
 
 @app.route("/tuesday-recap", methods=["GET"])
 def gpt_tuesday():
     report, error = load_json_report("logs/tuesday_recap_v3.json")
     if report is None:
-        return jsonify({
-            "status":"error",
-            "message":"Tuesday recap v3 not available",
-            "error":error,
-            "timestamp":datetime.utcnow().isoformat(),
-            "report":None
-        }), 404
-    return jsonify({
-        "status":"ok",
-        "timestamp":datetime.utcnow().isoformat(),
-        "report":report
-    })
+        return jsonify({"status":"error","message":"Tuesday recap v3 not available","error":error,"timestamp":datetime.utcnow().isoformat(),"report":None}), 404
+    return jsonify({"status":"ok","timestamp":datetime.utcnow().isoformat(),"report":report})
 
 @app.route("/tuesday-recap-v3", methods=["GET"])
 def gpt_tuesday_v3():
