@@ -4,9 +4,15 @@ import subprocess
 from datetime import datetime
 from flask import Flask, jsonify, send_file, request, Response
 
+try:
+    from zoneinfo import ZoneInfo
+except Exception:
+    ZoneInfo = None
+
 app = Flask(__name__)
 
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+
 def abs_path(rel_path: str) -> str:
     return os.path.join(PROJECT_ROOT, rel_path)
 
@@ -33,6 +39,7 @@ def run_script(script_rel_path: str):
     script_full = abs_path(script_rel_path)
     try:
         print(f"▶️ Running script: {script_rel_path}", flush=True)
+
         result = subprocess.run(
             ["python3", script_full],
             cwd=PROJECT_ROOT,
@@ -109,6 +116,105 @@ def list_logs_dir():
     except Exception as e:
         return {"exists": None, "path": LOGS_DIR, "error": str(e), "files": []}
 
+def _tz_convert_date_time(date_str: str, time_str: str, tz_name: str):
+    """
+    Display-only conversion: assumes date+time are UTC.
+    Returns (date_out, time_out) in tz_name, or (None, None) if cannot convert.
+    """
+    if not ZoneInfo:
+        return None, None
+    if not date_str or not time_str:
+        return None, None
+    try:
+        dt_utc = datetime.fromisoformat(f"{date_str}T{time_str}:00").replace(tzinfo=ZoneInfo("UTC"))
+        dt_tz = dt_utc.astimezone(ZoneInfo(tz_name))
+        return dt_tz.date().isoformat(), dt_tz.strftime("%H:%M")
+    except Exception:
+        return None, None
+
+def _slim_fixture_for_display(fx: dict):
+    # Keep only display fields + small flags (for lite=true)
+    keep = {
+        "fixture_id","date","time","league","league_id","home","away",
+        "home_prob","draw_prob","away_prob","over_2_5_prob","under_2_5_prob",
+        "fair_1","fair_x","fair_2","fair_over_2_5","fair_under_2_5",
+        "offered_1","offered_x","offered_2","offered_over_2_5","offered_under_2_5",
+        "value_pct_1","value_pct_x","value_pct_2","value_pct_over","value_pct_under",
+        "ev_1","ev_x","ev_2","ev_over","ev_under",
+        "odds_match","flags"
+    }
+    out = {k: fx.get(k) for k in keep if k in fx}
+    # shrink flags to the ones you actually show
+    flags = fx.get("flags") or {}
+    out["flags"] = {
+        "confidence": flags.get("confidence"),
+        "confidence_band": flags.get("confidence_band"),
+        "tight_game": flags.get("tight_game"),
+        "home_shape": flags.get("home_shape"),
+        "away_shape": flags.get("away_shape"),
+        "draw_shape": flags.get("draw_shape"),
+        "under_elite": flags.get("under_elite"),
+        "over_good_shape": flags.get("over_good_shape"),
+        "over_friendly_league": flags.get("over_friendly_league"),
+        "draw_friendly_league": flags.get("draw_friendly_league"),
+        "low_tempo_league": flags.get("low_tempo_league"),
+    }
+    # shrink odds_match
+    om = fx.get("odds_match") or {}
+    out["odds_match"] = {"matched": om.get("matched"), "score": om.get("score"), "reason": om.get("reason")}
+    return out
+
+def _chunk_thursday_report(report: dict, cursor: int, per_page: int, lite: bool, tz: str):
+    fixtures = report.get("fixtures") or []
+    # league order: use engine_leagues if exists, else derive
+    league_order = report.get("engine_leagues")
+    if not isinstance(league_order, list) or not league_order:
+        league_order = sorted({(f.get("league") or "") for f in fixtures if f.get("league")})
+    total_leagues = len(league_order)
+
+    cursor = max(0, int(cursor))
+    per_page = max(1, min(3, int(per_page)))
+    start = cursor * per_page
+    end = start + per_page
+    leagues_slice = league_order[start:end]
+
+    fx_slice = [f for f in fixtures if (f.get("league") in leagues_slice)]
+
+    # lite shrink
+    if lite:
+        fx_slice = [_slim_fixture_for_display(f) for f in fx_slice]
+
+    # tz enrich (display-only; does not change stored logs)
+    tz_name = "Europe/Athens" if tz == "Europe/Athens" else "UTC"
+    if tz_name != "UTC":
+        for f in fx_slice:
+            dgr, tgr = _tz_convert_date_time(f.get("date"), f.get("time"), tz_name)
+            f["date_gr"] = dgr
+            f["time_gr"] = tgr
+
+    next_cursor = None
+    if end < total_leagues:
+        next_cursor = cursor + 1
+
+    out_report = {
+        "generated_at": report.get("generated_at"),
+        "season_used": report.get("season_used"),
+        "window": report.get("window"),
+        "engine_leagues": league_order,
+        "fixtures_total": report.get("fixtures_total", len(fixtures)),
+        "fixtures": fx_slice,
+        "chunk": {
+            "cursor": cursor,
+            "per_page": per_page,
+            "leagues": leagues_slice,
+            "next_cursor": next_cursor,
+            "total_leagues": total_leagues,
+            "lite": bool(lite),
+            "tz": tz_name,
+        }
+    }
+    return out_report
+
 @app.route("/healthcheck", methods=["GET"])
 def healthcheck():
     return jsonify({
@@ -130,7 +236,8 @@ def debug_logs():
     })
 
 UPLOAD_HTML = """<!doctype html>
-<html><head><meta charset="utf-8"/><title>Bombay Upload</title></head>
+<html>
+<head><meta charset="utf-8"/><title>Bombay Upload</title></head>
 <body style="font-family:Arial;margin:24px">
   <h2>Upload JSON into server logs</h2>
   <form method="post" action="/upload" enctype="multipart/form-data">
@@ -141,13 +248,16 @@ UPLOAD_HTML = """<!doctype html>
       <option value="tuesday">Tuesday (logs/tuesday_recap_v3.json)</option>
       <option value="history">History (logs/tuesday_history_v3.json)</option>
     </select>
-    <label style="display:block;margin-top:12px">JSON αρχείο</label>
+    <br/><br/>
+    <label>JSON αρχείο</label>
     <input type="file" name="file" accept=".json,application/json" required />
-    <button type="submit" style="margin-top:12px">Upload</button>
+    <br/><br/>
+    <button type="submit">Upload</button>
   </form>
   <hr/>
   <p>Debug: <code>/debug/logs</code></p>
-</body></html>
+</body>
+</html>
 """
 
 @app.route("/upload", methods=["GET"])
@@ -192,7 +302,7 @@ def upload_post():
         "logs_dir": list_logs_dir(),
     })
 
-# ---------------- RUN endpoints ----------------
+# ---------------- RUN endpoints (manual runs) ----------------
 @app.route("/run/thursday-v3", methods=["GET"])
 def run_thursday():
     guard = require_admin()
@@ -263,66 +373,21 @@ def download_tuesday_history():
     return send_file(p, mimetype="application/json", as_attachment=True)
 
 # ---------------- GPT read endpoints (report-only) ----------------
-def _lite_fixture(fx: dict) -> dict:
-    # κρατάμε μόνο τα απαραίτητα για παρουσίαση (κόβει τεράστιο payload)
-    keep = [
-        "fixture_id","date","time","league","league_id","home","away",
-        "home_prob","draw_prob","away_prob","over_2_5_prob","under_2_5_prob",
-        "fair_1","fair_x","fair_2","fair_over_2_5","fair_under_2_5",
-        "offered_1","offered_x","offered_2","offered_over_2_5","offered_under_2_5",
-        "value_pct_1","value_pct_x","value_pct_2","value_pct_over","value_pct_under",
-        "ev_1","ev_x","ev_2","ev_over","ev_under",
-        "flags"
-    ]
-    return {k: fx.get(k) for k in keep if k in fx}
-
 @app.route("/thursday-analysis-v3", methods=["GET"])
 def gpt_thursday():
     report, error = load_json_report("logs/thursday_report_v3.json")
     if report is None:
         return jsonify({"status":"error","message":"Thursday report not available","error":error,"timestamp":datetime.utcnow().isoformat(),"report":None}), 404
 
-    # ---- CHUNKING PARAMS ----
-    # cursor: index in engine_leagues
-    # per_page: how many leagues per call
-    # lite: reduce fixture fields
-    cursor = request.args.get("cursor", default=None, type=int)
-    per_page = request.args.get("per_page", default=None, type=int)
-    lite = request.args.get("lite", default="false").lower() == "true"
+    cursor = request.args.get("cursor", "0")
+    per_page = request.args.get("per_page", "2")
+    lite = request.args.get("lite", "true").lower() == "true"
+    tz = (request.args.get("tz", "Europe/Athens") or "Europe/Athens").strip()
 
-    # if no chunk params -> old behavior (FULL report)
-    if cursor is None or per_page is None:
-        return jsonify({"status":"ok","timestamp":datetime.utcnow().isoformat(),"report":report})
-
-    engine_leagues = report.get("engine_leagues") or sorted({fx.get("league") for fx in (report.get("fixtures") or []) if fx.get("league")})
-    engine_leagues = [x for x in engine_leagues if x]
-
-    cursor = max(0, int(cursor))
-    per_page = max(1, min(5, int(per_page)))  # safety: 1..5 leagues per chunk
-
-    sel_leagues = engine_leagues[cursor:cursor + per_page]
-    fixtures = report.get("fixtures") or []
-    sel_fixtures = [fx for fx in fixtures if fx.get("league") in sel_leagues]
-
-    if lite:
-        sel_fixtures = [_lite_fixture(fx) for fx in sel_fixtures]
-
-    next_cursor = cursor + per_page
-    if next_cursor >= len(engine_leagues):
-        next_cursor = None
-
-    chunked = dict(report)
-    chunked["fixtures_total_all"] = report.get("fixtures_total", len(fixtures))
-    chunked["fixtures_chunk_total"] = len(sel_fixtures)
-    chunked["fixtures"] = sel_fixtures
-    chunked["chunk"] = {
-        "cursor": cursor,
-        "per_page": per_page,
-        "leagues": sel_leagues,
-        "next_cursor": next_cursor,
-        "total_leagues": len(engine_leagues),
-        "lite": bool(lite),
-    }
+    try:
+        chunked = _chunk_thursday_report(report, int(cursor), int(per_page), bool(lite), tz)
+    except Exception as e:
+        return jsonify({"status":"error","message":"Thursday report chunking failed","error":str(e),"timestamp":datetime.utcnow().isoformat(),"report":None}), 500
 
     return jsonify({"status":"ok","timestamp":datetime.utcnow().isoformat(),"report":chunked})
 
@@ -331,6 +396,7 @@ def gpt_friday():
     report, error = load_json_report("logs/friday_shortlist_v3.json")
     if report is None:
         return jsonify({"status":"error","message":"Friday shortlist v3 not available","error":error,"timestamp":datetime.utcnow().isoformat(),"report":None}), 404
+    # Optional tz enrichment could be added later; keep simple now.
     return jsonify({"status":"ok","timestamp":datetime.utcnow().isoformat(),"report":report})
 
 @app.route("/tuesday-recap", methods=["GET"])
