@@ -4,11 +4,11 @@ info:
   version: 1.0.5
   description: |
     Internal API for Agent Bombay v6.x.
-
     IMPORTANT:
-    - All “GPT endpoints” return SAVED JSON only (do not run scripts).
-    - Thursday is CHUNKED to avoid ResponseTooLargeError.
-    - The Custom GPT MUST read ONLY response.report.
+    - Thursday endpoint returns the latest saved Thursday Report V3 inside the 'report' field.
+    - Thursday supports chunking via cursor/per_page and can return lite fixtures to avoid ResponseTooLargeError.
+    - Friday endpoint returns the latest saved Friday Shortlist V3 inside the 'report' field.
+    - Tuesday endpoint returns the latest saved Tuesday Recap V3 inside the 'report' field.
 servers:
   - url: https://bombay-engine.onrender.com
 
@@ -27,34 +27,34 @@ paths:
 
   /thursday-analysis-v3:
     get:
-      operationId: thursdayAnalysisV3
-      summary: Thursday Report V3 (latest saved report, CHUNKED)
+      operationId: runThursdayAnalysis
+      summary: Thursday Report V3 (latest saved report) — supports chunking
       description: |
-        Returns the latest saved Thursday report from logs/thursday_report_v3.json inside response.report.
-        By default it returns a CHUNK (subset of leagues) to avoid large payloads.
-
-        Query params:
-        - cursor: league page offset (0-based)
-        - per_page: number of leagues per request (max 6)
-        - lite: if true, prunes heavy keys per fixture
-        - no_chunk: if true, returns full report (may fail with ResponseTooLargeError)
+        Returns latest saved Thursday Report V3 from logs/thursday_report_v3.json (does NOT run engine).
+        To avoid ResponseTooLargeError use query params cursor/per_page and optionally lite=true.
+        The Custom GPT must read response.report.
       parameters:
         - name: cursor
           in: query
           required: false
-          schema: { type: integer, minimum: 0, default: 0 }
+          schema:
+            type: integer
+            minimum: 0
+          description: League cursor index (0-based) for chunking.
         - name: per_page
           in: query
           required: false
-          schema: { type: integer, minimum: 1, maximum: 6, default: 3 }
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 5
+          description: Number of leagues to return in this chunk (1..5).
         - name: lite
           in: query
           required: false
-          schema: { type: boolean, default: true }
-        - name: no_chunk
-          in: query
-          required: false
-          schema: { type: boolean, default: false }
+          schema:
+            type: boolean
+          description: If true, returns reduced fixture fields (smaller payload).
       responses:
         "200":
           description: ok
@@ -71,11 +71,10 @@ paths:
 
   /friday-shortlist-v3:
     get:
-      operationId: fridayShortlistV3
+      operationId: runFridayShortlist
       summary: Friday Shortlist V3 (latest saved report)
       description: |
-        Returns the latest saved Friday shortlist from logs/friday_shortlist_v3.json inside response.report.
-        Does NOT run the engine.
+        Returns latest saved Friday shortlist from logs/friday_shortlist_v3.json.
         The Custom GPT must read response.report.
       responses:
         "200":
@@ -93,11 +92,10 @@ paths:
 
   /tuesday-recap:
     get:
-      operationId: tuesdayRecap
-      summary: Tuesday Recap (latest saved report)
+      operationId: runTuesdayRecap
+      summary: Tuesday Recap V3 (latest saved report)
       description: |
-        Returns the latest saved Tuesday recap from logs/tuesday_recap_v3.json inside response.report.
-        Does NOT run the engine.
+        Returns latest saved Tuesday recap from logs/tuesday_recap_v3.json.
         The Custom GPT must read response.report.
       responses:
         "200":
@@ -107,7 +105,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/OkWithReport"
         "404":
-          description: recap not available
+          description: report not available
           content:
             application/json:
               schema:
@@ -135,7 +133,8 @@ components:
           type: object
           additionalProperties: true
           description: |
-            Thursday report (possibly chunked). When chunked it includes report.chunk.
+            Thursday report. In chunk mode, report.chunk exists and report.fixtures contains only fixtures for chunk leagues.
+            report.fixtures_total_all and report.fixtures_chunk_total are additive helpers.
 
     OkWithReport:
       type: object
