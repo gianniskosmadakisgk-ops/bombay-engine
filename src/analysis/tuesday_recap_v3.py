@@ -1,17 +1,20 @@
 # ============================================================
-#  src/analysis/tuesday_recap_v3.py
-#  BOMBAY TUESDAY RECAP v3.30 — PRODUCTION (CoreBet + FunBet + DrawBet)
+# src/analysis/tuesday_recap_v3.py
+# BOMBAY TUESDAY RECAP v3.30 — PRODUCTION
 #
-#  Reads:
+# Reads:
 #   - logs/friday_shortlist_v3.json
-#  Writes:
-#   - logs/tuesday_recap_v3.json
 #   - logs/tuesday_history_v3.json (carry bankrolls + lifetime)
 #
-#  Key rules:
-#   - If ANY relevant match is not settled -> result MUST be "PENDING" and
-#     history bankrolls MUST NOT advance for that portfolio.
-#   - Week numbering increments ONLY when window.from changes (reruns same window overwrite).
+# Writes:
+#   - logs/tuesday_recap_v3.json
+#   - updates logs/tuesday_history_v3.json
+#
+# Rules:
+#   - If fixture not finished => result MUST be "PENDING" and profit 0.
+#   - Updates bankroll_current ONLY when that portfolio has no PENDING.
+#   - Adds drawbet support.
+#   - Adds copy_recap (array of strings) for the Custom GPT.
 # ============================================================
 
 import os
@@ -36,15 +39,12 @@ MAX_FETCH_RETRIES = int(os.getenv("MAX_FETCH_RETRIES", "2"))
 
 FINAL_STATUSES = {"FT", "AET", "PEN"}  # settled
 
-
-# ------------------------- UTIL -------------------------
+# ---------- utils ----------
 def log(msg: str):
     print(msg, flush=True)
 
-
 def now_utc_iso() -> str:
     return datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
-
 
 def safe_float(v, d=None):
     try:
@@ -52,24 +52,20 @@ def safe_float(v, d=None):
     except Exception:
         return d
 
-
 def safe_int(v, d=None):
     try:
         return int(v)
     except Exception:
         return d
 
-
 def load_json(path: str) -> Dict[str, Any]:
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
-
 
 def save_json(path: str, obj: Dict[str, Any]):
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(obj, f, ensure_ascii=False, indent=2)
-
 
 def iso_week_id_from_window(window: dict | None) -> str:
     d = None
@@ -84,17 +80,10 @@ def iso_week_id_from_window(window: dict | None) -> str:
     y, w, _ = d.isocalendar()
     return f"{y}-W{int(w):02d}"
 
-
 def load_history(path: str) -> Dict[str, Any]:
-    """
-    History structure:
-      week_count, last_window_from, last_week_id, weeks{key}, core{stake,profit,bankroll_current}, funbet{...}, drawbet{...}
-    """
     if not os.path.exists(path):
         return {
             "week_count": 0,
-            "last_window_from": None,
-            "last_week_id": None,
             "weeks": {},
             "core": {"stake": 0.0, "profit": 0.0, "bankroll_current": None},
             "funbet": {"stake": 0.0, "profit": 0.0, "bankroll_current": None},
@@ -104,8 +93,6 @@ def load_history(path: str) -> Dict[str, Any]:
     try:
         h = load_json(path)
         h.setdefault("week_count", 0)
-        h.setdefault("last_window_from", None)
-        h.setdefault("last_week_id", None)
         h.setdefault("weeks", {})
         h.setdefault("core", {}).setdefault("stake", 0.0)
         h.setdefault("core", {}).setdefault("profit", 0.0)
@@ -116,12 +103,11 @@ def load_history(path: str) -> Dict[str, Any]:
         h.setdefault("drawbet", {}).setdefault("stake", 0.0)
         h.setdefault("drawbet", {}).setdefault("profit", 0.0)
         h.setdefault("drawbet", {}).setdefault("bankroll_current", None)
+        h.setdefault("updated_at", now_utc_iso())
         return h
     except Exception:
         return {
             "week_count": 0,
-            "last_window_from": None,
-            "last_week_id": None,
             "weeks": {},
             "core": {"stake": 0.0, "profit": 0.0, "bankroll_current": None},
             "funbet": {"stake": 0.0, "profit": 0.0, "bankroll_current": None},
@@ -129,8 +115,7 @@ def load_history(path: str) -> Dict[str, Any]:
             "updated_at": now_utc_iso(),
         }
 
-
-# ------------------------- API-FOOTBALL -------------------------
+# ---------- API-Football ----------
 def _api_get_fixture(fixture_id: int) -> Optional[Dict[str, Any]]:
     if not API_FOOTBALL_KEY:
         return None
@@ -138,7 +123,7 @@ def _api_get_fixture(fixture_id: int) -> Optional[Dict[str, Any]]:
     url = f"{API_FOOTBALL_BASE}/fixtures"
     params = {"id": fixture_id}
 
-    for _attempt in range(MAX_FETCH_RETRIES + 1):
+    for _ in range(MAX_FETCH_RETRIES + 1):
         try:
             r = requests.get(url, headers=HEADERS_FOOTBALL, params=params, timeout=REQUEST_TIMEOUT)
             if r.status_code != 200:
@@ -151,14 +136,11 @@ def _api_get_fixture(fixture_id: int) -> Optional[Dict[str, Any]]:
             return resp[0]
         except Exception:
             time.sleep(0.25)
-
     return None
-
 
 def fetch_scores(fixture_ids: List[int]) -> Dict[int, Dict[str, Any]]:
     out: Dict[int, Dict[str, Any]] = {}
     uniq = sorted({int(x) for x in fixture_ids if x is not None})
-
     if not uniq:
         return out
 
@@ -170,76 +152,52 @@ def fetch_scores(fixture_ids: List[int]) -> Dict[int, Dict[str, Any]]:
         fx = _api_get_fixture(fid)
         if fx is None:
             continue
-
         status_short = (((fx.get("fixture") or {}).get("status") or {}).get("short")) or ""
         goals = fx.get("goals") or {}
-
         out[fid] = {
             "status_short": str(status_short).upper(),
             "home_goals": safe_int(goals.get("home"), None),
             "away_goals": safe_int(goals.get("away"), None),
         }
-
         time.sleep(max(0.0, REQUEST_SLEEP_MS / 1000.0))
-
     return out
 
-
-# ------------------------- SETTLEMENT LOGIC -------------------------
+# ---------- evaluation ----------
 def market_won(market_code: str, hg: int, ag: int) -> bool:
     mc = (market_code or "").upper().strip()
-    if mc == "1":
-        return hg > ag
-    if mc == "X":
-        return hg == ag
-    if mc == "2":
-        return ag > hg
-    if mc == "O25":
-        return (hg + ag) >= 3
-    if mc == "U25":
-        return (hg + ag) <= 2
+    if mc == "1": return hg > ag
+    if mc == "X": return hg == ag
+    if mc == "2": return ag > hg
+    if mc == "O25": return (hg + ag) >= 3
+    if mc == "U25": return (hg + ag) <= 2
     return False
 
-
-def _final_score_str(hg: Optional[int], ag: Optional[int]) -> Optional[str]:
-    if hg is None or ag is None:
-        return None
-    return f"{int(hg)}-{int(ag)}"
-
-
-def eval_single(pick: Dict[str, Any], scores: Dict[int, Dict[str, Any]]) -> Tuple[Dict[str, Any], str, float]:
+def eval_single(pick: Dict[str, Any], scores: Dict[int, Dict[str, Any]]) -> Tuple[str, float, Optional[str]]:
     fid = safe_int(pick.get("fixture_id"), None)
     mcode = (pick.get("market_code") or "").upper().strip()
     stake = safe_float(pick.get("stake"), 0.0) or 0.0
     odds = safe_float(pick.get("odds"), None)
 
     if fid is None or not mcode:
-        out = {**pick, "result": "PENDING", "profit": 0.0, "final_score": None, "status_short": None}
-        return out, "PENDING", 0.0
+        return "PENDING", 0.0, None
 
     sc = scores.get(fid)
     if not sc:
-        out = {**pick, "result": "PENDING", "profit": 0.0, "final_score": None, "status_short": None}
-        return out, "PENDING", 0.0
+        return "PENDING", 0.0, None
 
     st = (sc.get("status_short") or "").upper()
-    hg = sc.get("home_goals")
-    ag = sc.get("away_goals")
-
+    hg = sc.get("home_goals"); ag = sc.get("away_goals")
     if st not in FINAL_STATUSES or hg is None or ag is None:
-        out = {**pick, "result": "PENDING", "profit": 0.0, "final_score": _final_score_str(hg, ag), "status_short": st}
-        return out, "PENDING", 0.0
+        return "PENDING", 0.0, None
 
     won = market_won(mcode, int(hg), int(ag))
+    final_score = f"{int(hg)}-{int(ag)}"
     if odds is None or odds <= 1.0:
-        prof = 0.0
-    else:
-        prof = round(stake * (odds - 1.0), 2) if won else round(-stake, 2)
+        return ("WIN" if won else "LOSE"), 0.0, final_score
 
-    res = "WIN" if won else "LOSE"
-    out = {**pick, "result": res, "profit": prof, "final_score": _final_score_str(hg, ag), "status_short": st}
-    return out, res, prof
-
+    if won:
+        return "WIN", round(stake * (odds - 1.0), 2), final_score
+    return "LOSE", round(-stake, 2), final_score
 
 def eval_double(double_obj: Dict[str, Any], scores: Dict[int, Dict[str, Any]]) -> Tuple[Dict[str, Any], str, float]:
     if not double_obj:
@@ -247,393 +205,325 @@ def eval_double(double_obj: Dict[str, Any], scores: Dict[int, Dict[str, Any]]) -
 
     legs = double_obj.get("legs") or []
     stake = safe_float(double_obj.get("stake"), 0.0) or 0.0
-    combo_odds = safe_float(double_obj.get("combo_odds"), None)
-
-    legs_out = []
-    any_pending = False
-    any_lose = False
 
     mult = 1.0
+    any_pending = False
+    any_lose = False
+    all_final = True
+
+    legs_out = []
     for leg in legs:
-        fid = safe_int(leg.get("fixture_id"), None)
-        mcode = (leg.get("market_code") or "").upper().strip()
+        pid = leg.get("pick_id") or ""
+        odds = safe_float(leg.get("odds"), None)
 
-        # fallback parse from pick_id if missing
-        if (fid is None or not mcode) and leg.get("pick_id"):
-            try:
-                a, b = str(leg.get("pick_id")).split(":")
-                fid = safe_int(a, fid)
-                mcode = (b or mcode).upper().strip()
-            except Exception:
-                pass
+        fid = None
+        code = None
+        try:
+            a, b = pid.split(":")
+            fid = safe_int(a, None)
+            code = (b or "").upper().strip()
+        except Exception:
+            fid = None; code = None
 
-        if fid is None or not mcode:
+        if fid is None or not code:
             legs_out.append({**leg, "result": "PENDING", "final_score": None})
-            any_pending = True
+            any_pending = True; all_final = False
             continue
 
         sc = scores.get(fid)
         if not sc:
             legs_out.append({**leg, "result": "PENDING", "final_score": None})
-            any_pending = True
+            any_pending = True; all_final = False
             continue
 
         st = (sc.get("status_short") or "").upper()
-        hg = sc.get("home_goals")
-        ag = sc.get("away_goals")
-
+        hg = sc.get("home_goals"); ag = sc.get("away_goals")
         if st not in FINAL_STATUSES or hg is None or ag is None:
-            legs_out.append({**leg, "result": "PENDING", "final_score": _final_score_str(hg, ag)})
-            any_pending = True
+            legs_out.append({**leg, "result": "PENDING", "final_score": None})
+            any_pending = True; all_final = False
             continue
 
-        won = market_won(mcode, int(hg), int(ag))
+        won = market_won(code, int(hg), int(ag))
+        fs = f"{int(hg)}-{int(ag)}"
         if not won:
             any_lose = True
-            legs_out.append({**leg, "result": "LOSE", "final_score": _final_score_str(hg, ag)})
+            legs_out.append({**leg, "result": "LOSE", "final_score": fs})
         else:
-            legs_out.append({**leg, "result": "WIN", "final_score": _final_score_str(hg, ag)})
-            o = safe_float(leg.get("odds"), None)
-            if o is not None and o > 1.0:
-                mult *= float(o)
+            legs_out.append({**leg, "result": "WIN", "final_score": fs})
+            if odds is not None and odds > 1.0:
+                mult *= float(odds)
 
-    if any_pending:
-        out = {**double_obj, "legs": legs_out, "result": "PENDING", "profit": 0.0}
-        return out, "PENDING", 0.0
-
-    if any_lose:
-        prof = round(-stake, 2) if stake > 0 else 0.0
-        out = {**double_obj, "legs": legs_out, "result": "LOSE", "profit": prof}
-        return out, "LOSE", prof
-
-    # WIN
-    if combo_odds is not None and combo_odds > 1.0:
-        mult_used = combo_odds
+    if any_pending and not all_final:
+        status = "PENDING"; profit = 0.0
+    elif any_lose:
+        status = "LOSE"; profit = round(-stake, 2) if stake > 0 else 0.0
     else:
-        mult_used = mult
+        status = "WIN"; profit = round((stake * mult) - stake, 2) if stake > 0 else 0.0
 
-    prof = round(stake * (mult_used - 1.0), 2) if stake > 0 else 0.0
-    out = {**double_obj, "legs": legs_out, "result": "WIN", "profit": prof}
-    return out, "WIN", prof
+    out = {**double_obj, "legs": legs_out, "result": status, "profit": profit}
+    return out, status, profit
 
-
-def parse_system_sizes(label: str, pool_n: int) -> List[int]:
-    """
-    label examples:
-      "4/7" => [4]
-      "2-3/5" => [2,3]
-      "3/6" => [3]
-      "2/2" => [2]
-    """
+def parse_system_sizes(label: str) -> List[int]:
     if not label:
         return []
     left = label.split("/")[0].strip()
     parts = [p.strip() for p in left.split("-") if p.strip()]
-    sizes = []
+    out = []
     for p in parts:
         try:
-            sizes.append(int(p))
+            out.append(int(p))
         except Exception:
             pass
-    # keep only valid
-    return [r for r in sizes if 1 <= r <= pool_n]
-
+    return out
 
 def eval_system(system: Dict[str, Any], pool: List[Dict[str, Any]], scores: Dict[int, Dict[str, Any]]) -> Tuple[Dict[str, Any], str, float, List[Dict[str, Any]]]:
     """
-    Evaluates system using:
-      payout = sum(unit * product(odds in winning combos)) for each size r in sizes
-      profit = payout - stake
-    Returns updated system object + result + profit + pool_with_results
+    Returns: (system_out, result, profit, pool_out_with_results)
+    Pool picks can be shown with WIN/LOSE/PENDING + final_score.
     """
     if not system or not pool:
-        return system or {}, "PENDING", 0.0, pool
+        return system or {}, "PENDING", 0.0, pool or []
 
     label = system.get("label")
+    sizes = parse_system_sizes(label or "")
+    n = len(pool)
+
+    cols = safe_int(system.get("columns"), 0) or 0
     unit = safe_float(system.get("unit"), 0.0) or 0.0
     stake = safe_float(system.get("stake"), 0.0) or 0.0
-    columns = safe_int(system.get("columns"), 0) or 0
 
-    n = len(pool)
-    sizes = parse_system_sizes(label or "", n)
-
-    # If missing basics => treat as no system
-    if not label or not sizes or unit <= 0 or stake <= 0 or columns <= 0:
+    if not sizes or cols <= 0 or unit <= 0 or stake <= 0:
         return {**system, "result": "PENDING", "profit": 0.0}, "PENDING", 0.0, pool
 
-    # resolve pool leg outcomes
+    leg_state = []
     pool_out = []
-    leg_state: List[Tuple[str, float]] = []  # ("WIN"/"LOSE"/"PENDING", odds_if_win)
     for r in pool:
         fid = safe_int(r.get("fixture_id"), None)
         code = (r.get("market_code") or "").upper().strip()
         odds = safe_float(r.get("odds"), None)
 
         if fid is None or not code:
-            pool_out.append({**r, "result": "PENDING", "final_score": None})
             leg_state.append(("PENDING", 1.0))
+            pool_out.append({**r, "result": "PENDING", "final_score": None})
             continue
 
         sc = scores.get(fid)
         if not sc:
-            pool_out.append({**r, "result": "PENDING", "final_score": None})
             leg_state.append(("PENDING", 1.0))
+            pool_out.append({**r, "result": "PENDING", "final_score": None})
             continue
 
         st = (sc.get("status_short") or "").upper()
-        hg = sc.get("home_goals")
-        ag = sc.get("away_goals")
-
+        hg = sc.get("home_goals"); ag = sc.get("away_goals")
         if st not in FINAL_STATUSES or hg is None or ag is None:
-            pool_out.append({**r, "result": "PENDING", "final_score": _final_score_str(hg, ag)})
             leg_state.append(("PENDING", 1.0))
+            pool_out.append({**r, "result": "PENDING", "final_score": None})
             continue
 
+        fs = f"{int(hg)}-{int(ag)}"
         won = market_won(code, int(hg), int(ag))
         if not won:
-            pool_out.append({**r, "result": "LOSE", "final_score": _final_score_str(hg, ag)})
             leg_state.append(("LOSE", 1.0))
+            pool_out.append({**r, "result": "LOSE", "final_score": fs})
         else:
-            pool_out.append({**r, "result": "WIN", "final_score": _final_score_str(hg, ag)})
             leg_state.append(("WIN", float(odds) if odds and odds > 1.0 else 1.0))
+            pool_out.append({**r, "result": "WIN", "final_score": fs})
 
-    if any(st == "PENDING" for st, _o in leg_state):
+    if any(st == "PENDING" for st, _m in leg_state):
         return {**system, "result": "PENDING", "profit": 0.0}, "PENDING", 0.0, pool_out
 
-    # settled payout
+    total_payout = 0.0
     idxs = list(range(n))
-    payout = 0.0
     for rsize in sizes:
+        if rsize < 2 or rsize > n:
+            continue
         for combo in combinations(idxs, rsize):
             if any(leg_state[i][0] == "LOSE" for i in combo):
                 continue
             mult = 1.0
             for i in combo:
                 mult *= leg_state[i][1]
-            payout += unit * mult
+            total_payout += unit * mult
 
-    profit = round(payout - stake, 2)
+    profit = round(total_payout - stake, 2)
     result = "WIN" if profit > 0 else "LOSE"
-    out = {**system, "result": result, "profit": profit, "payout": round(payout, 2)}
+
+    out = {**system, "result": result, "profit": profit}
     return out, result, profit, pool_out
 
+# ---------- helper recap + copy ----------
+def score_hits(items: List[Dict[str, Any]]) -> Tuple[int,int,int]:
+    wins = sum(1 for p in items if p.get("result") == "WIN")
+    loses = sum(1 for p in items if p.get("result") == "LOSE")
+    pend = sum(1 for p in items if p.get("result") == "PENDING")
+    return wins, loses, pend
 
-def roi_pct(profit: float, stake: float) -> Optional[float]:
-    if stake <= 0:
-        return None
-    return round((profit / stake) * 100.0, 2)
+def build_copy_recap(recap: Dict[str, Any]) -> List[str]:
+    lines = []
+    wk = recap.get("week_label") or "—"
+    w = recap.get("window") or {}
+    lines.append(f'WEEK {wk} | Window {w.get("from","—")} – {w.get("to","—")}')
 
+    for key in ["core","funbet","drawbet"]:
+        if key not in recap:
+            continue
+        sec = recap.get(key) or {}
+        lines.append(f'[{key.upper()}] stake={sec.get("stake","—")} profit={sec.get("profit","—")} roi={sec.get("roi_pct","—")} bankroll={sec.get("bankroll_start","—")}→{sec.get("bankroll_end","—")} pending={sec.get("pending","—")}')
 
-def wins_over_total(items: List[Dict[str, Any]]) -> str:
-    total = len(items)
-    wins = sum(1 for x in items if x.get("result") == "WIN")
-    return f"{wins}/{total}"
+    return lines
 
-
-# ------------------------- MAIN -------------------------
+# ---------- main ----------
 def main():
     if not os.path.exists(FRIDAY_REPORT_PATH):
         raise FileNotFoundError(f"Friday report not found: {FRIDAY_REPORT_PATH}")
 
     friday = load_json(FRIDAY_REPORT_PATH)
     window = friday.get("window") or {}
-    window_from = (window or {}).get("from")
+    window_from = window.get("from")
     week_id = iso_week_id_from_window(window)
 
     history = load_history(TUESDAY_HISTORY_PATH)
 
-    # week_no increments ONLY when window.from changes
-    if window_from and window_from in (history.get("weeks") or {}):
+    # week_no increments when new window.from
+    if window_from and window_from in history.get("weeks", {}):
         week_no = int(history["weeks"][window_from].get("week_no") or 1)
     else:
         week_no = int(history.get("week_count") or 0) + 1
 
-    # Sections
+    # bankroll start from history if present, else from friday bankroll_start
+    core_bankroll_start = safe_float((history.get("core") or {}).get("bankroll_current"), None)
+    if core_bankroll_start is None:
+        core_bankroll_start = safe_float((friday.get("core") or {}).get("bankroll_start"), None)
+    if core_bankroll_start is None:
+        core_bankroll_start = safe_float((friday.get("core") or {}).get("bankroll"), 0.0) or 0.0
+
+    fun_bankroll_start = safe_float((history.get("funbet") or {}).get("bankroll_current"), None)
+    if fun_bankroll_start is None:
+        fun_bankroll_start = safe_float((friday.get("funbet") or {}).get("bankroll_start"), None)
+    if fun_bankroll_start is None:
+        fun_bankroll_start = safe_float((friday.get("funbet") or {}).get("bankroll"), 0.0) or 0.0
+
+    draw_bankroll_start = safe_float((history.get("drawbet") or {}).get("bankroll_current"), None)
+    if draw_bankroll_start is None:
+        draw_bankroll_start = safe_float((friday.get("drawbet") or {}).get("bankroll_start"), None)
+    if draw_bankroll_start is None:
+        draw_bankroll_start = safe_float((friday.get("drawbet") or {}).get("bankroll"), 0.0) or 0.0
+
     core = friday.get("core", {}) or {}
-    fun = friday.get("funbet", {}) or {}
+    fun  = friday.get("funbet", {}) or {}
     draw = friday.get("drawbet", {}) or {}
 
-    # bankroll start: history carry else friday bankroll_start else friday bankroll
-    def bankroll_start_for(port_key: str, friday_block: Dict[str, Any]) -> float:
-        from_hist = safe_float((history.get(port_key) or {}).get("bankroll_current"), None)
-        if from_hist is not None:
-            return float(from_hist)
-        fb = safe_float(friday_block.get("bankroll_start"), None)
-        if fb is not None:
-            return float(fb)
-        b = safe_float(friday_block.get("bankroll"), 0.0) or 0.0
-        return float(b)
-
-    core_bankroll_start = bankroll_start_for("core", core)
-    fun_bankroll_start = bankroll_start_for("funbet", fun)
-    draw_bankroll_start = bankroll_start_for("drawbet", draw)
-
-    # Picks
     core_singles = core.get("singles", []) or []
-    core_double = core.get("double") or {}
     core_doubles = core.get("doubles", []) or []
-    # use "doubles" list if exists; else fall back to "double"
-    if not core_doubles and core_double:
-        core_doubles = [core_double]
+    core_double_primary = core.get("double") or {}
 
     fun_system = fun.get("system") or {}
-    fun_pool = fun.get("system_pool", []) or []
-    fun_singles = fun.get("singles", []) or []  # just in case older JSON includes singles
+    fun_pool   = fun.get("system_pool", []) or []
 
     draw_system = draw.get("system") or {}
-    draw_pool = draw.get("system_pool", []) or []
-    draw_singles = draw.get("singles", []) or []
+    draw_pool   = draw.get("system_pool", []) or []
 
-    # Collect fixture ids
+    # collect fixture ids
     fixture_ids: List[int] = []
-    for p in core_singles + fun_singles + fun_pool + draw_singles + draw_pool:
+    for p in core_singles + fun_pool + draw_pool:
         fid = safe_int(p.get("fixture_id"), None)
         if fid is not None:
             fixture_ids.append(fid)
-
-    for dbl in core_doubles:
-        for leg in (dbl.get("legs") or []):
-            fid = safe_int(leg.get("fixture_id"), None)
-            if fid is None and leg.get("pick_id"):
-                try:
-                    a, _b = str(leg.get("pick_id")).split(":")
-                    fid = safe_int(a, None)
-                except Exception:
-                    fid = None
-            if fid is not None:
-                fixture_ids.append(fid)
+    for d in core_doubles:
+        for leg in (d.get("legs") or []):
+            pid = leg.get("pick_id") or ""
+            try:
+                a, _b = pid.split(":")
+                fid = safe_int(a, None)
+                if fid is not None:
+                    fixture_ids.append(fid)
+            except Exception:
+                pass
 
     scores = fetch_scores(fixture_ids)
 
-    # ---------------- CORE eval ----------------
+    # CORE singles
     core_out_singles = []
     core_stake = 0.0
     core_profit = 0.0
     core_pending = 0
 
     for p in core_singles:
-        out, res, prof = eval_single(p, scores)
-        st = safe_float(p.get("stake"), 0.0) or 0.0
-        core_stake += st
+        res, prof, fs = eval_single(p, scores)
+        stake = safe_float(p.get("stake"), 0.0) or 0.0
+        core_stake += stake
         core_profit += prof
         if res == "PENDING":
             core_pending += 1
-        core_out_singles.append(out)
+        core_out_singles.append({**p, "result": res, "profit": prof, "final_score": fs})
 
+    # CORE doubles (list)
     core_out_doubles = []
-    for dbl in core_doubles:
-        out, res, prof = eval_double(dbl, scores)
-        st = safe_float(dbl.get("stake"), 0.0) or 0.0
+    for d in core_doubles:
+        outd, status, prof = eval_double(d, scores)
+        st = safe_float(d.get("stake"), 0.0) or 0.0
         core_stake += st
         core_profit += prof
-        if res == "PENDING":
+        if status == "PENDING":
             core_pending += 1
-        core_out_doubles.append(out)
+        core_out_doubles.append(outd)
 
-    core_bankroll_end = round(core_bankroll_start + core_profit, 2)
-    core_roi = roi_pct(core_profit, core_stake)
-
-    # ---------------- FUN eval ----------------
-    fun_out_singles = []
-    fun_stake = 0.0
-    fun_profit = 0.0
-    fun_pending = 0
-
-    for p in fun_singles:
-        out, res, prof = eval_single(p, scores)
-        st = safe_float(p.get("stake"), 0.0) or 0.0
-        fun_stake += st
-        fun_profit += prof
-        if res == "PENDING":
-            fun_pending += 1
-        fun_out_singles.append(out)
-
+    # FUN system
     fun_out_system, fun_sys_res, fun_sys_profit, fun_pool_out = eval_system(fun_system, fun_pool, scores)
     fun_sys_stake = safe_float(fun_system.get("stake"), 0.0) or 0.0
-    fun_stake += fun_sys_stake
-    fun_profit += fun_sys_profit
-    if fun_system and fun_sys_res == "PENDING":
-        fun_pending += 1
+    fun_stake = fun_sys_stake
+    fun_profit = fun_sys_profit
+    fun_pending = 1 if fun_sys_res == "PENDING" else 0
 
-    fun_bankroll_end = round(fun_bankroll_start + fun_profit, 2)
-    fun_roi = roi_pct(fun_profit, fun_stake)
-
-    # ---------------- DRAW eval ----------------
-    draw_out_singles = []
-    draw_stake = 0.0
-    draw_profit = 0.0
-    draw_pending = 0
-
-    for p in draw_singles:
-        out, res, prof = eval_single(p, scores)
-        st = safe_float(p.get("stake"), 0.0) or 0.0
-        draw_stake += st
-        draw_profit += prof
-        if res == "PENDING":
-            draw_pending += 1
-        draw_out_singles.append(out)
-
+    # DRAW system
     draw_out_system, draw_sys_res, draw_sys_profit, draw_pool_out = eval_system(draw_system, draw_pool, scores)
     draw_sys_stake = safe_float(draw_system.get("stake"), 0.0) or 0.0
-    draw_stake += draw_sys_stake
-    draw_profit += draw_sys_profit
-    if draw_system and draw_sys_res == "PENDING":
-        draw_pending += 1
+    draw_stake = draw_sys_stake
+    draw_profit = draw_sys_profit
+    draw_pending = 1 if draw_sys_res == "PENDING" else 0
 
+    # bankroll ends
+    core_bankroll_end = round(core_bankroll_start + core_profit, 2)
+    fun_bankroll_end  = round(fun_bankroll_start + fun_profit, 2)
     draw_bankroll_end = round(draw_bankroll_start + draw_profit, 2)
-    draw_roi = roi_pct(draw_profit, draw_stake)
 
-    # ---------------- HISTORY UPDATE ----------------
+    # update history (per-portfolio only if no pending)
     wk_key = window_from or week_id
     history.setdefault("weeks", {})
     prev_week = history["weeks"].get(wk_key)
 
-    def subtract_prev_if_settled(port: str):
-        if not isinstance(prev_week, dict):
+    # If rerun same week and fully settled, subtract old contributions then add new
+    def subtract_prev(section: str, stake_new: float, profit_new: float, settled_ok: bool):
+        if not settled_ok:
             return
-        if not bool(prev_week.get("fully_settled")):
-            return
-        old = (prev_week.get(port) or {})
-        old_stake = safe_float(old.get("stake"), 0.0) or 0.0
-        old_profit = safe_float(old.get("profit"), 0.0) or 0.0
-        history[port]["stake"] = round((safe_float(history[port].get("stake"), 0.0) or 0.0) - old_stake, 2)
-        history[port]["profit"] = round((safe_float(history[port].get("profit"), 0.0) or 0.0) - old_profit, 2)
+        nonlocal history, prev_week
+        if isinstance(prev_week, dict):
+            old = (prev_week.get(section) or {})
+            old_stake = safe_float(old.get("stake"), 0.0) or 0.0
+            old_profit = safe_float(old.get("profit"), 0.0) or 0.0
+            history[section]["stake"] = round((safe_float(history[section].get("stake"), 0.0) or 0.0) - old_stake, 2)
+            history[section]["profit"] = round((safe_float(history[section].get("profit"), 0.0) or 0.0) - old_profit, 2)
 
-    # Only advance bankroll_current for portfolios that are fully settled (no pending in that portfolio)
-    core_settled = (core_pending == 0)
-    fun_settled = (fun_pending == 0)
-    draw_settled = (draw_pending == 0)
+        history[section]["stake"] = round((safe_float(history[section].get("stake"), 0.0) or 0.0) + stake_new, 2)
+        history[section]["profit"] = round((safe_float(history[section].get("profit"), 0.0) or 0.0) + profit_new, 2)
 
-    fully_settled_all = bool(core_settled and fun_settled and draw_settled)
+    core_settled_ok = (core_pending == 0)
+    fun_settled_ok  = (fun_pending == 0)
+    draw_settled_ok = (draw_pending == 0)
 
-    # If re-run same window and previous was settled, remove previous contributions first
-    if fully_settled_all and isinstance(prev_week, dict) and bool(prev_week.get("fully_settled")):
-        subtract_prev_if_settled("core")
-        subtract_prev_if_settled("funbet")
-        subtract_prev_if_settled("drawbet")
+    subtract_prev("core", core_stake, core_profit, core_settled_ok)
+    subtract_prev("funbet", fun_stake, fun_profit, fun_settled_ok)
+    subtract_prev("drawbet", draw_stake, draw_profit, draw_settled_ok)
 
-    # Add new contributions (only for settled portfolios)
-    if core_settled:
-        history["core"]["stake"] = round((safe_float(history["core"].get("stake"), 0.0) or 0.0) + core_stake, 2)
-        history["core"]["profit"] = round((safe_float(history["core"].get("profit"), 0.0) or 0.0) + core_profit, 2)
+    if core_settled_ok:
         history["core"]["bankroll_current"] = core_bankroll_end
-
-    if fun_settled:
-        history["funbet"]["stake"] = round((safe_float(history["funbet"].get("stake"), 0.0) or 0.0) + fun_stake, 2)
-        history["funbet"]["profit"] = round((safe_float(history["funbet"].get("profit"), 0.0) or 0.0) + fun_profit, 2)
+    if fun_settled_ok:
         history["funbet"]["bankroll_current"] = fun_bankroll_end
-
-    if draw_settled:
-        history["drawbet"]["stake"] = round((safe_float(history["drawbet"].get("stake"), 0.0) or 0.0) + draw_stake, 2)
-        history["drawbet"]["profit"] = round((safe_float(history["drawbet"].get("profit"), 0.0) or 0.0) + draw_profit, 2)
+    if draw_settled_ok:
         history["drawbet"]["bankroll_current"] = draw_bankroll_end
 
-    # week_count increments only when NEW window_from key appears
     if window_from and window_from not in history["weeks"]:
         history["week_count"] = int(history.get("week_count") or 0) + 1
-
-    history["last_window_from"] = window_from
-    history["last_week_id"] = week_id
 
     history["weeks"][wk_key] = {
         "week_no": int(week_no),
@@ -642,23 +532,21 @@ def main():
         "core": {"stake": round(core_stake, 2), "profit": round(core_profit, 2), "pending": core_pending},
         "funbet": {"stake": round(fun_stake, 2), "profit": round(fun_profit, 2), "pending": fun_pending},
         "drawbet": {"stake": round(draw_stake, 2), "profit": round(draw_profit, 2), "pending": draw_pending},
-        "fully_settled": bool(fully_settled_all),
         "updated_at": now_utc_iso(),
     }
-
     history["updated_at"] = now_utc_iso()
     save_json(TUESDAY_HISTORY_PATH, history)
 
-    # ---------------- RECAP JSON ----------------
-    # Weekly totals (computed by engine)
-    total_stake = round(core_stake + fun_stake + draw_stake, 2)
-    total_profit = round(core_profit + fun_profit + draw_profit, 2)
-    total_roi = roi_pct(total_profit, total_stake)
+    core_roi = round((core_profit / core_stake) * 100.0, 2) if core_stake > 0 else None
+    fun_roi  = round((fun_profit / fun_stake) * 100.0, 2) if fun_stake > 0 else None
+    draw_roi = round((draw_profit / draw_stake) * 100.0, 2) if draw_stake > 0 else None
 
-    total_bankroll_start = round(core_bankroll_start + fun_bankroll_start + draw_bankroll_start, 2)
-    total_bankroll_end = round(core_bankroll_end + fun_bankroll_end + draw_bankroll_end, 2)
+    # scores
+    cw, cl, cp = score_hits(core_out_singles)
+    fw, fl, fp = score_hits(fun_pool_out)
+    dw, dl, dp = score_hits(draw_pool_out)
 
-    report = {
+    recap = {
         "timestamp": now_utc_iso(),
         "week_id": week_id,
         "week_no": int(week_no),
@@ -667,7 +555,6 @@ def main():
         "source_friday_timestamp": friday.get("timestamp"),
 
         "core": {
-            "portfolio": (core.get("portfolio") or "CoreBet"),
             "stake": round(core_stake, 2),
             "profit": round(core_profit, 2),
             "roi_pct": core_roi,
@@ -675,16 +562,14 @@ def main():
             "bankroll_end": round(core_bankroll_end, 2),
             "pending": int(core_pending),
             "score": {
-                "singles": wins_over_total(core_out_singles),
-                "doubles": wins_over_total(core_out_doubles),
+                "singles": f"{cw}/{len(core_out_singles)}" if core_out_singles else "0/0",
+                "doubles": "—" if not core_out_doubles else f"{sum(1 for d in core_out_doubles if d.get('result')=='WIN')}/{len(core_out_doubles)}",
             },
-            "singles": sorted(core_out_singles, key=lambda x: (x.get("date") or "", x.get("time") or "", x.get("league") or "", x.get("match") or "")),
+            "singles": core_out_singles,
             "doubles": core_out_doubles,
-            "double": (core_out_doubles[0] if core_out_doubles else None),
         },
 
         "funbet": {
-            "portfolio": (fun.get("portfolio") or "FunBet"),
             "stake": round(fun_stake, 2),
             "profit": round(fun_profit, 2),
             "roi_pct": fun_roi,
@@ -692,16 +577,13 @@ def main():
             "bankroll_end": round(fun_bankroll_end, 2),
             "pending": int(fun_pending),
             "score": {
-                "singles": wins_over_total(fun_out_singles),
-                "system_pool": wins_over_total(fun_pool_out),
+                "system_pool": f"{fw}/{len(fun_pool_out)}" if fun_pool_out else "0/0",
             },
-            "singles": sorted(fun_out_singles, key=lambda x: (x.get("date") or "", x.get("time") or "", x.get("league") or "", x.get("match") or "")),
             "system": fun_out_system,
-            "system_pool": sorted(fun_pool_out, key=lambda x: (x.get("date") or "", x.get("time") or "", x.get("league") or "", x.get("match") or "")),
+            "system_pool": fun_pool_out,
         },
 
         "drawbet": {
-            "portfolio": (draw.get("portfolio") or "DrawBet"),
             "stake": round(draw_stake, 2),
             "profit": round(draw_profit, 2),
             "roi_pct": draw_roi,
@@ -709,60 +591,36 @@ def main():
             "bankroll_end": round(draw_bankroll_end, 2),
             "pending": int(draw_pending),
             "score": {
-                "singles": wins_over_total(draw_out_singles),
-                "system_pool": wins_over_total(draw_pool_out),
+                "system_pool": f"{dw}/{len(draw_pool_out)}" if draw_pool_out else "0/0",
             },
-            "singles": sorted(draw_out_singles, key=lambda x: (x.get("date") or "", x.get("time") or "", x.get("league") or "", x.get("match") or "")),
             "system": draw_out_system,
-            "system_pool": sorted(draw_pool_out, key=lambda x: (x.get("date") or "", x.get("time") or "", x.get("league") or "", x.get("match") or "")),
+            "system_pool": draw_pool_out,
         },
 
-        "weekly_summary": {
-            "this_week": {
-                "stake": total_stake,
-                "profit": total_profit,
-                "roi_pct": total_roi,
-                "bankroll_start": total_bankroll_start,
-                "bankroll_end": total_bankroll_end,
-                "pending_any": bool(core_pending > 0 or fun_pending > 0 or draw_pending > 0),
+        "lifetime": {
+            "week_count": int(history.get("week_count") or 0),
+            "core": {
+                "stake": round(safe_float(history["core"].get("stake"), 0.0) or 0.0, 2),
+                "profit": round(safe_float(history["core"].get("profit"), 0.0) or 0.0, 2),
+                "bankroll_current": history["core"].get("bankroll_current"),
             },
-            "lifetime": {
-                "week_count": int(history.get("week_count") or 0),
-                "core": {
-                    "stake": round(safe_float(history["core"].get("stake"), 0.0) or 0.0, 2),
-                    "profit": round(safe_float(history["core"].get("profit"), 0.0) or 0.0, 2),
-                    "roi_pct": roi_pct(
-                        float(safe_float(history["core"].get("profit"), 0.0) or 0.0),
-                        float(safe_float(history["core"].get("stake"), 0.0) or 0.0),
-                    ),
-                    "bankroll_current": history["core"].get("bankroll_current"),
-                },
-                "funbet": {
-                    "stake": round(safe_float(history["funbet"].get("stake"), 0.0) or 0.0, 2),
-                    "profit": round(safe_float(history["funbet"].get("profit"), 0.0) or 0.0, 2),
-                    "roi_pct": roi_pct(
-                        float(safe_float(history["funbet"].get("profit"), 0.0) or 0.0),
-                        float(safe_float(history["funbet"].get("stake"), 0.0) or 0.0),
-                    ),
-                    "bankroll_current": history["funbet"].get("bankroll_current"),
-                },
-                "drawbet": {
-                    "stake": round(safe_float(history["drawbet"].get("stake"), 0.0) or 0.0, 2),
-                    "profit": round(safe_float(history["drawbet"].get("profit"), 0.0) or 0.0, 2),
-                    "roi_pct": roi_pct(
-                        float(safe_float(history["drawbet"].get("profit"), 0.0) or 0.0),
-                        float(safe_float(history["drawbet"].get("stake"), 0.0) or 0.0),
-                    ),
-                    "bankroll_current": history["drawbet"].get("bankroll_current"),
-                },
+            "funbet": {
+                "stake": round(safe_float(history["funbet"].get("stake"), 0.0) or 0.0, 2),
+                "profit": round(safe_float(history["funbet"].get("profit"), 0.0) or 0.0, 2),
+                "bankroll_current": history["funbet"].get("bankroll_current"),
+            },
+            "drawbet": {
+                "stake": round(safe_float(history["drawbet"].get("stake"), 0.0) or 0.0, 2),
+                "profit": round(safe_float(history["drawbet"].get("profit"), 0.0) or 0.0, 2),
+                "bankroll_current": history["drawbet"].get("bankroll_current"),
             },
         },
     }
 
-    save_json(TUESDAY_RECAP_PATH, report)
-    log(f"✅ Tuesday Recap written: {TUESDAY_RECAP_PATH}")
-    log(f"✅ Tuesday History updated: {TUESDAY_HISTORY_PATH}")
+    recap["copy_recap"] = build_copy_recap(recap)
 
+    save_json(TUESDAY_RECAP_PATH, recap)
+    log(f"✅ Tuesday Recap v3 written: {TUESDAY_RECAP_PATH}")
 
 if __name__ == "__main__":
     main()
