@@ -7,7 +7,6 @@ from flask import Flask, jsonify, send_file, request, Response
 app = Flask(__name__)
 
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
-
 def abs_path(rel_path: str) -> str:
     return os.path.join(PROJECT_ROOT, rel_path)
 
@@ -32,10 +31,8 @@ MAX_LOG_CHARS = int(os.environ.get("MAX_LOG_CHARS", "8000"))
 
 def run_script(script_rel_path: str):
     script_full = abs_path(script_rel_path)
-
     try:
         print(f"▶️ Running script: {script_rel_path}", flush=True)
-
         result = subprocess.run(
             ["python3", script_full],
             cwd=PROJECT_ROOT,
@@ -63,27 +60,13 @@ def run_script(script_rel_path: str):
             "stderr": stderr,
             "script": script_rel_path,
         }
-
     except subprocess.TimeoutExpired:
         msg = f"Timeout: script exceeded {SCRIPT_TIMEOUT_SEC}s"
         print(f"⏳ {msg} ({script_rel_path})", flush=True)
-        return {
-            "ok": False,
-            "return_code": -2,
-            "stdout": "",
-            "stderr": msg,
-            "script": script_rel_path,
-        }
-
+        return {"ok": False, "return_code": -2, "stdout": "", "stderr": msg, "script": script_rel_path}
     except Exception as e:
         print(f"❌ Error running {script_rel_path}: {e}", flush=True)
-        return {
-            "ok": False,
-            "return_code": -1,
-            "stdout": "",
-            "stderr": str(e),
-            "script": script_rel_path,
-        }
+        return {"ok": False, "return_code": -1, "stdout": "", "stderr": str(e), "script": script_rel_path}
 
 def atomic_write_json(full_path: str, obj: dict):
     os.makedirs(os.path.dirname(full_path) or ".", exist_ok=True)
@@ -147,38 +130,24 @@ def debug_logs():
     })
 
 UPLOAD_HTML = """<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8"/>
-  <title>Bombay Upload</title>
-  <style>
-    body { font-family: Arial, sans-serif; margin: 24px; }
-    .box { max-width: 760px; padding: 16px; border: 1px solid #ddd; border-radius: 10px; }
-    label { display:block; margin-top: 12px; }
-    button { margin-top: 16px; padding: 10px 14px; }
-    code { background:#f6f6f6; padding:2px 6px; border-radius:6px; }
-  </style>
-</head>
-<body>
-  <div class="box">
-    <h2>Upload JSON into server logs</h2>
-    <form method="post" action="/upload" enctype="multipart/form-data">
-      <label>Τύπος</label>
-      <select name="kind">
-        <option value="thursday">Thursday (logs/thursday_report_v3.json)</option>
-        <option value="friday">Friday (logs/friday_shortlist_v3.json)</option>
-        <option value="tuesday">Tuesday (logs/tuesday_recap_v3.json)</option>
-        <option value="history">History (logs/tuesday_history_v3.json)</option>
-      </select>
-      <label>JSON αρχείο</label>
-      <input type="file" name="file" accept=".json,application/json" required />
-      <button type="submit">Upload</button>
-    </form>
-    <hr/>
-    <p>Debug: <code>/debug/logs</code></p>
-  </div>
-</body>
-</html>
+<html><head><meta charset="utf-8"/><title>Bombay Upload</title></head>
+<body style="font-family:Arial;margin:24px">
+  <h2>Upload JSON into server logs</h2>
+  <form method="post" action="/upload" enctype="multipart/form-data">
+    <label>Τύπος</label>
+    <select name="kind">
+      <option value="thursday">Thursday (logs/thursday_report_v3.json)</option>
+      <option value="friday">Friday (logs/friday_shortlist_v3.json)</option>
+      <option value="tuesday">Tuesday (logs/tuesday_recap_v3.json)</option>
+      <option value="history">History (logs/tuesday_history_v3.json)</option>
+    </select>
+    <label style="display:block;margin-top:12px">JSON αρχείο</label>
+    <input type="file" name="file" accept=".json,application/json" required />
+    <button type="submit" style="margin-top:12px">Upload</button>
+  </form>
+  <hr/>
+  <p>Debug: <code>/debug/logs</code></p>
+</body></html>
 """
 
 @app.route("/upload", methods=["GET"])
@@ -213,7 +182,6 @@ def upload_post():
         return jsonify({"status": "error", "message": "invalid kind"}), 400
 
     full = save_json_report(rel, payload)
-
     return jsonify({
         "status": "ok",
         "timestamp": datetime.utcnow().isoformat(),
@@ -224,7 +192,7 @@ def upload_post():
         "logs_dir": list_logs_dir(),
     })
 
-# ---------------- RUN endpoints (admin-only optional) ----------------
+# ---------------- RUN endpoints ----------------
 @app.route("/run/thursday-v3", methods=["GET"])
 def run_thursday():
     guard = require_admin()
@@ -295,132 +263,82 @@ def download_tuesday_history():
     return send_file(p, mimetype="application/json", as_attachment=True)
 
 # ---------------- GPT read endpoints (report-only) ----------------
-def _to_int(v, default):
-    try:
-        return int(v)
-    except Exception:
-        return default
-
-def _to_bool(v, default=False):
-    if v is None:
-        return default
-    s = str(v).strip().lower()
-    if s in ("1", "true", "yes", "y", "on"):
-        return True
-    if s in ("0", "false", "no", "n", "off"):
-        return False
-    return default
-
-def _build_thursday_chunk(report: dict, cursor: int, per_page: int, lite: bool):
-    fixtures = report.get("fixtures") or []
-    # Determine full league order
-    leagues_order = report.get("engine_leagues")
-    if not isinstance(leagues_order, list) or not leagues_order:
-        leagues_order = []
-        for fx in fixtures:
-            lg = fx.get("league")
-            if lg and lg not in leagues_order:
-                leagues_order.append(lg)
-
-    total_leagues = len(leagues_order)
-    cursor = max(0, min(cursor, max(0, total_leagues)))
-    per_page = max(1, min(per_page, 6))  # hard cap: keep response small
-
-    leagues_slice = leagues_order[cursor:cursor + per_page]
-    next_cursor = cursor + per_page if (cursor + per_page) < total_leagues else None
-
-    def lite_fx(fx: dict):
-        if not lite:
-            return fx
-        keep = {
-            "fixture_id","date","time","league","league_id","home","away","model",
-            "home_prob","draw_prob","away_prob","over_2_5_prob","under_2_5_prob",
-            "offered_1","offered_x","offered_2","offered_over_2_5","offered_under_2_5",
-            "value_pct_1","value_pct_x","value_pct_2","value_pct_over","value_pct_under",
-            "ev_1","ev_x","ev_2","ev_over","ev_under",
-            "flags","odds_match",
-        }
-        out = {k: fx.get(k) for k in keep if k in fx}
-        # keep league if missing due to schema oddities
-        if "league" not in out:
-            out["league"] = fx.get("league")
-        return out
-
-    fixtures_filtered = [lite_fx(fx) for fx in fixtures if (fx.get("league") in leagues_slice)]
-
-    chunk = {
-        "cursor": cursor,
-        "per_page": per_page,
-        "leagues": leagues_slice,
-        "next_cursor": next_cursor,
-        "total_leagues": total_leagues,
-        "lite": bool(lite),
-    }
-
-    out_report = dict(report)
-    out_report["fixtures"] = fixtures_filtered
-    out_report["chunk"] = chunk
-    return out_report
+def _lite_fixture(fx: dict) -> dict:
+    # κρατάμε μόνο τα απαραίτητα για παρουσίαση (κόβει τεράστιο payload)
+    keep = [
+        "fixture_id","date","time","league","league_id","home","away",
+        "home_prob","draw_prob","away_prob","over_2_5_prob","under_2_5_prob",
+        "fair_1","fair_x","fair_2","fair_over_2_5","fair_under_2_5",
+        "offered_1","offered_x","offered_2","offered_over_2_5","offered_under_2_5",
+        "value_pct_1","value_pct_x","value_pct_2","value_pct_over","value_pct_under",
+        "ev_1","ev_x","ev_2","ev_over","ev_under",
+        "flags"
+    ]
+    return {k: fx.get(k) for k in keep if k in fx}
 
 @app.route("/thursday-analysis-v3", methods=["GET"])
 def gpt_thursday():
     report, error = load_json_report("logs/thursday_report_v3.json")
     if report is None:
-        return jsonify({
-            "status":"error",
-            "message":"Thursday report not available",
-            "error":error,
-            "timestamp":datetime.utcnow().isoformat(),
-            "report":None
-        }), 404
+        return jsonify({"status":"error","message":"Thursday report not available","error":error,"timestamp":datetime.utcnow().isoformat(),"report":None}), 404
 
-    cursor = _to_int(request.args.get("cursor"), 0)
-    per_page = _to_int(request.args.get("per_page"), 3)
-    lite = _to_bool(request.args.get("lite"), True)
+    # ---- CHUNKING PARAMS ----
+    # cursor: index in engine_leagues
+    # per_page: how many leagues per call
+    # lite: reduce fixture fields
+    cursor = request.args.get("cursor", default=None, type=int)
+    per_page = request.args.get("per_page", default=None, type=int)
+    lite = request.args.get("lite", default="false").lower() == "true"
 
-    # If user doesn't want chunking, allow full (but risky)
-    no_chunk = _to_bool(request.args.get("no_chunk"), False)
-    out_report = report if no_chunk else _build_thursday_chunk(report, cursor, per_page, lite)
+    # if no chunk params -> old behavior (FULL report)
+    if cursor is None or per_page is None:
+        return jsonify({"status":"ok","timestamp":datetime.utcnow().isoformat(),"report":report})
 
-    return jsonify({
-        "status":"ok",
-        "timestamp":datetime.utcnow().isoformat(),
-        "report":out_report
-    })
+    engine_leagues = report.get("engine_leagues") or sorted({fx.get("league") for fx in (report.get("fixtures") or []) if fx.get("league")})
+    engine_leagues = [x for x in engine_leagues if x]
+
+    cursor = max(0, int(cursor))
+    per_page = max(1, min(5, int(per_page)))  # safety: 1..5 leagues per chunk
+
+    sel_leagues = engine_leagues[cursor:cursor + per_page]
+    fixtures = report.get("fixtures") or []
+    sel_fixtures = [fx for fx in fixtures if fx.get("league") in sel_leagues]
+
+    if lite:
+        sel_fixtures = [_lite_fixture(fx) for fx in sel_fixtures]
+
+    next_cursor = cursor + per_page
+    if next_cursor >= len(engine_leagues):
+        next_cursor = None
+
+    chunked = dict(report)
+    chunked["fixtures_total_all"] = report.get("fixtures_total", len(fixtures))
+    chunked["fixtures_chunk_total"] = len(sel_fixtures)
+    chunked["fixtures"] = sel_fixtures
+    chunked["chunk"] = {
+        "cursor": cursor,
+        "per_page": per_page,
+        "leagues": sel_leagues,
+        "next_cursor": next_cursor,
+        "total_leagues": len(engine_leagues),
+        "lite": bool(lite),
+    }
+
+    return jsonify({"status":"ok","timestamp":datetime.utcnow().isoformat(),"report":chunked})
 
 @app.route("/friday-shortlist-v3", methods=["GET"])
 def gpt_friday():
     report, error = load_json_report("logs/friday_shortlist_v3.json")
     if report is None:
-        return jsonify({
-            "status":"error",
-            "message":"Friday shortlist v3 not available",
-            "error":error,
-            "timestamp":datetime.utcnow().isoformat(),
-            "report":None
-        }), 404
-    return jsonify({
-        "status":"ok",
-        "timestamp":datetime.utcnow().isoformat(),
-        "report":report
-    })
+        return jsonify({"status":"error","message":"Friday shortlist v3 not available","error":error,"timestamp":datetime.utcnow().isoformat(),"report":None}), 404
+    return jsonify({"status":"ok","timestamp":datetime.utcnow().isoformat(),"report":report})
 
 @app.route("/tuesday-recap", methods=["GET"])
 def gpt_tuesday():
     report, error = load_json_report("logs/tuesday_recap_v3.json")
     if report is None:
-        return jsonify({
-            "status":"error",
-            "message":"Tuesday recap v3 not available",
-            "error":error,
-            "timestamp":datetime.utcnow().isoformat(),
-            "report":None
-        }), 404
-    return jsonify({
-        "status":"ok",
-        "timestamp":datetime.utcnow().isoformat(),
-        "report":report
-    })
+        return jsonify({"status":"error","message":"Tuesday recap v3 not available","error":error,"timestamp":datetime.utcnow().isoformat(),"report":None}), 404
+    return jsonify({"status":"ok","timestamp":datetime.utcnow().isoformat(),"report":report})
 
 @app.route("/tuesday-recap-v3", methods=["GET"])
 def gpt_tuesday_v3():
