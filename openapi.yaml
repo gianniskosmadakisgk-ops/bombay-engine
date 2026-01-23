@@ -1,15 +1,14 @@
 openapi: 3.1.0
 info:
   title: Bombay Engine API
-  version: 1.1.0
+  version: 1.0.5
   description: |
-    Bombay Engine API (V3).
-    IMPORTANT:
-    - Thursday endpoint returns the latest saved Thursday Report V3 inside 'report'.
-      Supports optional chunking via query params cursor/per_page/lite to avoid huge outputs.
-    - Friday endpoint returns the latest saved Friday Shortlist V3 inside 'report' (server already ran it).
-    - Tuesday endpoint returns the latest saved Tuesday Recap V3 inside 'report'.
+    Internal API for Agent Bombay v6.x.
 
+    IMPORTANT:
+    - All “GPT endpoints” return SAVED JSON only (do not run scripts).
+    - Thursday is CHUNKED to avoid ResponseTooLargeError.
+    - The Custom GPT MUST read ONLY response.report.
 servers:
   - url: https://bombay-engine.onrender.com
 
@@ -24,39 +23,45 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                additionalProperties: true
+                $ref: "#/components/schemas/HealthcheckResponse"
 
   /thursday-analysis-v3:
     get:
       operationId: thursdayAnalysisV3
-      summary: Thursday Report V3 (latest saved report, optional chunking)
+      summary: Thursday Report V3 (latest saved report, CHUNKED)
       description: |
-        Returns the latest saved Thursday Report V3 from logs/thursday_report_v3.json inside response.report.
-        Optional chunking:
-          - cursor: index of league page (0..)
-          - per_page: number of leagues in this chunk (1..10)
-          - lite: true removes some heavy fields for smaller payload
+        Returns the latest saved Thursday report from logs/thursday_report_v3.json inside response.report.
+        By default it returns a CHUNK (subset of leagues) to avoid large payloads.
+
+        Query params:
+        - cursor: league page offset (0-based)
+        - per_page: number of leagues per request (max 6)
+        - lite: if true, prunes heavy keys per fixture
+        - no_chunk: if true, returns full report (may fail with ResponseTooLargeError)
       parameters:
         - name: cursor
           in: query
           required: false
-          schema: { type: integer, minimum: 0 }
+          schema: { type: integer, minimum: 0, default: 0 }
         - name: per_page
           in: query
           required: false
-          schema: { type: integer, minimum: 1, maximum: 10 }
+          schema: { type: integer, minimum: 1, maximum: 6, default: 3 }
         - name: lite
           in: query
           required: false
-          schema: { type: boolean }
+          schema: { type: boolean, default: true }
+        - name: no_chunk
+          in: query
+          required: false
+          schema: { type: boolean, default: false }
       responses:
         "200":
           description: ok
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/OkWithReport"
+                $ref: "#/components/schemas/ThursdayOk"
         "404":
           description: report not available
           content:
@@ -70,6 +75,8 @@ paths:
       summary: Friday Shortlist V3 (latest saved report)
       description: |
         Returns the latest saved Friday shortlist from logs/friday_shortlist_v3.json inside response.report.
+        Does NOT run the engine.
+        The Custom GPT must read response.report.
       responses:
         "200":
           description: ok
@@ -86,10 +93,12 @@ paths:
 
   /tuesday-recap:
     get:
-      operationId: tuesdayRecapV3
-      summary: Tuesday Recap V3 (latest saved report)
+      operationId: tuesdayRecap
+      summary: Tuesday Recap (latest saved report)
       description: |
         Returns the latest saved Tuesday recap from logs/tuesday_recap_v3.json inside response.report.
+        Does NOT run the engine.
+        The Custom GPT must read response.report.
       responses:
         "200":
           description: ok
@@ -106,17 +115,35 @@ paths:
 
 components:
   schemas:
+    HealthcheckResponse:
+      type: object
+      additionalProperties: true
+      required: [status, message, timestamp]
+      properties:
+        status: { type: string, example: ok }
+        message: { type: string, example: Bombay Engine alive }
+        timestamp: { type: string, format: date-time }
+
+    ThursdayOk:
+      type: object
+      additionalProperties: true
+      required: [status, timestamp, report]
+      properties:
+        status: { type: string, example: ok }
+        timestamp: { type: string, format: date-time }
+        report:
+          type: object
+          additionalProperties: true
+          description: |
+            Thursday report (possibly chunked). When chunked it includes report.chunk.
+
     OkWithReport:
       type: object
       additionalProperties: true
       required: [status, timestamp, report]
       properties:
-        status:
-          type: string
-          example: ok
-        timestamp:
-          type: string
-          format: date-time
+        status: { type: string, example: ok }
+        timestamp: { type: string, format: date-time }
         report:
           type: object
           additionalProperties: true
@@ -126,17 +153,11 @@ components:
       additionalProperties: true
       required: [status, message, timestamp, report]
       properties:
-        status:
-          type: string
-          example: error
-        message:
-          type: string
-          example: report not available
+        status: { type: string, example: error }
+        message: { type: string, example: Report not available }
         error:
           type: [string, "null"]
-        timestamp:
-          type: string
-          format: date-time
+        timestamp: { type: string, format: date-time }
         report:
-          type: ["object", "null"]
+          type: [object, "null"]
           example: null
