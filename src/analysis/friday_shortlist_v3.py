@@ -1,12 +1,13 @@
 # filename: src/analysis/friday_shortlist_v3.py
 # ============================================================
-# FRIDAY SHORTLIST v3.33 — CoreBet + FunBet + DrawBet (PRODUCTION)
+# FRIDAY SHORTLIST v3.35 — CoreBet + FunBet + DrawBet (PRODUCTION)
 #
-# Fixes:
-# - Strict odds gating fallback when Thursday lacks flags.odds_strict_ok
-#   (prevents Core/Draw from going to zero).
-# - EV filters are OPTIONAL (default OFF).
-# - copy_play has NO null date/time/league for Double/System lines.
+# Key behavior:
+# - copy_play NEVER has null date/time/league for Double/System
+# - STRICT ODDS: if flags.odds_strict_ok missing, fallback to odds_match.score >= STRICT_ODDS_SCORE
+# - FunBet pool: dynamic primary fun picks in [FUN_PRIMARY_MIN..FUN_PRIMARY_MAX]
+#   based on strength; fill remaining slots from Core singles to reach 7
+# - DrawBet can be 0; that's fine.
 # ============================================================
 
 import os
@@ -36,7 +37,7 @@ CORE_MIN_CONFIDENCE = float(os.getenv("CORE_MIN_CONFIDENCE", "0.50"))
 FUN_MIN_CONFIDENCE  = float(os.getenv("FUN_MIN_CONFIDENCE",  "0.45"))
 DRAW_MIN_CONFIDENCE = float(os.getenv("DRAW_MIN_CONFIDENCE", "0.50"))
 
-# overlap
+# overlap toggle (default false). User is ok with overlap.
 FUN_AVOID_CORE_OVERLAP = os.getenv("FUN_AVOID_CORE_OVERLAP", "false").lower() == "true"
 
 # hard caps
@@ -47,8 +48,8 @@ CORE_REQUIRE_STRICT_ODDS = os.getenv("CORE_REQUIRE_STRICT_ODDS", "false").lower(
 FUN_REQUIRE_STRICT_ODDS  = os.getenv("FUN_REQUIRE_STRICT_ODDS",  "false").lower() == "true"
 DRAW_REQUIRE_STRICT_ODDS = os.getenv("DRAW_REQUIRE_STRICT_ODDS", "false").lower() == "true"
 
-# IMPORTANT: fallback strict threshold when Thursday flags.odds_strict_ok is missing
-STRICT_ODDS_SCORE = float(os.getenv("STRICT_ODDS_SCORE", "0.80"))
+# fallback strict threshold when Thursday flags.odds_strict_ok is missing (old Thursday logs)
+STRICT_ODDS_SCORE = float(os.getenv("STRICT_ODDS_SCORE", "0.78"))
 
 # instability brake
 USE_INSTABILITY_BRAKE = os.getenv("USE_INSTABILITY_BRAKE", "false").lower() == "true"
@@ -56,7 +57,22 @@ MAX_PROB_INSTABILITY_CORE = float(os.getenv("MAX_PROB_INSTABILITY_CORE", "0.18")
 MAX_PROB_INSTABILITY_FUN  = float(os.getenv("MAX_PROB_INSTABILITY_FUN",  "0.22"))
 MAX_PROB_INSTABILITY_DRAW = float(os.getenv("MAX_PROB_INSTABILITY_DRAW", "0.16"))
 
-# OPTIONAL EV filters (default OFF)
+# Fun pool strategy
+FUN_TARGET_POOL = int(os.getenv("FUN_TARGET_POOL", "7"))     # 5..7
+FUN_FILL_FROM_CORE = os.getenv("FUN_FILL_FROM_CORE", "true").lower() == "true"
+
+# Dynamic primary fun picks (3..5) based on strength
+FUN_PRIMARY_MIN = int(os.getenv("FUN_PRIMARY_MIN", "3"))
+FUN_PRIMARY_MAX = int(os.getenv("FUN_PRIMARY_MAX", "5"))
+
+FUN_STRONG_EV   = float(os.getenv("FUN_STRONG_EV", "0.08"))
+FUN_STRONG_CONF = float(os.getenv("FUN_STRONG_CONF", "0.55"))
+FUN_STRONG_PROB = float(os.getenv("FUN_STRONG_PROB", "0.50"))
+
+# If you set FUN_PRIMARY_PICKS, it overrides dynamic logic (fixed number)
+FUN_PRIMARY_PICKS_FIXED = os.getenv("FUN_PRIMARY_PICKS", "").strip()
+
+# Optional EV filters (default OFF)
 ENABLE_EV_FILTERS = os.getenv("ENABLE_EV_FILTERS", "false").lower() == "true"
 FUN_MAX_EV  = float(os.getenv("FUN_MAX_EV", "0.25"))
 DRAW_MIN_EV = float(os.getenv("DRAW_MIN_EV", "0.03"))
@@ -123,11 +139,6 @@ def load_thursday_fixtures():
         return data["report"]["fixtures"], data["report"]
     raise KeyError("fixtures not found in Thursday report")
 
-def _strict_ok_flag_or_none(fx):
-    flags = fx.get("flags") or {}
-    # returns True/False/None
-    return flags.get("odds_strict_ok")
-
 def odds_match_ok(fx, min_score, require_strict: bool):
     om = fx.get("odds_match") or {}
     if not om.get("matched"):
@@ -138,10 +149,10 @@ def odds_match_ok(fx, min_score, require_strict: bool):
         return False
 
     if require_strict:
-        strict_flag = _strict_ok_flag_or_none(fx)
+        flags = fx.get("flags") or {}
+        strict_flag = flags.get("odds_strict_ok")
         if strict_flag is True:
             return True
-        # if flag missing (old Thursday logs) OR flag false -> fallback to strict-by-score
         return sc >= STRICT_ODDS_SCORE
 
     return True
@@ -231,6 +242,14 @@ def core_stake_ladder(odds: float) -> float:
 def core_double_stake(_combo: float) -> float:
     return 15.0
 
+def _rank_key(x):
+    return (
+        safe_float(x.get("ev"), -9999.0),
+        safe_float(x.get("confidence"), 0.0),
+        safe_float(x.get("prob"), 0.0),
+        -safe_float(x.get("odds"), 99.0)
+    )
+
 def pick_core(cands, bankroll_core):
     cap = bankroll_core * CORE_EXPOSURE_CAP
 
@@ -263,12 +282,8 @@ def pick_core(cands, bankroll_core):
         elif CORE_LOW_MIN <= odds < CORE_LOW_MAX:
             low_pool.append(p)
 
-    def k(x):
-        return (safe_float(x.get("ev"), -9999.0), safe_float(x.get("confidence"), 0.0),
-                safe_float(x.get("prob"), 0.0), -safe_float(x.get("odds"), 99.0))
-
-    singles_pool.sort(key=k, reverse=True)
-    low_pool.sort(key=k, reverse=True)
+    singles_pool.sort(key=_rank_key, reverse=True)
+    low_pool.sort(key=_rank_key, reverse=True)
 
     singles = []
     used = set()
@@ -283,7 +298,7 @@ def pick_core(cands, bankroll_core):
     doubles = []
     if low_pool:
         partner_pool = singles_pool[:]
-        partner_pool.sort(key=k, reverse=True)
+        partner_pool.sort(key=_rank_key, reverse=True)
         used_d = set()
         for leg1 in low_pool:
             if len(doubles) >= 2:
@@ -337,15 +352,68 @@ def choose_fun_system(pool):
         return None
     return {"label": label, "min_hits": r, "columns": comb(n, r)}
 
-def pick_fun(cands, bankroll_fun, core_fixture_ids):
+def _as_candidate_from_stripped_pick(sp: dict):
+    return {
+        "fixture_id": sp.get("fixture_id"),
+        "date": sp.get("date"),
+        "time": sp.get("time"),
+        "league": sp.get("league"),
+        "match": sp.get("match"),
+        "market_code": sp.get("market_code"),
+        "market": sp.get("market"),
+        "odds": safe_float(sp.get("odds"), None),
+        "prob": safe_float(sp.get("prob"), None),
+        "ev": safe_float(sp.get("ev"), None),
+        "confidence": safe_float(sp.get("confidence"), None),
+        "fx": {},
+    }
+
+def _is_strong_fun(p):
+    evv = safe_float(p.get("ev"), None)
+    conf = safe_float(p.get("confidence"), None)
+    pr = safe_float(p.get("prob"), None)
+    if evv is None or conf is None or pr is None:
+        return False
+    return (evv >= FUN_STRONG_EV) and (conf >= FUN_STRONG_CONF) and (pr >= FUN_STRONG_PROB)
+
+def _compute_primary_n(picks_total, target_n: int) -> int:
+    # If fixed is set, honor it.
+    if FUN_PRIMARY_PICKS_FIXED:
+        try:
+            fx = int(FUN_PRIMARY_PICKS_FIXED)
+            return max(0, min(target_n, fx, len(picks_total)))
+        except Exception:
+            pass
+
+    # Dynamic 3..5 based on strong picks available.
+    strong_cnt = sum(1 for p in picks_total if _is_strong_fun(p))
+    lo = max(0, min(target_n, int(FUN_PRIMARY_MIN)))
+    hi = max(lo, min(target_n, int(FUN_PRIMARY_MAX)))
+    # Choose within [lo..hi], leaning to 5 if we have many strong.
+    n = strong_cnt
+    if n < lo:
+        n = lo
+    if n > hi:
+        n = hi
+    # Can't exceed available picks_total
+    return min(n, len(picks_total))
+
+def pick_fun(cands, bankroll_fun, core_singles):
     cap = bankroll_fun * FUN_EXPOSURE_CAP
+
+    core_fixture_ids = set()
+    if FUN_AVOID_CORE_OVERLAP and isinstance(core_singles, list):
+        for sp in core_singles:
+            fid = safe_int(sp.get("fixture_id"), None)
+            if fid is not None:
+                core_fixture_ids.add(fid)
 
     pool_cands = []
     for p in cands:
         fx = p["fx"]
         if not fun_pick_filter(p):
             continue
-        if FUN_AVOID_CORE_OVERLAP and p["fixture_id"] in core_fixture_ids:
+        if FUN_AVOID_CORE_OVERLAP and p.get("fixture_id") in core_fixture_ids:
             continue
         if not odds_match_ok(fx, ODDS_MATCH_MIN_SCORE_FUN, FUN_REQUIRE_STRICT_ODDS):
             continue
@@ -364,54 +432,67 @@ def pick_fun(cands, bankroll_fun, core_fixture_ids):
 
         pool_cands.append(p)
 
-    def k(x):
-        return (safe_float(x.get("ev"), -9999.0), safe_float(x.get("confidence"), 0.0),
-                safe_float(x.get("prob"), 0.0), -safe_float(x.get("odds"), 99.0))
+    pool_cands.sort(key=_rank_key, reverse=True)
 
-    pool_cands.sort(key=k, reverse=True)
-
-    picks = []
-    used = set()
+    # picks_total: best unique matches from fun candidates
+    picks_total = []
+    used_matches = set()
     for p in pool_cands:
-        if p["match"] in used:
+        if p["match"] in used_matches:
             continue
-        picks.append(p); used.add(p["match"])
-        if len(picks) >= FUN_MAX_PICKS:
+        picks_total.append(p)
+        used_matches.add(p["match"])
+        if len(picks_total) >= FUN_MAX_PICKS:
             break
 
-    if len(picks) >= 7:
-        pool = picks[:7]
-    elif len(picks) >= 6:
-        pool = picks[:6]
-    else:
-        pool = picks[:5]
+    # Build system pool to target size (default 7)
+    target_n = max(5, min(7, int(FUN_TARGET_POOL)))
+    primary_n = _compute_primary_n(picks_total, target_n)
 
-    # cap: max 2 odds > 3.00 in FINAL pool
+    pool = []
+    pool_used = set()
+
+    # 1) take primary fun picks (dynamic 3..5)
+    for p in picks_total:
+        if p["match"] in pool_used:
+            continue
+        pool.append(p)
+        pool_used.add(p["match"])
+        if len(pool) >= primary_n:
+            break
+
+    # 2) fill from core singles to reach target_n
+    if FUN_FILL_FROM_CORE and (not FUN_AVOID_CORE_OVERLAP) and isinstance(core_singles, list) and len(pool) < target_n:
+        core_as_cands = [_as_candidate_from_stripped_pick(sp) for sp in core_singles]
+        core_as_cands.sort(key=_rank_key, reverse=True)
+
+        for cp in core_as_cands:
+            if len(pool) >= target_n:
+                break
+            if not cp.get("match"):
+                continue
+            if cp["match"] in pool_used:
+                continue
+            pool.append(cp)
+            pool_used.add(cp["match"])
+
+    # 3) if still not enough, fill from remaining fun picks_total
+    if len(pool) < target_n:
+        for p in picks_total:
+            if len(pool) >= target_n:
+                break
+            if p["match"] in pool_used:
+                continue
+            pool.append(p)
+            pool_used.add(p["match"])
+
+    # Final clamp to 7/6/5
     if len(pool) >= 7:
-        high = [p for p in pool if safe_float(p.get("odds"), 0.0) > 3.00]
-        if len(high) > 2:
-            keep = []
-            high_cnt = 0
-            for p in pool:
-                if safe_float(p.get("odds"), 0.0) > 3.00:
-                    if high_cnt < 2:
-                        keep.append(p); high_cnt += 1
-                    else:
-                        continue
-                else:
-                    keep.append(p)
-
-            used_matches = {p["match"] for p in keep}
-            for cand in pool_cands:
-                if len(keep) >= 7:
-                    break
-                if cand["match"] in used_matches:
-                    continue
-                if safe_float(cand.get("odds"), 0.0) > 3.00:
-                    continue
-                keep.append(cand)
-                used_matches.add(cand["match"])
-            pool = keep[:7]
+        pool = pool[:7]
+    elif len(pool) >= 6:
+        pool = pool[:6]
+    else:
+        pool = pool[:5]
 
     sys = choose_fun_system(pool)
     stake_total = 0.0
@@ -432,7 +513,7 @@ def pick_fun(cands, bankroll_fun, core_fixture_ids):
         "bankroll": bankroll_fun,
         "exposure_cap_pct": FUN_EXPOSURE_CAP,
         "system_pool": [_strip_pick(p, tag="fun_pool") for p in pool],
-        "picks_total": [_strip_pick(p, tag="fun_pick") for p in picks],
+        "picks_total": [_strip_pick(p, tag="fun_pick") for p in picks_total],
         "system": {
             "label": (sys["label"] if sys else None),
             "columns": (sys["columns"] if sys else None),
@@ -442,7 +523,7 @@ def pick_fun(cands, bankroll_fun, core_fixture_ids):
         },
         "open": stake_total,
         "after_open": round(bankroll_fun - stake_total, 2),
-        "counts": {"picks_total": len(picks), "system_pool": len(pool)},
+        "counts": {"picks_total": len(picks_total), "system_pool": len(pool)},
     }
 
 # ---------------- DRAW RULES (SYSTEM ONLY) ----------------
@@ -487,10 +568,12 @@ def pick_draw(cands, bankroll_draw):
 
         draws.append(p)
 
-    def k(x):
-        return (safe_float(x.get("ev"), -9999.0), safe_float(x.get("prob"), 0.0),
-                safe_float(x.get("confidence"), 0.0), -safe_float(x.get("odds"), 99.0))
-    draws.sort(key=k, reverse=True)
+    draws.sort(key=lambda x: (
+        safe_float(x.get("ev"), -9999.0),
+        safe_float(x.get("prob"), 0.0),
+        safe_float(x.get("confidence"), 0.0),
+        -safe_float(x.get("odds"), 99.0)
+    ), reverse=True)
 
     pool = []
     used = set()
@@ -564,7 +647,8 @@ def _strip_leg(p):
     }
 
 def _safe_window_placeholders(window: dict):
-    w_to = (window or {}).get("to") or (window or {}).get("from") or datetime.utcnow().date().isoformat()
+    w_from = (window or {}).get("from") or datetime.utcnow().date().isoformat()
+    w_to = (window or {}).get("to") or w_from
     return (w_to, "23:59", "MULTI")
 
 def _legs_summary(legs: list):
@@ -660,9 +744,7 @@ def main():
     cands = build_candidates(fixtures)
 
     core_singles, core_double, core_doubles, core_meta = pick_core(cands, core_bankroll_start)
-    core_fixture_ids = {p.get("fixture_id") for p in core_singles if p.get("fixture_id") is not None}
-
-    fun_payload = pick_fun(cands, fun_bankroll_start, core_fixture_ids)
+    fun_payload = pick_fun(cands, fun_bankroll_start, core_singles)
     draw_payload = pick_draw(cands, draw_bankroll_start)
 
     core_section = {
