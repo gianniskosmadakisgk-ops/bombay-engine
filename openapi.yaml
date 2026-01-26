@@ -1,120 +1,27 @@
+# filename: openapi.yaml
 openapi: 3.1.0
 info:
   title: Bombay Engine API
-  version: 1.0.5
+  version: 1.0.7
   description: |
-    Bombay Engine API (Render).
-    - Thursday endpoint returns SAVED report (logs/thursday_report_v3.json) inside `report`.
-      Supports chunking via query params to avoid ResponseTooLargeError.
-    - Friday endpoint returns SAVED report (logs/friday_shortlist_v3.json) inside `report`.
-    - Tuesday endpoint returns SAVED report (logs/tuesday_recap_v3.json) inside `report`.
+    Bombay Engine API (Render) — OpenAPI matches app.py endpoints 1:1.
+
+    Notes:
+    - Admin-guarded endpoints require header: X-ADMIN-KEY (if ADMIN_KEY is set server-side).
+    - "GPT read" endpoints return SAVED logs (do NOT run scripts).
+    - "run" endpoints execute scripts on server and return stdout/stderr (trimmed).
+
 servers:
   - url: https://bombay-engine.onrender.com
 
-paths:
-  /healthcheck:
-    get:
-      operationId: healthcheck
-      summary: Health check
-      responses:
-        "200":
-          description: ok
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/HealthcheckResponse"
-
-  /thursday-analysis-v3:
-    get:
-      operationId: runThursdayAnalysis
-      summary: Thursday Report V3 (saved) — supports chunking
-      description: |
-        Returns the latest saved Thursday report from logs/thursday_report_v3.json inside `report`.
-        Does NOT run the engine. Supports chunking to avoid large payloads.
-      parameters:
-        - in: query
-          name: cursor
-          required: false
-          schema: { type: integer, minimum: 0, default: 0 }
-          description: League-page cursor (0-based).
-        - in: query
-          name: per_page
-          required: false
-          schema: { type: integer, minimum: 1, maximum: 3, default: 2 }
-          description: How many leagues to include in this chunk (1..3).
-        - in: query
-          name: lite
-          required: false
-          schema: { type: boolean, default: true }
-          description: If true, returns a slim fixture payload (only display fields + small flags).
-        - in: query
-          name: tz
-          required: false
-          schema:
-            type: string
-            enum: ["UTC", "Europe/Athens"]
-            default: "Europe/Athens"
-          description: Adds display-only time fields for the requested timezone.
-      responses:
-        "200":
-          description: ok
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/OkWithReport" }
-        "404":
-          description: report not available
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ErrorWithReportNull" }
-
-  /friday-shortlist-v3:
-    get:
-      operationId: runFridayShortlist
-      summary: Friday Shortlist V3 (saved)
-      description: |
-        Returns the latest saved Friday shortlist from logs/friday_shortlist_v3.json inside `report`.
-        Does NOT run the engine.
-      parameters:
-        - in: query
-          name: tz
-          required: false
-          schema:
-            type: string
-            enum: ["UTC", "Europe/Athens"]
-            default: "Europe/Athens"
-          description: Adds display-only time fields for the requested timezone where possible.
-      responses:
-        "200":
-          description: ok
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/OkWithReport" }
-        "404":
-          description: report not available
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ErrorWithReportNull" }
-
-  /tuesday-recap:
-    get:
-      operationId: runTuesdayRecap
-      summary: Tuesday Recap (saved)
-      description: |
-        Returns the latest saved Tuesday recap from logs/tuesday_recap_v3.json inside `report`.
-        Does NOT run the engine.
-      responses:
-        "200":
-          description: ok
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/OkWithReport" }
-        "404":
-          description: report not available
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ErrorWithReportNull" }
-
 components:
+  securitySchemes:
+    AdminKeyAuth:
+      type: apiKey
+      in: header
+      name: X-ADMIN-KEY
+      description: Required only if ADMIN_KEY is configured on the server.
+
   schemas:
     HealthcheckResponse:
       type: object
@@ -123,6 +30,16 @@ components:
       properties:
         status: { type: string, example: ok }
         message: { type: string, example: Bombay Engine alive }
+        timestamp: { type: string, format: date-time }
+
+    ErrorResponse:
+      type: object
+      additionalProperties: true
+      required: [status, message, timestamp]
+      properties:
+        status: { type: string, example: error }
+        message: { type: string }
+        error: { type: ["string", "null"] }
         timestamp: { type: string, format: date-time }
 
     OkWithReport:
@@ -146,3 +63,400 @@ components:
         error: { type: ["string", "null"] }
         timestamp: { type: string, format: date-time }
         report: { type: ["object", "null"], example: null }
+
+    RunScriptResponse:
+      type: object
+      additionalProperties: true
+      required: [ok, return_code, stdout, stderr, script, status, timestamp]
+      properties:
+        ok: { type: boolean }
+        return_code: { type: integer }
+        stdout: { type: string }
+        stderr: { type: string }
+        script: { type: string }
+        status: { type: string, enum: [ok, error] }
+        timestamp: { type: string, format: date-time }
+
+    LogsDirListing:
+      type: object
+      additionalProperties: true
+      properties:
+        exists: { type: ["boolean", "null"] }
+        path: { type: string }
+        error: { type: ["string", "null"] }
+        files:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+            properties:
+              name: { type: string }
+              size: { type: integer }
+              mtime: { type: string }
+
+    DebugLogsResponse:
+      type: object
+      additionalProperties: true
+      required: [status, timestamp, project_root, logs]
+      properties:
+        status: { type: string, example: ok }
+        timestamp: { type: string, format: date-time }
+        project_root: { type: string }
+        logs: { $ref: "#/components/schemas/LogsDirListing" }
+
+    UploadPostResponse:
+      type: object
+      additionalProperties: true
+      required: [status, timestamp, saved_to, full_path, exists_after_write, size_bytes, logs_dir]
+      properties:
+        status: { type: string, example: ok }
+        timestamp: { type: string, format: date-time }
+        saved_to: { type: string }
+        full_path: { type: string }
+        exists_after_write: { type: boolean }
+        size_bytes: { type: ["integer", "null"] }
+        logs_dir: { $ref: "#/components/schemas/LogsDirListing" }
+
+paths:
+  /healthcheck:
+    get:
+      operationId: healthcheck
+      summary: Health check
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/HealthcheckResponse" }
+
+  /debug/logs:
+    get:
+      operationId: debugLogs
+      summary: Debug logs directory listing (admin)
+      security:
+        - AdminKeyAuth: []
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DebugLogsResponse" }
+        "401":
+          description: unauthorized
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /upload:
+    get:
+      operationId: uploadPage
+      summary: Upload page (HTML)
+      responses:
+        "200":
+          description: ok
+          content:
+            text/html:
+              schema:
+                type: string
+    post:
+      operationId: uploadJsonToLogs
+      summary: Upload JSON into server logs (admin)
+      security:
+        - AdminKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [kind, file]
+              properties:
+                kind:
+                  type: string
+                  enum: [thursday, friday, tuesday, history]
+                file:
+                  type: string
+                  format: binary
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UploadPostResponse" }
+        "400":
+          description: invalid request
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "401":
+          description: unauthorized
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /run/thursday-v3:
+    get:
+      operationId: runThursdayV3
+      summary: Run Thursday engine v3 (admin)
+      security:
+        - AdminKeyAuth: []
+      responses:
+        "200":
+          description: ok/error
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RunScriptResponse" }
+        "401":
+          description: unauthorized
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /run/friday-shortlist-v3:
+    get:
+      operationId: runFridayShortlistV3
+      summary: Run Friday shortlist v3 (admin)
+      security:
+        - AdminKeyAuth: []
+      responses:
+        "200":
+          description: ok/error
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RunScriptResponse" }
+        "401":
+          description: unauthorized
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /run/tuesday-recap-v3:
+    get:
+      operationId: runTuesdayRecapV3
+      summary: Run Tuesday recap v3 (admin)
+      security:
+        - AdminKeyAuth: []
+      responses:
+        "200":
+          description: ok/error
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RunScriptResponse" }
+        "401":
+          description: unauthorized
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /run/tuesday-recap:
+    get:
+      operationId: runTuesdayRecapAlias
+      summary: Alias of /run/tuesday-recap-v3
+      responses:
+        "200":
+          description: ok/error
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RunScriptResponse" }
+
+  /download/thursday-report-v3:
+    get:
+      operationId: downloadThursdayReportV3
+      summary: Download Thursday report JSON (admin)
+      security:
+        - AdminKeyAuth: []
+      responses:
+        "200":
+          description: file
+          content:
+            application/json:
+              schema:
+                type: string
+                format: binary
+        "404":
+          description: missing
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "401":
+          description: unauthorized
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /download/friday-shortlist-v3:
+    get:
+      operationId: downloadFridayShortlistV3
+      summary: Download Friday shortlist JSON (admin)
+      security:
+        - AdminKeyAuth: []
+      responses:
+        "200":
+          description: file
+          content:
+            application/json:
+              schema:
+                type: string
+                format: binary
+        "404":
+          description: missing
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "401":
+          description: unauthorized
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /download/tuesday-recap-v3:
+    get:
+      operationId: downloadTuesdayRecapV3
+      summary: Download Tuesday recap JSON (admin)
+      security:
+        - AdminKeyAuth: []
+      responses:
+        "200":
+          description: file
+          content:
+            application/json:
+              schema:
+                type: string
+                format: binary
+        "404":
+          description: missing
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "401":
+          description: unauthorized
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /download/tuesday-history-v3:
+    get:
+      operationId: downloadTuesdayHistoryV3
+      summary: Download Tuesday history JSON (admin)
+      security:
+        - AdminKeyAuth: []
+      responses:
+        "200":
+          description: file
+          content:
+            application/json:
+              schema:
+                type: string
+                format: binary
+        "404":
+          description: missing
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "401":
+          description: unauthorized
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /thursday-analysis-v3:
+    get:
+      operationId: getThursdaySavedChunked
+      summary: Thursday Report V3 (saved) — supports chunking
+      description: |
+        Returns the latest saved Thursday report from logs/thursday_report_v3.json inside `report`.
+        Does NOT run the engine. Supports chunking to avoid large payloads.
+      parameters:
+        - in: query
+          name: cursor
+          required: false
+          schema: { type: integer, minimum: 0, default: 0 }
+          description: League-page cursor (0-based).
+        - in: query
+          name: per_page
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 3, default: 2 }
+          description: How many leagues to include in this chunk (1..3).
+        - in: query
+          name: lite
+          required: false
+          schema: { type: boolean, default: true }
+          description: If true, returns a slim fixture payload.
+        - in: query
+          name: tz
+          required: false
+          schema:
+            type: string
+            enum: ["UTC", "Europe/Athens"]
+            default: "Europe/Athens"
+          description: Adds display-only time fields for the requested timezone.
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OkWithReport" }
+        "404":
+          description: report not available
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorWithReportNull" }
+        "500":
+          description: chunking failed
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorWithReportNull" }
+
+  /friday-shortlist-v3:
+    get:
+      operationId: getFridaySaved
+      summary: Friday Shortlist V3 (saved)
+      description: |
+        Returns the latest saved Friday shortlist from logs/friday_shortlist_v3.json inside `report`.
+        Does NOT run the script.
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OkWithReport" }
+        "404":
+          description: report not available
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorWithReportNull" }
+
+  /tuesday-recap:
+    get:
+      operationId: getTuesdaySaved
+      summary: Tuesday Recap (saved)
+      description: |
+        Returns the latest saved Tuesday recap from logs/tuesday_recap_v3.json inside `report`.
+        Does NOT run the script.
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OkWithReport" }
+        "404":
+          description: report not available
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorWithReportNull" }
+
+  /tuesday-recap-v3:
+    get:
+      operationId: getTuesdaySavedV3Alias
+      summary: Alias of /tuesday-recap (saved)
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OkWithReport" }
+        "404":
+          description: report not available
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorWithReportNull" }
