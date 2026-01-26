@@ -1,6 +1,7 @@
+# filename: src/analysis/tuesday_recap_v3.py
 # ============================================================
 # src/analysis/tuesday_recap_v3.py
-# BOMBAY TUESDAY RECAP v3.30 — PRODUCTION
+# BOMBAY TUESDAY RECAP v3.31 — PRODUCTION
 #
 # Reads:
 #   - logs/friday_shortlist_v3.json
@@ -13,8 +14,11 @@
 # Rules:
 #   - If fixture not finished => result MUST be "PENDING" and profit 0.
 #   - Updates bankroll_current ONLY when that portfolio has no PENDING.
-#   - Adds drawbet support.
-#   - Adds copy_recap (array of strings) for the Custom GPT.
+#
+# Patch v3.31:
+#   - Rerun-safe lifetime updates:
+#       * subtract old contributions if OLD week entry had pending==0
+#       * add new contributions only if NEW run pending==0
 # ============================================================
 
 import os
@@ -81,39 +85,29 @@ def iso_week_id_from_window(window: dict | None) -> str:
     return f"{y}-W{int(w):02d}"
 
 def load_history(path: str) -> Dict[str, Any]:
+    base = {
+        "week_count": 0,
+        "weeks": {},
+        "core": {"stake": 0.0, "profit": 0.0, "bankroll_current": None},
+        "funbet": {"stake": 0.0, "profit": 0.0, "bankroll_current": None},
+        "drawbet": {"stake": 0.0, "profit": 0.0, "bankroll_current": None},
+        "updated_at": now_utc_iso(),
+    }
     if not os.path.exists(path):
-        return {
-            "week_count": 0,
-            "weeks": {},
-            "core": {"stake": 0.0, "profit": 0.0, "bankroll_current": None},
-            "funbet": {"stake": 0.0, "profit": 0.0, "bankroll_current": None},
-            "drawbet": {"stake": 0.0, "profit": 0.0, "bankroll_current": None},
-            "updated_at": now_utc_iso(),
-        }
+        return base
     try:
         h = load_json(path)
         h.setdefault("week_count", 0)
         h.setdefault("weeks", {})
-        h.setdefault("core", {}).setdefault("stake", 0.0)
-        h.setdefault("core", {}).setdefault("profit", 0.0)
-        h.setdefault("core", {}).setdefault("bankroll_current", None)
-        h.setdefault("funbet", {}).setdefault("stake", 0.0)
-        h.setdefault("funbet", {}).setdefault("profit", 0.0)
-        h.setdefault("funbet", {}).setdefault("bankroll_current", None)
-        h.setdefault("drawbet", {}).setdefault("stake", 0.0)
-        h.setdefault("drawbet", {}).setdefault("profit", 0.0)
-        h.setdefault("drawbet", {}).setdefault("bankroll_current", None)
+        for k in ["core", "funbet", "drawbet"]:
+            h.setdefault(k, {})
+            h[k].setdefault("stake", 0.0)
+            h[k].setdefault("profit", 0.0)
+            h[k].setdefault("bankroll_current", None)
         h.setdefault("updated_at", now_utc_iso())
         return h
     except Exception:
-        return {
-            "week_count": 0,
-            "weeks": {},
-            "core": {"stake": 0.0, "profit": 0.0, "bankroll_current": None},
-            "funbet": {"stake": 0.0, "profit": 0.0, "bankroll_current": None},
-            "drawbet": {"stake": 0.0, "profit": 0.0, "bankroll_current": None},
-            "updated_at": now_utc_iso(),
-        }
+        return base
 
 # ---------- API-Football ----------
 def _api_get_fixture(fixture_id: int) -> Optional[Dict[str, Any]]:
@@ -277,10 +271,6 @@ def parse_system_sizes(label: str) -> List[int]:
     return out
 
 def eval_system(system: Dict[str, Any], pool: List[Dict[str, Any]], scores: Dict[int, Dict[str, Any]]) -> Tuple[Dict[str, Any], str, float, List[Dict[str, Any]]]:
-    """
-    Returns: (system_out, result, profit, pool_out_with_results)
-    Pool picks can be shown with WIN/LOSE/PENDING + final_score.
-    """
     if not system or not pool:
         return system or {}, "PENDING", 0.0, pool or []
 
@@ -363,13 +353,11 @@ def build_copy_recap(recap: Dict[str, Any]) -> List[str]:
     wk = recap.get("week_label") or "—"
     w = recap.get("window") or {}
     lines.append(f'WEEK {wk} | Window {w.get("from","—")} – {w.get("to","—")}')
-
     for key in ["core","funbet","drawbet"]:
         if key not in recap:
             continue
         sec = recap.get(key) or {}
         lines.append(f'[{key.upper()}] stake={sec.get("stake","—")} profit={sec.get("profit","—")} roi={sec.get("roi_pct","—")} bankroll={sec.get("bankroll_start","—")}→{sec.get("bankroll_end","—")} pending={sec.get("pending","—")}')
-
     return lines
 
 # ---------- main ----------
@@ -415,7 +403,6 @@ def main():
 
     core_singles = core.get("singles", []) or []
     core_doubles = core.get("doubles", []) or []
-    core_double_primary = core.get("double") or {}
 
     fun_system = fun.get("system") or {}
     fun_pool   = fun.get("system_pool", []) or []
@@ -487,33 +474,50 @@ def main():
     fun_bankroll_end  = round(fun_bankroll_start + fun_profit, 2)
     draw_bankroll_end = round(draw_bankroll_start + draw_profit, 2)
 
-    # update history (per-portfolio only if no pending)
+    # update history
     wk_key = window_from or week_id
     history.setdefault("weeks", {})
     prev_week = history["weeks"].get(wk_key)
 
-    # If rerun same week and fully settled, subtract old contributions then add new
-    def subtract_prev(section: str, stake_new: float, profit_new: float, settled_ok: bool):
-        if not settled_ok:
-            return
+    # settled flags
+    core_settled_ok = (core_pending == 0)
+    fun_settled_ok  = (fun_pending == 0)
+    draw_settled_ok = (draw_pending == 0)
+
+    # helper: did previous week entry for this section have pending==0 ?
+    def prev_settled(section: str) -> bool:
+        if not isinstance(prev_week, dict):
+            return False
+        sec = (prev_week.get(section) or {})
+        try:
+            return int(sec.get("pending") or 0) == 0
+        except Exception:
+            return False
+
+    # Rerun-safe lifetime update:
+    # - subtract old only if old was settled
+    # - add new only if new is settled
+    def update_lifetime(section: str, stake_new: float, profit_new: float, new_settled: bool):
         nonlocal history, prev_week
-        if isinstance(prev_week, dict):
+
+        history.setdefault(section, {})
+        history[section].setdefault("stake", 0.0)
+        history[section].setdefault("profit", 0.0)
+
+        if prev_settled(section):
             old = (prev_week.get(section) or {})
             old_stake = safe_float(old.get("stake"), 0.0) or 0.0
             old_profit = safe_float(old.get("profit"), 0.0) or 0.0
             history[section]["stake"] = round((safe_float(history[section].get("stake"), 0.0) or 0.0) - old_stake, 2)
             history[section]["profit"] = round((safe_float(history[section].get("profit"), 0.0) or 0.0) - old_profit, 2)
 
-        history[section]["stake"] = round((safe_float(history[section].get("stake"), 0.0) or 0.0) + stake_new, 2)
-        history[section]["profit"] = round((safe_float(history[section].get("profit"), 0.0) or 0.0) + profit_new, 2)
+        if new_settled:
+            history[section]["stake"] = round((safe_float(history[section].get("stake"), 0.0) or 0.0) + stake_new, 2)
+            history[section]["profit"] = round((safe_float(history[section].get("profit"), 0.0) or 0.0) + profit_new, 2)
 
-    core_settled_ok = (core_pending == 0)
-    fun_settled_ok  = (fun_pending == 0)
-    draw_settled_ok = (draw_pending == 0)
-
-    subtract_prev("core", core_stake, core_profit, core_settled_ok)
-    subtract_prev("funbet", fun_stake, fun_profit, fun_settled_ok)
-    subtract_prev("drawbet", draw_stake, draw_profit, draw_settled_ok)
+    update_lifetime("core", core_stake, core_profit, core_settled_ok)
+    update_lifetime("funbet", fun_stake, fun_profit, fun_settled_ok)
+    update_lifetime("drawbet", draw_stake, draw_profit, draw_settled_ok)
 
     if core_settled_ok:
         history["core"]["bankroll_current"] = core_bankroll_end
@@ -542,9 +546,9 @@ def main():
     draw_roi = round((draw_profit / draw_stake) * 100.0, 2) if draw_stake > 0 else None
 
     # scores
-    cw, cl, cp = score_hits(core_out_singles)
-    fw, fl, fp = score_hits(fun_pool_out)
-    dw, dl, dp = score_hits(draw_pool_out)
+    cw, _cl, _cp = score_hits(core_out_singles)
+    fw, _fl, _fp = score_hits(fun_pool_out)
+    dw, _dl, _dp = score_hits(draw_pool_out)
 
     recap = {
         "timestamp": now_utc_iso(),
