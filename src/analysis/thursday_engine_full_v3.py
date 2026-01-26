@@ -1,3 +1,4 @@
+# filename: src/analysis/thursday_engine_full_v3.py
 import os
 import json
 import math
@@ -25,10 +26,11 @@ from dateutil import parser
 #        home_shape, away_shape, draw_shape
 #        under_elite, over_good_shape
 #
-#  Keeps existing v3 stabilized behavior:
-#    - fair_* and value_pct_* from MODEL probs
-#    - snap_* display-only (market snapped)
-#    - EV fields: ev_1/ev_x/ev_2/ev_over/ev_under  (prob * offered - 1)
+#  v3.31 patch (schema-safe, additive):
+#    - odds_match.grade (A/B/C/D)
+#    - flags.odds_strict_ok (matched + score>=STRICT_ODDS_MATCH_SCORE)
+#    - flags.snap_gap_max (max abs gap model vs snap across key probs)
+#    - flags.prob_instability (same as snap_gap_max; explicit name)
 # ============================================================
 
 API_FOOTBALL_KEY = os.getenv("FOOTBALL_API_KEY")
@@ -46,6 +48,9 @@ WINDOW_HOURS = int(os.getenv("WINDOW_HOURS", "72"))
 ODDS_TIME_GATE_HOURS = float(os.getenv("ODDS_TIME_GATE_HOURS", "6"))
 ODDS_TIME_SOFT_HOURS = float(os.getenv("ODDS_TIME_SOFT_HOURS", "10"))
 ODDS_SIM_THRESHOLD = float(os.getenv("ODDS_SIM_THRESHOLD", "0.62"))
+
+# NEW: strict flag threshold (downstream gating helper; additive only)
+STRICT_ODDS_MATCH_SCORE = float(os.getenv("STRICT_ODDS_MATCH_SCORE", "0.80"))
 
 # Model controls
 SHRINKAGE_K = float(os.getenv("SHRINKAGE_K", "8"))
@@ -642,6 +647,20 @@ def _best_odds_from_event(ev_raw, event_home_norm, event_away_norm, swapped: boo
 
     return {"home": best_home, "draw": best_draw, "away": best_away, "over": best_over, "under": best_under}
 
+def _odds_grade(score: float) -> str:
+    # additive helper for downstream gating
+    try:
+        s = float(score)
+    except Exception:
+        return "D"
+    if s >= 0.85:
+        return "A"
+    if s >= 0.78:
+        return "B"
+    if s >= 0.70:
+        return "C"
+    return "D"
+
 def pick_best_odds_for_fixture(fx, league_events_cache):
     if not league_events_cache:
         return {}, {"matched": False, "reason": "no_odds_events"}
@@ -693,7 +712,13 @@ def pick_best_odds_for_fixture(fx, league_events_cache):
         return {}, {"matched": False, "reason": f"low_similarity(score={best_score:.2f})"}
 
     odds = _best_odds_from_event(best["raw"], best["home_norm"], best["away_norm"], best_swap)
-    debug = {"matched": True, "score": round(best_score, 3), "swap": best_swap, "time_diff_h": None if best_diff is None else round(best_diff, 2)}
+    debug = {
+        "matched": True,
+        "score": round(best_score, 3),
+        "grade": _odds_grade(best_score),
+        "swap": best_swap,
+        "time_diff_h": None if best_diff is None else round(best_diff, 2),
+    }
     return odds, debug
 
 # ------------------------- VALUE% + EV -------------------------
@@ -836,6 +861,18 @@ def suitability_from(ev_val, conf_val):
     mult = _clamp(0.6 + 0.4 * conf_val, 0.0, 1.0)
     return round(base * mult, 3)
 
+def _max_snap_gap(m_ph, m_pd, m_pa, m_po, m_pu, s_ph, s_pd, s_pa, s_po, s_pu):
+    vals = []
+    for a, b in [(m_ph, s_ph), (m_pd, s_pd), (m_pa, s_pa), (m_po, s_po), (m_pu, s_pu)]:
+        aa = safe_float(a, None)
+        bb = safe_float(b, None)
+        if aa is None or bb is None:
+            continue
+        vals.append(abs(aa - bb))
+    if not vals:
+        return None
+    return round(max(vals), 3)
+
 # ------------------------- MAIN PIPELINE -------------------------
 def build_fixture_blocks():
     fixtures_out = []
@@ -912,6 +949,9 @@ def build_fixture_blocks():
             offered, match_debug = pick_best_odds_for_fixture(fx, league_cache)
             if match_debug.get("matched"):
                 matched_cnt += 1
+        else:
+            # keep stable keys; no grade when odds off
+            match_debug.setdefault("grade", None)
 
         off_1 = offered.get("home")
         off_x = offered.get("draw")
@@ -994,9 +1034,14 @@ def build_fixture_blocks():
         conf = confidence_score(home_stats, away_stats, match_debug, lam_h, lam_a)
         conf_band = "high" if conf >= 0.70 else ("mid" if conf >= 0.55 else "low")
 
+        # NEW: model vs snap divergence (instability proxy)
+        snap_gap_max = _max_snap_gap(m_ph, m_pd, m_pa, m_po, m_pu, s_ph, s_pd, s_pa, s_po, s_pu)
+
         flags = fx.get("flags") or {}
         flags.update({
             "odds_matched": bool(match_debug.get("matched")),
+            "odds_strict_ok": bool(match_debug.get("matched")) and (safe_float(match_debug.get("score"), 0.0) or 0.0) >= STRICT_ODDS_MATCH_SCORE,
+
             "confidence": round(conf, 3),
             "confidence_band": conf_band,
             "tight_game": bool(tight_game),
@@ -1011,6 +1056,10 @@ def build_fixture_blocks():
 
             "under_elite": bool(under_elite),
             "over_good_shape": bool(over_good_shape),
+
+            # additive
+            "snap_gap_max": snap_gap_max,
+            "prob_instability": snap_gap_max,
         })
 
         dt = fx["commence_utc"]
