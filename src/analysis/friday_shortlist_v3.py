@@ -1,20 +1,12 @@
 # filename: src/analysis/friday_shortlist_v3.py
 # ============================================================
-# src/analysis/friday_shortlist_v3.py
-# FRIDAY SHORTLIST v3.32 — CoreBet + FunBet + DrawBet (PRODUCTION)
+# FRIDAY SHORTLIST v3.33 — CoreBet + FunBet + DrawBet (PRODUCTION)
 #
-# Patch goals (schema-safe):
-# - copy_play MUST NOT have null date/time/league for Double/System lines
-# - keep selection logic stable by default
-# - optional strict odds / instability brakes via env vars
-# - NEW: EV sanity filters (Fun cap EV high, Draw require EV min)
-#
-# Reads:
-# - logs/thursday_report_v3.json
-# - (optional) logs/tuesday_history_v3.json
-#
-# Writes:
-# - logs/friday_shortlist_v3.json
+# Fixes:
+# - Strict odds gating fallback when Thursday lacks flags.odds_strict_ok
+#   (prevents Core/Draw from going to zero).
+# - EV filters are OPTIONAL (default OFF).
+# - copy_play has NO null date/time/league for Double/System lines.
 # ============================================================
 
 import os
@@ -50,20 +42,24 @@ FUN_AVOID_CORE_OVERLAP = os.getenv("FUN_AVOID_CORE_OVERLAP", "false").lower() ==
 # hard caps
 HARD_MAX_ODDS = float(os.getenv("HARD_MAX_ODDS", "3.50"))
 
-# OPTIONAL (default OFF): require strict odds match (from Thursday flags.odds_strict_ok)
+# strict odds (Friday side)
 CORE_REQUIRE_STRICT_ODDS = os.getenv("CORE_REQUIRE_STRICT_ODDS", "false").lower() == "true"
 FUN_REQUIRE_STRICT_ODDS  = os.getenv("FUN_REQUIRE_STRICT_ODDS",  "false").lower() == "true"
 DRAW_REQUIRE_STRICT_ODDS = os.getenv("DRAW_REQUIRE_STRICT_ODDS", "false").lower() == "true"
 
-# OPTIONAL (default OFF): instability brake using Thursday flags.prob_instability (snap_gap_max)
+# IMPORTANT: fallback strict threshold when Thursday flags.odds_strict_ok is missing
+STRICT_ODDS_SCORE = float(os.getenv("STRICT_ODDS_SCORE", "0.80"))
+
+# instability brake
 USE_INSTABILITY_BRAKE = os.getenv("USE_INSTABILITY_BRAKE", "false").lower() == "true"
 MAX_PROB_INSTABILITY_CORE = float(os.getenv("MAX_PROB_INSTABILITY_CORE", "0.18"))
 MAX_PROB_INSTABILITY_FUN  = float(os.getenv("MAX_PROB_INSTABILITY_FUN",  "0.22"))
 MAX_PROB_INSTABILITY_DRAW = float(os.getenv("MAX_PROB_INSTABILITY_DRAW", "0.16"))
 
-# NEW: EV sanity filters (defaults on)
-FUN_MAX_EV  = float(os.getenv("FUN_MAX_EV", "0.25"))   # cut "too good to be true" EVs in Fun
-DRAW_MIN_EV = float(os.getenv("DRAW_MIN_EV", "0.03"))  # require at least small positive EV in Draw
+# OPTIONAL EV filters (default OFF)
+ENABLE_EV_FILTERS = os.getenv("ENABLE_EV_FILTERS", "false").lower() == "true"
+FUN_MAX_EV  = float(os.getenv("FUN_MAX_EV", "0.25"))
+DRAW_MIN_EV = float(os.getenv("DRAW_MIN_EV", "0.03"))
 
 MARKET_NAME = {"1":"Home","X":"Draw","2":"Away","O25":"Over 2.5","U25":"Under 2.5"}
 
@@ -127,21 +123,27 @@ def load_thursday_fixtures():
         return data["report"]["fixtures"], data["report"]
     raise KeyError("fixtures not found in Thursday report")
 
-def _strict_ok_flag(fx) -> bool:
+def _strict_ok_flag_or_none(fx):
     flags = fx.get("flags") or {}
-    v = flags.get("odds_strict_ok")
-    return bool(v) if v is not None else False
+    # returns True/False/None
+    return flags.get("odds_strict_ok")
 
 def odds_match_ok(fx, min_score, require_strict: bool):
     om = fx.get("odds_match") or {}
     if not om.get("matched"):
         return False
+
     sc = safe_float(om.get("score"), 0.0) or 0.0
     if sc < min_score:
         return False
+
     if require_strict:
-        if not _strict_ok_flag(fx):
-            return False
+        strict_flag = _strict_ok_flag_or_none(fx)
+        if strict_flag is True:
+            return True
+        # if flag missing (old Thursday logs) OR flag false -> fallback to strict-by-score
+        return sc >= STRICT_ODDS_SCORE
+
     return True
 
 def confidence_ok(fx, min_conf):
@@ -226,7 +228,7 @@ def core_stake_ladder(odds: float) -> float:
         return 20.0
     return 0.0
 
-def core_double_stake(combo: float) -> float:
+def core_double_stake(_combo: float) -> float:
     return 15.0
 
 def pick_core(cands, bankroll_core):
@@ -251,9 +253,8 @@ def pick_core(cands, bankroll_core):
         if odds is None or evv is None or pr is None:
             continue
 
-        if p["market_code"] == "U25":
-            if pr < 0.58:
-                continue
+        if p["market_code"] == "U25" and pr < 0.58:
+            continue
 
         if CORE_MIN_ODDS <= odds <= CORE_MAX_ODDS:
             st = core_stake_ladder(odds)
@@ -263,7 +264,8 @@ def pick_core(cands, bankroll_core):
             low_pool.append(p)
 
     def k(x):
-        return (safe_float(x.get("ev"), -9999.0), safe_float(x.get("confidence"), 0.0), safe_float(x.get("prob"), 0.0), -safe_float(x.get("odds"), 99.0))
+        return (safe_float(x.get("ev"), -9999.0), safe_float(x.get("confidence"), 0.0),
+                safe_float(x.get("prob"), 0.0), -safe_float(x.get("odds"), 99.0))
 
     singles_pool.sort(key=k, reverse=True)
     low_pool.sort(key=k, reverse=True)
@@ -295,10 +297,7 @@ def pick_core(cands, bankroll_core):
                 if combo < 2.0:
                     continue
                 doubles.append({
-                    "legs": [
-                        _strip_leg(leg1),
-                        _strip_leg(leg2),
-                    ],
+                    "legs": [_strip_leg(leg1), _strip_leg(leg2)],
                     "combo_odds": round(combo, 2),
                     "stake": core_double_stake(combo),
                     "tag": "core_double",
@@ -329,18 +328,14 @@ def fun_pick_filter(p):
 def choose_fun_system(pool):
     n = len(pool)
     if n >= 7:
-        r = 4
-        label = "4/7"
+        r, label = 4, "4/7"
     elif n == 6:
-        r = 3
-        label = "3/6"
+        r, label = 3, "3/6"
     elif n == 5:
-        r = 3
-        label = "3/5"
+        r, label = 3, "3/5"
     else:
         return None
-    cols = comb(n, r)
-    return {"label": label, "min_hits": r, "columns": cols}
+    return {"label": label, "min_hits": r, "columns": comb(n, r)}
 
 def pick_fun(cands, bankroll_fun, core_fixture_ids):
     cap = bankroll_fun * FUN_EXPOSURE_CAP
@@ -364,14 +359,14 @@ def pick_fun(cands, bankroll_fun, core_fixture_ids):
         evv = safe_float(p.get("ev"), None)
         if evv is None:
             continue
-        # NEW: cap extreme EV in Fun (too-good-to-be-true filter)
-        if evv > FUN_MAX_EV:
+        if ENABLE_EV_FILTERS and evv > FUN_MAX_EV:
             continue
 
         pool_cands.append(p)
 
     def k(x):
-        return (safe_float(x.get("ev"), -9999.0), safe_float(x.get("confidence"), 0.0), safe_float(x.get("prob"), 0.0), -safe_float(x.get("odds"), 99.0))
+        return (safe_float(x.get("ev"), -9999.0), safe_float(x.get("confidence"), 0.0),
+                safe_float(x.get("prob"), 0.0), -safe_float(x.get("odds"), 99.0))
 
     pool_cands.sort(key=k, reverse=True)
 
@@ -391,6 +386,7 @@ def pick_fun(cands, bankroll_fun, core_fixture_ids):
     else:
         pool = picks[:5]
 
+    # cap: max 2 odds > 3.00 in FINAL pool
     if len(pool) >= 7:
         high = [p for p in pool if safe_float(p.get("odds"), 0.0) > 3.00]
         if len(high) > 2:
@@ -432,7 +428,7 @@ def pick_fun(cands, bankroll_fun, core_fixture_ids):
         unit = round(target / cols, 2) if cols else 0.0
         stake_total = round(unit * cols, 2)
 
-    payload = {
+    return {
         "bankroll": bankroll_fun,
         "exposure_cap_pct": FUN_EXPOSURE_CAP,
         "system_pool": [_strip_pick(p, tag="fun_pool") for p in pool],
@@ -448,7 +444,6 @@ def pick_fun(cands, bankroll_fun, core_fixture_ids):
         "after_open": round(bankroll_fun - stake_total, 2),
         "counts": {"picks_total": len(picks), "system_pool": len(pool)},
     }
-    return payload
 
 # ---------------- DRAW RULES (SYSTEM ONLY) ----------------
 DRAW_ODDS_MIN = float(os.getenv("DRAW_ODDS_MIN", "2.80"))
@@ -487,14 +482,14 @@ def pick_draw(cands, bankroll_draw):
         evv = safe_float(p.get("ev"), None)
         if evv is None:
             continue
-        # NEW: require positive-ish EV for Draw
-        if evv < DRAW_MIN_EV:
+        if ENABLE_EV_FILTERS and evv < DRAW_MIN_EV:
             continue
 
         draws.append(p)
 
     def k(x):
-        return (safe_float(x.get("ev"), -9999.0), safe_float(x.get("prob"), 0.0), safe_float(x.get("confidence"), 0.0), -safe_float(x.get("odds"), 99.0))
+        return (safe_float(x.get("ev"), -9999.0), safe_float(x.get("prob"), 0.0),
+                safe_float(x.get("confidence"), 0.0), -safe_float(x.get("odds"), 99.0))
     draws.sort(key=k, reverse=True)
 
     pool = []
@@ -520,7 +515,7 @@ def pick_draw(cands, bankroll_draw):
         unit = round(target / cols, 2) if cols else 0.0
         stake_total = round(unit * cols, 2)
 
-    payload = {
+    return {
         "bankroll": bankroll_draw,
         "exposure_cap_pct": DRAW_EXPOSURE_CAP,
         "system_pool": [_strip_pick(p, tag="draw_pool") for p in pool],
@@ -536,7 +531,6 @@ def pick_draw(cands, bankroll_draw):
         "after_open": round(bankroll_draw - stake_total, 2),
         "counts": {"picks_total": len(pool), "system_pool": len(pool)},
     }
-    return payload
 
 def _strip_pick(p, tag="pick"):
     return {
@@ -569,10 +563,8 @@ def _strip_leg(p):
         "odds": round(float(p.get("odds") or 0.0), 2),
     }
 
-# ---- copy_play helpers ----
 def _safe_window_placeholders(window: dict):
-    w_from = (window or {}).get("from") or datetime.utcnow().date().isoformat()
-    w_to = (window or {}).get("to") or w_from
+    w_to = (window or {}).get("to") or (window or {}).get("from") or datetime.utcnow().date().isoformat()
     return (w_to, "23:59", "MULTI")
 
 def _legs_summary(legs: list):
@@ -600,6 +592,7 @@ def build_copy_play(core, fun, draw, window: dict):
         })
 
     ph_date, ph_time, ph_league = _safe_window_placeholders(window)
+
     for d in (core.get("doubles") or []):
         legs = d.get("legs") or []
         combo_odds = d.get("combo_odds")
