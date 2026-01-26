@@ -1,12 +1,13 @@
 # filename: src/analysis/friday_shortlist_v3.py
 # ============================================================
 # src/analysis/friday_shortlist_v3.py
-# FRIDAY SHORTLIST v3.31 — CoreBet + FunBet + DrawBet (PRODUCTION)
+# FRIDAY SHORTLIST v3.32 — CoreBet + FunBet + DrawBet (PRODUCTION)
 #
 # Patch goals (schema-safe):
 # - copy_play MUST NOT have null date/time/league for Double/System lines
 # - keep selection logic stable by default
-# - optional strict odds / instability brakes via env vars (default OFF)
+# - optional strict odds / instability brakes via env vars
+# - NEW: EV sanity filters (Fun cap EV high, Draw require EV min)
 #
 # Reads:
 # - logs/thursday_report_v3.json
@@ -59,6 +60,10 @@ USE_INSTABILITY_BRAKE = os.getenv("USE_INSTABILITY_BRAKE", "false").lower() == "
 MAX_PROB_INSTABILITY_CORE = float(os.getenv("MAX_PROB_INSTABILITY_CORE", "0.18"))
 MAX_PROB_INSTABILITY_FUN  = float(os.getenv("MAX_PROB_INSTABILITY_FUN",  "0.22"))
 MAX_PROB_INSTABILITY_DRAW = float(os.getenv("MAX_PROB_INSTABILITY_DRAW", "0.16"))
+
+# NEW: EV sanity filters (defaults on)
+FUN_MAX_EV  = float(os.getenv("FUN_MAX_EV", "0.25"))   # cut "too good to be true" EVs in Fun
+DRAW_MIN_EV = float(os.getenv("DRAW_MIN_EV", "0.03"))  # require at least small positive EV in Draw
 
 MARKET_NAME = {"1":"Home","X":"Draw","2":"Away","O25":"Over 2.5","U25":"Under 2.5"}
 
@@ -135,7 +140,6 @@ def odds_match_ok(fx, min_score, require_strict: bool):
     if sc < min_score:
         return False
     if require_strict:
-        # only if Thursday provides it; if missing -> treat as False (strict means strict)
         if not _strict_ok_flag(fx):
             return False
     return True
@@ -151,7 +155,6 @@ def instability_ok(fx, max_gap: float):
         return True
     gap = safe_float((fx.get("flags") or {}).get("prob_instability"), None)
     if gap is None:
-        # if missing, don't block (compatibility)
         return True
     return gap <= max_gap
 
@@ -248,7 +251,6 @@ def pick_core(cands, bankroll_core):
         if odds is None or evv is None or pr is None:
             continue
 
-        # keep under rare in core by just requiring it to be strong
         if p["market_code"] == "U25":
             if pr < 0.58:
                 continue
@@ -261,7 +263,6 @@ def pick_core(cands, bankroll_core):
             low_pool.append(p)
 
     def k(x):
-        # ev, confidence, prob, prefer LOWER odds when close (stable)
         return (safe_float(x.get("ev"), -9999.0), safe_float(x.get("confidence"), 0.0), safe_float(x.get("prob"), 0.0), -safe_float(x.get("odds"), 99.0))
 
     singles_pool.sort(key=k, reverse=True)
@@ -278,7 +279,6 @@ def pick_core(cands, bankroll_core):
         used.add(p["match"])
 
     doubles = []
-    # build up to 2 doubles from low odds + best partner from singles pool
     if low_pool:
         partner_pool = singles_pool[:]
         partner_pool.sort(key=k, reverse=True)
@@ -307,7 +307,6 @@ def pick_core(cands, bankroll_core):
                 break
 
     open_total = sum(x["stake"] for x in singles) + sum(d["stake"] for d in doubles)
-    # scale only if above cap
     scale = 1.0
     if cap > 0 and open_total > cap and open_total > 0:
         scale = cap / open_total
@@ -325,14 +324,9 @@ FUN_MIN_PICKS = int(os.getenv("FUN_MIN_PICKS", "5"))
 FUN_MAX_PICKS = int(os.getenv("FUN_MAX_PICKS", "7"))
 
 def fun_pick_filter(p):
-    # allow 1/2/O25/U25, no Draw
     return p["market_code"] != "X"
 
 def choose_fun_system(pool):
-    # always prefer the lowest difficulty:
-    # n=7 => 4/7
-    # n=6 => 3/6
-    # n=5 => 3/5
     n = len(pool)
     if n >= 7:
         r = 4
@@ -366,8 +360,14 @@ def pick_fun(cands, bankroll_fun, core_fixture_ids):
             continue
         if p["odds"] > HARD_MAX_ODDS:
             continue
-        if safe_float(p.get("ev"), None) is None:
+
+        evv = safe_float(p.get("ev"), None)
+        if evv is None:
             continue
+        # NEW: cap extreme EV in Fun (too-good-to-be-true filter)
+        if evv > FUN_MAX_EV:
+            continue
+
         pool_cands.append(p)
 
     def k(x):
@@ -384,7 +384,6 @@ def pick_fun(cands, bankroll_fun, core_fixture_ids):
         if len(picks) >= FUN_MAX_PICKS:
             break
 
-    # pool size preference: 7 else 6 else 5
     if len(picks) >= 7:
         pool = picks[:7]
     elif len(picks) >= 6:
@@ -392,24 +391,20 @@ def pick_fun(cands, bankroll_fun, core_fixture_ids):
     else:
         pool = picks[:5]
 
-    # enforce cap: max 2 picks with odds > 3.00 IN THE FINAL POOL (more correct)
     if len(pool) >= 7:
         high = [p for p in pool if safe_float(p.get("odds"), 0.0) > 3.00]
         if len(high) > 2:
-            # replace extra high-odds with next best lower-odds candidate
             keep = []
             high_cnt = 0
             for p in pool:
                 if safe_float(p.get("odds"), 0.0) > 3.00:
                     if high_cnt < 2:
-                        keep.append(p)
-                        high_cnt += 1
+                        keep.append(p); high_cnt += 1
                     else:
                         continue
                 else:
                     keep.append(p)
 
-            # fill from remaining candidates (not used), prefer lower odds first when close
             used_matches = {p["match"] for p in keep}
             for cand in pool_cands:
                 if len(keep) >= 7:
@@ -427,7 +422,7 @@ def pick_fun(cands, bankroll_fun, core_fixture_ids):
     unit = 0.0
     if sys:
         cols = sys["columns"]
-        target = float(cols)  # unit=1
+        target = float(cols)
         if target < 25.0:
             target = 25.0
         if target > 50.0:
@@ -462,7 +457,6 @@ DRAW_MIN_DRAWS = int(os.getenv("DRAW_MIN_DRAWS", "2"))
 DRAW_MAX_DRAWS = int(os.getenv("DRAW_MAX_DRAWS", "5"))
 
 def choose_draw_system(n: int):
-    # prefer easier: 2/x
     if n >= 5:
         return {"label":"2/5", "min_hits":2, "columns": comb(5,2)}
     if n == 4:
@@ -487,9 +481,16 @@ def pick_draw(cands, bankroll_draw):
             continue
         if p["odds"] < DRAW_ODDS_MIN or p["odds"] > DRAW_ODDS_MAX:
             continue
-        # require draw prob >= 0.27 by default
         if safe_float(p.get("prob"), 0.0) < float(os.getenv("DRAW_P_MIN", "0.27")):
             continue
+
+        evv = safe_float(p.get("ev"), None)
+        if evv is None:
+            continue
+        # NEW: require positive-ish EV for Draw
+        if evv < DRAW_MIN_EV:
+            continue
+
         draws.append(p)
 
     def k(x):
@@ -570,14 +571,11 @@ def _strip_leg(p):
 
 # ---- copy_play helpers ----
 def _safe_window_placeholders(window: dict):
-    # always returns non-null strings for copy_play meta rows
     w_from = (window or {}).get("from") or datetime.utcnow().date().isoformat()
     w_to = (window or {}).get("to") or w_from
-    # put meta rows at the bottom in sorting (23:59 on window.to)
     return (w_to, "23:59", "MULTI")
 
 def _legs_summary(legs: list):
-    # short summary for Double line
     if not legs:
         return ""
     parts = []
@@ -588,7 +586,6 @@ def _legs_summary(legs: list):
 def build_copy_play(core, fun, draw, window: dict):
     lines = []
 
-    # core singles (real fixtures)
     for p in (core.get("singles") or []):
         lines.append({
             "date": p.get("date"),
@@ -602,7 +599,6 @@ def build_copy_play(core, fun, draw, window: dict):
             "_sort_key": f"{p.get('date','')} {p.get('time') or '00:00'}",
         })
 
-    # core doubles as separate lines (NO NULLS)
     ph_date, ph_time, ph_league = _safe_window_placeholders(window)
     for d in (core.get("doubles") or []):
         legs = d.get("legs") or []
@@ -620,7 +616,6 @@ def build_copy_play(core, fun, draw, window: dict):
             "_sort_key": f"{ph_date} {ph_time}",
         })
 
-    # fun system one line (NO NULLS)
     fs = (fun.get("system") or {})
     if fs and fs.get("label"):
         lines.append({
@@ -635,7 +630,6 @@ def build_copy_play(core, fun, draw, window: dict):
             "_sort_key": f"{ph_date} {ph_time}",
         })
 
-    # draw system one line (NO NULLS)
     ds = (draw.get("system") or {})
     if ds and ds.get("label"):
         lines.append({
@@ -650,13 +644,9 @@ def build_copy_play(core, fun, draw, window: dict):
             "_sort_key": f"{ph_date} {ph_time}",
         })
 
-    # sort by _sort_key (meta rows naturally at bottom)
     lines.sort(key=lambda x: x.get("_sort_key") or "9999-12-31 23:59")
-
-    # cleanup
     for x in lines:
-        if "_sort_key" in x:
-            del x["_sort_key"]
+        x.pop("_sort_key", None)
     return lines
 
 def main():
@@ -722,7 +712,6 @@ def main():
         "drawbet": draw_section,
     }
 
-    # copy_play (presenter-friendly; no nulls)
     report["copy_play"] = build_copy_play(core_section, fun_section, draw_section, window)
 
     os.makedirs("logs", exist_ok=True)
