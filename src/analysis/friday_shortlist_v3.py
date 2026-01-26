@@ -1,22 +1,16 @@
+# filename: src/analysis/friday_shortlist_v3.py
 # ============================================================
 # src/analysis/friday_shortlist_v3.py
-# FRIDAY SHORTLIST v3.30 — CoreBet + FunBet + DrawBet (PRODUCTION)
+# FRIDAY SHORTLIST v3.31 — CoreBet + FunBet + DrawBet (PRODUCTION)
 #
-# Fixes / Rules:
-# - Prefer system 4/7 (not 5/7) when pool=7. Never auto-upgrade to 5/7.
-# - Fun picks: max 2 picks with odds > 3.00 when pool size is 7.
-# - Hard odds cap everywhere: odds <= 3.50 (configurable)
-# - Core singles odds: 1.60–2.10 ladder (40/30/20)
-# - Low odds 1.30–1.60 go to doubles (optional, if available)
-# - Core max singles: 8
-# - Fun is system-only (5–7 picks)
-# - Draw picks: try 5, else 4, else 3 (system 2/5 or 2/4 or 2/3)
-# - Adds report.copy_play (ready for presenter)
-# - Adds date/time into picks (for sorting and copy-play)
+# Patch goals (schema-safe):
+# - copy_play MUST NOT have null date/time/league for Double/System lines
+# - keep selection logic stable by default
+# - optional strict odds / instability brakes via env vars (default OFF)
 #
 # Reads:
 # - logs/thursday_report_v3.json
-# - (optional) logs/tuesday_history_v3.json (bankroll carry + week numbering)
+# - (optional) logs/tuesday_history_v3.json
 #
 # Writes:
 # - logs/friday_shortlist_v3.json
@@ -35,7 +29,7 @@ DEFAULT_BANKROLL_CORE = float(os.getenv("BANKROLL_CORE", "800"))
 DEFAULT_BANKROLL_FUN  = float(os.getenv("BANKROLL_FUN",  "400"))
 DEFAULT_BANKROLL_DRAW = float(os.getenv("BANKROLL_DRAW", "300"))
 
-# exposure caps (kept, but you can set high if you want no scaling)
+# exposure caps
 CORE_EXPOSURE_CAP = float(os.getenv("CORE_EXPOSURE_CAP", "0.30"))
 FUN_EXPOSURE_CAP  = float(os.getenv("FUN_EXPOSURE_CAP",  "0.25"))
 DRAW_EXPOSURE_CAP = float(os.getenv("DRAW_EXPOSURE_CAP", "0.20"))
@@ -54,6 +48,17 @@ FUN_AVOID_CORE_OVERLAP = os.getenv("FUN_AVOID_CORE_OVERLAP", "false").lower() ==
 
 # hard caps
 HARD_MAX_ODDS = float(os.getenv("HARD_MAX_ODDS", "3.50"))
+
+# OPTIONAL (default OFF): require strict odds match (from Thursday flags.odds_strict_ok)
+CORE_REQUIRE_STRICT_ODDS = os.getenv("CORE_REQUIRE_STRICT_ODDS", "false").lower() == "true"
+FUN_REQUIRE_STRICT_ODDS  = os.getenv("FUN_REQUIRE_STRICT_ODDS",  "false").lower() == "true"
+DRAW_REQUIRE_STRICT_ODDS = os.getenv("DRAW_REQUIRE_STRICT_ODDS", "false").lower() == "true"
+
+# OPTIONAL (default OFF): instability brake using Thursday flags.prob_instability (snap_gap_max)
+USE_INSTABILITY_BRAKE = os.getenv("USE_INSTABILITY_BRAKE", "false").lower() == "true"
+MAX_PROB_INSTABILITY_CORE = float(os.getenv("MAX_PROB_INSTABILITY_CORE", "0.18"))
+MAX_PROB_INSTABILITY_FUN  = float(os.getenv("MAX_PROB_INSTABILITY_FUN",  "0.22"))
+MAX_PROB_INSTABILITY_DRAW = float(os.getenv("MAX_PROB_INSTABILITY_DRAW", "0.16"))
 
 MARKET_NAME = {"1":"Home","X":"Draw","2":"Away","O25":"Over 2.5","U25":"Under 2.5"}
 
@@ -117,17 +122,38 @@ def load_thursday_fixtures():
         return data["report"]["fixtures"], data["report"]
     raise KeyError("fixtures not found in Thursday report")
 
-def odds_match_ok(fx, min_score):
+def _strict_ok_flag(fx) -> bool:
+    flags = fx.get("flags") or {}
+    v = flags.get("odds_strict_ok")
+    return bool(v) if v is not None else False
+
+def odds_match_ok(fx, min_score, require_strict: bool):
     om = fx.get("odds_match") or {}
     if not om.get("matched"):
         return False
-    return (safe_float(om.get("score"), 0.0) or 0.0) >= min_score
+    sc = safe_float(om.get("score"), 0.0) or 0.0
+    if sc < min_score:
+        return False
+    if require_strict:
+        # only if Thursday provides it; if missing -> treat as False (strict means strict)
+        if not _strict_ok_flag(fx):
+            return False
+    return True
 
 def confidence_ok(fx, min_conf):
     c = safe_float((fx.get("flags") or {}).get("confidence"), None)
     if c is None:
         return True
     return c >= min_conf
+
+def instability_ok(fx, max_gap: float):
+    if not USE_INSTABILITY_BRAKE:
+        return True
+    gap = safe_float((fx.get("flags") or {}).get("prob_instability"), None)
+    if gap is None:
+        # if missing, don't block (compatibility)
+        return True
+    return gap <= max_gap
 
 def _ev_from_fx(fx, code: str):
     return safe_float({
@@ -209,10 +235,13 @@ def pick_core(cands, bankroll_core):
         fx = p["fx"]
         if p["market_code"] == "X":
             continue
-        if not odds_match_ok(fx, ODDS_MATCH_MIN_SCORE_CORE):
+        if not odds_match_ok(fx, ODDS_MATCH_MIN_SCORE_CORE, CORE_REQUIRE_STRICT_ODDS):
             continue
         if not confidence_ok(fx, CORE_MIN_CONFIDENCE):
             continue
+        if not instability_ok(fx, MAX_PROB_INSTABILITY_CORE):
+            continue
+
         odds = safe_float(p["odds"], None)
         evv  = safe_float(p["ev"], None)
         pr   = safe_float(p["prob"], None)
@@ -297,9 +326,7 @@ FUN_MAX_PICKS = int(os.getenv("FUN_MAX_PICKS", "7"))
 
 def fun_pick_filter(p):
     # allow 1/2/O25/U25, no Draw
-    if p["market_code"] == "X":
-        return False
-    return True
+    return p["market_code"] != "X"
 
 def choose_fun_system(pool):
     # always prefer the lowest difficulty:
@@ -331,9 +358,11 @@ def pick_fun(cands, bankroll_fun, core_fixture_ids):
             continue
         if FUN_AVOID_CORE_OVERLAP and p["fixture_id"] in core_fixture_ids:
             continue
-        if not odds_match_ok(fx, ODDS_MATCH_MIN_SCORE_FUN):
+        if not odds_match_ok(fx, ODDS_MATCH_MIN_SCORE_FUN, FUN_REQUIRE_STRICT_ODDS):
             continue
         if not confidence_ok(fx, FUN_MIN_CONFIDENCE):
+            continue
+        if not instability_ok(fx, MAX_PROB_INSTABILITY_FUN):
             continue
         if p["odds"] > HARD_MAX_ODDS:
             continue
@@ -348,24 +377,14 @@ def pick_fun(cands, bankroll_fun, core_fixture_ids):
 
     picks = []
     used = set()
-    high_odds_cnt = 0
     for p in pool_cands:
         if p["match"] in used:
             continue
-        # cap high odds >3.00 to max 2 when aiming for 7
-        if p["odds"] > 3.00 and high_odds_cnt >= 2:
-            continue
         picks.append(p); used.add(p["match"])
-        if p["odds"] > 3.00:
-            high_odds_cnt += 1
         if len(picks) >= FUN_MAX_PICKS:
             break
 
-    # if not enough, keep whatever exists
-    if len(picks) < FUN_MIN_PICKS:
-        pass
-
-    # choose pool size preference: 7 else 6 else 5
+    # pool size preference: 7 else 6 else 5
     if len(picks) >= 7:
         pool = picks[:7]
     elif len(picks) >= 6:
@@ -373,11 +392,40 @@ def pick_fun(cands, bankroll_fun, core_fixture_ids):
     else:
         pool = picks[:5]
 
+    # enforce cap: max 2 picks with odds > 3.00 IN THE FINAL POOL (more correct)
+    if len(pool) >= 7:
+        high = [p for p in pool if safe_float(p.get("odds"), 0.0) > 3.00]
+        if len(high) > 2:
+            # replace extra high-odds with next best lower-odds candidate
+            keep = []
+            high_cnt = 0
+            for p in pool:
+                if safe_float(p.get("odds"), 0.0) > 3.00:
+                    if high_cnt < 2:
+                        keep.append(p)
+                        high_cnt += 1
+                    else:
+                        continue
+                else:
+                    keep.append(p)
+
+            # fill from remaining candidates (not used), prefer lower odds first when close
+            used_matches = {p["match"] for p in keep}
+            for cand in pool_cands:
+                if len(keep) >= 7:
+                    break
+                if cand["match"] in used_matches:
+                    continue
+                if safe_float(cand.get("odds"), 0.0) > 3.00:
+                    continue
+                keep.append(cand)
+                used_matches.add(cand["match"])
+            pool = keep[:7]
+
     sys = choose_fun_system(pool)
     stake_total = 0.0
     unit = 0.0
     if sys:
-        # prefer 1€ per column when possible but clamp 25..50 and cap exposure
         cols = sys["columns"]
         target = float(cols)  # unit=1
         if target < 25.0:
@@ -431,9 +479,11 @@ def pick_draw(cands, bankroll_draw):
         fx = p["fx"]
         if p["market_code"] != "X":
             continue
-        if not odds_match_ok(fx, ODDS_MATCH_MIN_SCORE_DRAW):
+        if not odds_match_ok(fx, ODDS_MATCH_MIN_SCORE_DRAW, DRAW_REQUIRE_STRICT_ODDS):
             continue
         if not confidence_ok(fx, DRAW_MIN_CONFIDENCE):
+            continue
+        if not instability_ok(fx, MAX_PROB_INSTABILITY_DRAW):
             continue
         if p["odds"] < DRAW_ODDS_MIN or p["odds"] > DRAW_ODDS_MAX:
             continue
@@ -455,7 +505,6 @@ def pick_draw(cands, bankroll_draw):
         if len(pool) >= DRAW_MAX_DRAWS:
             break
 
-    # keep at least 2 if possible
     if len(pool) < DRAW_MIN_DRAWS:
         pool = pool[:len(pool)]
 
@@ -464,7 +513,6 @@ def pick_draw(cands, bankroll_draw):
     stake_total = 0.0
     if sys:
         cols = sys["columns"]
-        # prefer stake 25..50 if possible, but limited by cap
         target = 25.0
         if cap > 0:
             target = min(target, cap)
@@ -520,15 +568,27 @@ def _strip_leg(p):
         "odds": round(float(p.get("odds") or 0.0), 2),
     }
 
-def _parse_dt(p):
-    # for sorting
-    d = p.get("date") or ""
-    t = p.get("time") or "00:00"
-    return f"{d} {t}"
+# ---- copy_play helpers ----
+def _safe_window_placeholders(window: dict):
+    # always returns non-null strings for copy_play meta rows
+    w_from = (window or {}).get("from") or datetime.utcnow().date().isoformat()
+    w_to = (window or {}).get("to") or w_from
+    # put meta rows at the bottom in sorting (23:59 on window.to)
+    return (w_to, "23:59", "MULTI")
 
-def build_copy_play(core, fun, draw):
+def _legs_summary(legs: list):
+    # short summary for Double line
+    if not legs:
+        return ""
+    parts = []
+    for lg in legs[:2]:
+        parts.append(f'{lg.get("match","?")} {lg.get("market_code","?")}@{lg.get("odds","?")}')
+    return " | ".join(parts)
+
+def build_copy_play(core, fun, draw, window: dict):
     lines = []
-    # core singles
+
+    # core singles (real fixtures)
     for p in (core.get("singles") or []):
         lines.append({
             "date": p.get("date"),
@@ -539,45 +599,65 @@ def build_copy_play(core, fun, draw):
             "odds": p.get("odds"),
             "stake": p.get("stake"),
             "portfolio": "CoreBet",
+            "_sort_key": f"{p.get('date','')} {p.get('time') or '00:00'}",
         })
-    # core doubles as separate lines
+
+    # core doubles as separate lines (NO NULLS)
+    ph_date, ph_time, ph_league = _safe_window_placeholders(window)
     for d in (core.get("doubles") or []):
+        legs = d.get("legs") or []
+        combo_odds = d.get("combo_odds")
+        summary = _legs_summary(legs)
         lines.append({
-            "date": None, "time": None, "league": None,
-            "match": "Double",
-            "market": f'Combo {d.get("combo_odds")}',
-            "odds": d.get("combo_odds"),
+            "date": ph_date,
+            "time": ph_time,
+            "league": ph_league,
+            "match": "Double" if not summary else f"Double: {summary}",
+            "market": f'Combo {combo_odds}',
+            "odds": combo_odds,
             "stake": d.get("stake"),
             "portfolio": "CoreBet",
+            "_sort_key": f"{ph_date} {ph_time}",
         })
-    # fun system one line
+
+    # fun system one line (NO NULLS)
     fs = (fun.get("system") or {})
     if fs and fs.get("label"):
         lines.append({
-            "date": None, "time": None, "league": None,
+            "date": ph_date,
+            "time": ph_time,
+            "league": ph_league,
             "match": "System",
-            "market": fs.get("label"),
+            "market": f'FunBet {fs.get("label")}',
             "odds": None,
             "stake": fs.get("stake"),
             "portfolio": "FunBet",
+            "_sort_key": f"{ph_date} {ph_time}",
         })
-    # draw system one line
+
+    # draw system one line (NO NULLS)
     ds = (draw.get("system") or {})
     if ds and ds.get("label"):
         lines.append({
-            "date": None, "time": None, "league": None,
+            "date": ph_date,
+            "time": ph_time,
+            "league": ph_league,
             "match": "System",
-            "market": ds.get("label"),
+            "market": f'DrawBet {ds.get("label")}',
             "odds": None,
             "stake": ds.get("stake"),
             "portfolio": "DrawBet",
+            "_sort_key": f"{ph_date} {ph_time}",
         })
 
-    # sort only real dated picks first
-    dated = [x for x in lines if x.get("date")]
-    undated = [x for x in lines if not x.get("date")]
-    dated.sort(key=lambda x: f"{x.get('date')} {x.get('time') or '00:00'}")
-    return dated + undated
+    # sort by _sort_key (meta rows naturally at bottom)
+    lines.sort(key=lambda x: x.get("_sort_key") or "9999-12-31 23:59")
+
+    # cleanup
+    for x in lines:
+        if "_sort_key" in x:
+            del x["_sort_key"]
+    return lines
 
 def main():
     fixtures, th_meta = load_thursday_fixtures()
@@ -642,8 +722,8 @@ def main():
         "drawbet": draw_section,
     }
 
-    # add copy_play (for presenter)
-    report["copy_play"] = build_copy_play(core_section, fun_section, draw_section)
+    # copy_play (presenter-friendly; no nulls)
+    report["copy_play"] = build_copy_play(core_section, fun_section, draw_section, window)
 
     os.makedirs("logs", exist_ok=True)
     with open(FRIDAY_REPORT_PATH, "w", encoding="utf-8") as f:
