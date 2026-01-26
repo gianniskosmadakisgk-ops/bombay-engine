@@ -1,3 +1,4 @@
+# filename: app.py
 import os
 import json
 import subprocess
@@ -133,7 +134,6 @@ def _tz_convert_date_time(date_str: str, time_str: str, tz_name: str):
         return None, None
 
 def _slim_fixture_for_display(fx: dict):
-    # Keep only display fields + small flags (for lite=true)
     keep = {
         "fixture_id","date","time","league","league_id","home","away",
         "home_prob","draw_prob","away_prob","over_2_5_prob","under_2_5_prob",
@@ -144,7 +144,7 @@ def _slim_fixture_for_display(fx: dict):
         "odds_match","flags"
     }
     out = {k: fx.get(k) for k in keep if k in fx}
-    # shrink flags to the ones you actually show
+
     flags = fx.get("flags") or {}
     out["flags"] = {
         "confidence": flags.get("confidence"),
@@ -158,15 +158,23 @@ def _slim_fixture_for_display(fx: dict):
         "over_friendly_league": flags.get("over_friendly_league"),
         "draw_friendly_league": flags.get("draw_friendly_league"),
         "low_tempo_league": flags.get("low_tempo_league"),
+        # additive flags won't break anything if present:
+        "odds_strict_ok": flags.get("odds_strict_ok"),
+        "prob_instability": flags.get("prob_instability"),
+        "snap_gap_max": flags.get("snap_gap_max"),
     }
-    # shrink odds_match
+
     om = fx.get("odds_match") or {}
-    out["odds_match"] = {"matched": om.get("matched"), "score": om.get("score"), "reason": om.get("reason")}
+    out["odds_match"] = {
+        "matched": om.get("matched"),
+        "score": om.get("score"),
+        "grade": om.get("grade"),
+        "reason": om.get("reason"),
+    }
     return out
 
 def _chunk_thursday_report(report: dict, cursor: int, per_page: int, lite: bool, tz: str):
     fixtures = report.get("fixtures") or []
-    # league order: use engine_leagues if exists, else derive
     league_order = report.get("engine_leagues")
     if not isinstance(league_order, list) or not league_order:
         league_order = sorted({(f.get("league") or "") for f in fixtures if f.get("league")})
@@ -180,11 +188,9 @@ def _chunk_thursday_report(report: dict, cursor: int, per_page: int, lite: bool,
 
     fx_slice = [f for f in fixtures if (f.get("league") in leagues_slice)]
 
-    # lite shrink
     if lite:
         fx_slice = [_slim_fixture_for_display(f) for f in fx_slice]
 
-    # tz enrich (display-only; does not change stored logs)
     tz_name = "Europe/Athens" if tz == "Europe/Athens" else "UTC"
     if tz_name != "UTC":
         for f in fx_slice:
@@ -396,7 +402,6 @@ def gpt_friday():
     report, error = load_json_report("logs/friday_shortlist_v3.json")
     if report is None:
         return jsonify({"status":"error","message":"Friday shortlist v3 not available","error":error,"timestamp":datetime.utcnow().isoformat(),"report":None}), 404
-    # Optional tz enrichment could be added later; keep simple now.
     return jsonify({"status":"ok","timestamp":datetime.utcnow().isoformat(),"report":report})
 
 @app.route("/tuesday-recap", methods=["GET"])
