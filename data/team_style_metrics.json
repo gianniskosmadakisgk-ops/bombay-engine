@@ -1,0 +1,818 @@
+{
+  "as_of": "2026-02-02",
+  "countries": {
+    "England": {
+      "teams": {
+        "birmingham city": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "blackburn rovers": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "bristol city": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "charlton athletic": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "coventry city": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "derby county": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "hull city": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "ipswich town": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "leicester city": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "middlesbrough": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "millwall": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "norwich city": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "oxford united": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "portsmouth": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "preston north end": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "queens park rangers": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "sheffield united": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "sheffield wednesday": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "southampton": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "stoke city": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "swansea city": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "watford": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "west brom": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "wrexham": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        }
+      }
+    },
+    "Italy": {
+      "teams": {
+        "inter milan": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "juventus": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "milan": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "napoli": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "atalanta bc": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "as roma": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "como 1907": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "bologna 1909": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "acf fiorentina": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "ss lazio": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "us sassuolo": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "parma calcio 1913": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "udinese calcio": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "genoa cfc": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "torino": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "cagliari calcio": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "pisa sporting club": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "us lecce": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "hellas verona": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "us cremonese": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        }
+      }
+    },
+    "Spain": {
+      "teams": {
+        "real madrid": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "barcelona": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "atletico": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "athletic bilbao": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "villarreal": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "real sociedad san sebastian": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "real betis sevilla": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "valencia": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "girona": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "celta vigo": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "sevilla": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "espanyol barcelona": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "elche": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "rayo vallecano": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "osasuna": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "levante": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "mallorca": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "deportivo alaves": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "getafe": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "real oviedo": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        }
+      }
+    },
+    "Germany": {
+      "teams": {
+        "bayern munich": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "bayer 04 leverkusen": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "borussia dortmund": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "eintracht frankfurt": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "freiburg": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "1 fsv mainz 05": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "vfl wolfsburg": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "leipzig": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "stuttgart": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "1899 hoffenheim": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "werder bremen": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "borussia monchengladbach": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "augsburg": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "hamburger": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "koln": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "union berlin": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "st pauli": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "heidenheim 1846": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        }
+      }
+    },
+    "France": {
+      "teams": {
+        "auxerre": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "angers": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "monaco": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "lorient": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "metz": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "nantes": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "toulouse": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "le havre": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "lille": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "nice": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "lyon": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "marseille": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "paris": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "psg": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "lens": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "strasbourg": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "brest": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "stade rennais": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "nancy": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "as saint tienne": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "amiens": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "clermont": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "guingamp": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "troyes": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "annecy": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "grenoble": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "le mans": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "montpellier hsc": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "pau": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "rc bastia": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "red star": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "rodez": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "bastia": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "lavallois": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "stade reims": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "us boulogne": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "dunkerque": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        }
+      }
+    },
+    "Netherlands": {
+      "teams": {
+        "ado den haag": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "ajax": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "almere city": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "az": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "de graafschap": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "excelsior": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "emmen": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "groningen": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "utrecht": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "volendam": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "feyenoord": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "fortuna sittard": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "go ahead eagles": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "heracles almelo": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "sparta rotterdam": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "twente enschede": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "vitesse": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "willem ii": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        }
+      }
+    },
+    "Belgium": {
+      "teams": {
+        "brugge": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "genk": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "union sg": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "anderlecht": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "gent": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "antwerp": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "standard liege": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "westerlo": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "mechelen": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "charleroi": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "cercle brugge": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "st truiden": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "leuven": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "zulte waregem": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "dender": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "raal la louviere": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        }
+      }
+    }
+  },
+  "meta": {
+    "league_country_map": {
+      "Belgium First Division A": "Belgium",
+      "Jupiler Pro League": "Belgium",
+      "Ligue 1": "France",
+      "Ligue 2": "France",
+      "Premier League": "England",
+      "Championship": "England",
+      "Serie A": "Italy",
+      "La Liga": "Spain",
+      "Bundesliga": "Germany",
+      "Eredivisie": "Netherlands"
+    },
+    "defaults": {
+      "xch_for_90": 1.0,
+      "xch_against_90": 1.0,
+      "tempo_index": 1.0
+    },
+    "note": "Bootstrap style cache: neutral values (no effect). Replace with real proxies later."
+  }
+}
