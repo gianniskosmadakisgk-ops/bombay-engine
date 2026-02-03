@@ -7638,7 +7638,7 @@
     "boro": "middlesbrough"
   },
   "meta": {
-    "note": "Consolidated cache. Countries appended incrementally from user batches.",
+    "note": "Merged England PL+CH updated standings into all-countries history file.",
     "counts": {
       "Belgium": 16,
       "England": 24,
@@ -7780,23 +7780,7 @@
         ]
       }
     ],
-    "france_policy": "B_require_5_of_5_else_null",
-    "scoring": {
-      "weights_by_season": {
-        "2024/25": 1.0,
-        "2023/24": 0.9,
-        "2022/23": 0.8,
-        "2021/22": 0.6,
-        "2020/21": 0.4
-      },
-      "tier_multiplier": {
-        "1": 1.0,
-        "2": 0.85,
-        "3": 0.7,
-        "4": 0.6,
-        "5": 0.5
-      }
-    }
+    "france_policy": "B_require_5_of_5_else_null"
   },
   "as_of": "2026-02-03"
 }
