@@ -9,21 +9,12 @@ import re
 from dateutil import parser
 
 # ============================================================
-#  BOMBAY THURSDAY FULL ENGINE v3 — PRODUCTION (LOCKED LEAGUES)
-#
-#  Writes: logs/thursday_report_v3.json
-#
-#  HARD RULES:
-#   - League allowlist is LOCKED (only configured leagues can appear).
-#   - No fixture filtering beyond time window (ALL fixtures in window included).
-#
-#  v3.71 (MODEL: OPTION B)
-#   - Same as v3.70
-#   - FIX: Better name normalization for UK/Championship:
-#       utd -> united, ipswich -> ipswich town, blackburn -> blackburn rovers, etc.
+# BOMBAY THURSDAY FULL ENGINE v3 — PRODUCTION (LOCKED LEAGUES)
+# v3.72 — CACHE-ONLY alias bridge for PL cache coverage
+# - Does NOT change normalize_team_name (odds matching stability)
+# - Adds cache_key_candidates() used ONLY for market/history/style lookups
 # ============================================================
 
-# -------------------- API KEYS --------------------
 API_FOOTBALL_KEY = os.getenv("FOOTBALL_API_KEY")
 API_FOOTBALL_BASE = "https://v3.football.api-sports.io"
 HEADERS_FOOTBALL = {"x-apisports-key": API_FOOTBALL_KEY} if API_FOOTBALL_KEY else {}
@@ -35,13 +26,11 @@ FOOTBALL_SEASON_ENV = os.getenv("FOOTBALL_SEASON", "").strip()
 USE_ODDS_API = os.getenv("USE_ODDS_API", "true").lower() == "true"
 WINDOW_HOURS = int(os.getenv("WINDOW_HOURS", "72"))
 
-# Odds matching controls
 ODDS_TIME_GATE_HOURS = float(os.getenv("ODDS_TIME_GATE_HOURS", "6"))
 ODDS_TIME_SOFT_HOURS = float(os.getenv("ODDS_TIME_SOFT_HOURS", "10"))
 ODDS_SIM_THRESHOLD = float(os.getenv("ODDS_SIM_THRESHOLD", "0.62"))
 STRICT_ODDS_MATCH_SCORE = float(os.getenv("STRICT_ODDS_MATCH_SCORE", "0.80"))
 
-# -------------------- MODEL CONTROLS --------------------
 SHRINKAGE_K = float(os.getenv("SHRINKAGE_K", "8"))
 DC_RHO = float(os.getenv("DC_RHO", "-0.13"))
 
@@ -49,7 +38,6 @@ LAMBDA_MIN = float(os.getenv("LAMBDA_MIN", "0.40"))
 LAMBDA_MAX_HOME = float(os.getenv("LAMBDA_MAX_HOME", "3.00"))
 LAMBDA_MAX_AWAY = float(os.getenv("LAMBDA_MAX_AWAY", "3.00"))
 
-# Stabilization caps
 CAP_OVER = float(os.getenv("CAP_OVER", "0.70"))
 CAP_UNDER = float(os.getenv("CAP_UNDER", "0.75"))
 CAP_DRAW_MAX = float(os.getenv("CAP_DRAW_MAX", "0.32"))
@@ -58,76 +46,62 @@ CAP_OUTCOME_MIN = float(os.getenv("CAP_OUTCOME_MIN", "0.05"))
 
 FAIR_SNAP_RATIO = float(os.getenv("FAIR_SNAP_RATIO", "1.35"))
 
-# Penalties (selection hints only)
 TIGHT_DRAW_THRESHOLD = float(os.getenv("TIGHT_DRAW_THRESHOLD", "0.28"))
 TIGHT_LTOTAL_THRESHOLD = float(os.getenv("TIGHT_LTOTAL_THRESHOLD", "2.55"))
 OVER_TIGHT_PENALTY_PTS = float(os.getenv("OVER_TIGHT_PENALTY_PTS", "12.0"))
 
-# Low-tempo penalty (selection hint only)
 LOW_TEMPO_MAX_GOALS = float(os.getenv("LOW_TEMPO_MAX_GOALS", "2.45"))
 OVER_LOW_TEMPO_EXTRA_PENALTY_PTS = float(os.getenv("OVER_LOW_TEMPO_EXTRA_PENALTY_PTS", "6.0"))
 
-# Over/Under blockers (model stabilization)
 OVER_BLOCK_LTOTAL = float(os.getenv("OVER_BLOCK_LTOTAL", "2.4"))
 OVER_BLOCK_LMIN = float(os.getenv("OVER_BLOCK_LMIN", "0.9"))
 UNDER_BLOCK_LTOTAL = float(os.getenv("UNDER_BLOCK_LTOTAL", "3.0"))
 UNDER_BLOCK_BOTH_GT = float(os.getenv("UNDER_BLOCK_BOTH_GT", "1.4"))
 
-# Draw normalization
 DRAW_LAMBDA_GAP_MAX = float(os.getenv("DRAW_LAMBDA_GAP_MAX", "0.40"))
 DRAW_IF_GAP_CAP = float(os.getenv("DRAW_IF_GAP_CAP", "0.26"))
 DRAW_LEAGUE_PLUS = float(os.getenv("DRAW_LEAGUE_PLUS", "0.03"))
 
-# Dynamic baselines ON by default
 USE_DYNAMIC_LEAGUE_BASELINES = os.getenv("USE_DYNAMIC_LEAGUE_BASELINES", "true").lower() == "true"
 BASELINES_LAST_N = int(os.getenv("BASELINES_LAST_N", "240"))
 
-# League profiling thresholds
 OVER_FRIENDLY_OVER25_RATE = float(os.getenv("OVER_FRIENDLY_OVER25_RATE", "0.56"))
 OVER_FRIENDLY_AVG_GOALS = float(os.getenv("OVER_FRIENDLY_AVG_GOALS", "2.75"))
 DRAW_FRIENDLY_DRAW_RATE = float(os.getenv("DRAW_FRIENDLY_DRAW_RATE", "0.28"))
 DRAW_FRIENDLY_MAX_GOALS = float(os.getenv("DRAW_FRIENDLY_MAX_GOALS", "2.60"))
 
-# Shape thresholds
 DOMINANCE_SHAPE_THRESHOLD = float(os.getenv("DOMINANCE_SHAPE_THRESHOLD", "0.12"))
 BALANCE_DRAW_THRESHOLD = float(os.getenv("BALANCE_DRAW_THRESHOLD", "0.85"))
 DRAW_SHAPE_DRAWPROB_MIN = float(os.getenv("DRAW_SHAPE_DRAWPROB_MIN", "0.30"))
 DRAW_SHAPE_TOTALLAMBDA_MAX = float(os.getenv("DRAW_SHAPE_TOTALLAMBDA_MAX", "2.70"))
 
-# Under elite thresholds
 UNDER_ELITE_PROB_MIN = float(os.getenv("UNDER_ELITE_PROB_MIN", "0.58"))
 UNDER_ELITE_TL_MAX = float(os.getenv("UNDER_ELITE_TL_MAX", "2.30"))
 UNDER_ELITE_DRAWPROB_MIN = float(os.getenv("UNDER_ELITE_DRAWPROB_MIN", "0.30"))
 UNDER_ELITE_ABSGAP_MAX = float(os.getenv("UNDER_ELITE_ABSGAP_MAX", "0.35"))
 
-# Over shape thresholds
 OVER_SHAPE_PROB_MIN = float(os.getenv("OVER_SHAPE_PROB_MIN", "0.55"))
 OVER_SHAPE_TL_MIN = float(os.getenv("OVER_SHAPE_TL_MIN", "2.70"))
 
-# -------------------- CACHE PATHS --------------------
 TEAM_VALUES_PATH = os.getenv("TEAM_VALUES_PATH", "data/team_market_values.json")
 HISTORY_CACHE_PATH = os.getenv("HISTORY_CACHE_PATH", "data/team_domestic_history_last5.json")
 STYLE_CACHE_PATH = os.getenv("STYLE_CACHE_PATH", "data/team_style_metrics.json")
 
-# Toggles
 USE_TEAM_VALUE_MODEL = os.getenv("USE_TEAM_VALUE_MODEL", "true").lower() == "true"
 USE_HISTORY_MODEL = os.getenv("USE_HISTORY_MODEL", "true").lower() == "true"
 USE_STYLE_MODEL = os.getenv("USE_STYLE_MODEL", "true").lower() == "true"
 REPORT_ENGINE_CONFIG = os.getenv("REPORT_ENGINE_CONFIG", "true").lower() == "true"
 
-# Market value multipliers (caps)
 VALUE_K_ATT = float(os.getenv("VALUE_K_ATT", "0.12"))
 VALUE_K_DEF = float(os.getenv("VALUE_K_DEF", "0.08"))
 VALUE_MAX_CAP = float(os.getenv("VALUE_MAX_CAP", "0.20"))
 TEAM_VALUE_MISMATCH_RATIO = float(os.getenv("TEAM_VALUE_MISMATCH_RATIO", "3.0"))
 
-# History multipliers (caps)
 HISTORY_K_ATT = float(os.getenv("HISTORY_K_ATT", "0.08"))
 HISTORY_K_DEF = float(os.getenv("HISTORY_K_DEF", "0.06"))
 HISTORY_MAX_CAP = float(os.getenv("HISTORY_MAX_CAP", "0.12"))
 HISTORY_EPS = float(os.getenv("HISTORY_EPS", "0.10"))
 
-# Style multipliers (caps)
 STYLE_K_ATT = float(os.getenv("STYLE_K_ATT", "0.08"))
 STYLE_K_DEF = float(os.getenv("STYLE_K_DEF", "0.06"))
 STYLE_MAX_CAP = float(os.getenv("STYLE_MAX_CAP", "0.10"))
@@ -136,7 +110,6 @@ TEMPO_K_TOTAL = float(os.getenv("TEMPO_K_TOTAL", "0.06"))
 TEMPO_MAX_CAP = float(os.getenv("TEMPO_MAX_CAP", "0.10"))
 TEMPO_EPS = float(os.getenv("TEMPO_EPS", "0.05"))
 
-# -------------------- LOCKED LEAGUES --------------------
 LEAGUES = {
     "Premier League": 39,
     "Championship": 40,
@@ -184,7 +157,6 @@ def iso_z(dt: datetime.datetime) -> str:
     dt = dt.astimezone(datetime.timezone.utc).replace(microsecond=0)
     return dt.isoformat().replace("+00:00", "Z")
 
-# ------------------------- NAME NORMALIZATION -------------------------
 def _strip_accents(s: str) -> str:
     if not s:
         return ""
@@ -193,8 +165,8 @@ def _strip_accents(s: str) -> str:
 
 def normalize_team_name(raw: str) -> str:
     """
-    Normalizes names used everywhere: fixtures, odds, caches.
-    v3.71: adds safe UK/Championship aliases to improve cache match-rate.
+    IMPORTANT: we keep this stable (odds matching stability).
+    Any extra mapping for caches is handled by cache_key_candidates().
     """
     if not raw:
         return ""
@@ -203,18 +175,11 @@ def normalize_team_name(raw: str) -> str:
     s = re.sub(r"[^a-z0-9\s]+", " ", s)
     s = re.sub(r"\s+", " ", s).strip()
 
-    # common abbreviation normalization (safe)
-    # "utd" -> "united"
-    s = re.sub(r"\butd\b", "united", s)
-    # "weds" -> "wednesday"
-    s = re.sub(r"\bweds\b", "wednesday", s)
-
     kill = {"fc", "afc", "cf", "sc", "sv", "ssc", "ac", "cd", "ud", "bk", "fk", "if"}
     parts = [p for p in s.split() if p not in kill]
     s = " ".join(parts).strip()
 
     aliases = {
-        # EPL common
         "wolverhampton wanderers": "wolves",
         "wolverhampton": "wolves",
         "brighton and hove albion": "brighton",
@@ -226,22 +191,68 @@ def normalize_team_name(raw: str) -> str:
         "bayern munchen": "bayern munich",
         "paris saint germain": "psg",
         "internazionale": "inter",
-
-        # UK / Championship safe expansions
-        "sheffield united": "sheffield united",  # keep canonical
-        "sheffield united fc": "sheffield united",
-        "sheffield utd": "sheffield united",
-        "sheffield wednesday": "sheffield wednesday",
-        "sheffield wednesday fc": "sheffield wednesday",
-        "ipswich": "ipswich town",
-        "ipswich town": "ipswich town",
-        "blackburn": "blackburn rovers",
-        "blackburn rovers": "blackburn rovers",
-        "qpr": "queens park rangers",
-        "queens park rangers": "queens park rangers",
-        "west brom": "west brom",
     }
     return aliases.get(s, s)
+
+# ---------------- CACHE-ONLY alias bridge ----------------
+# short -> long forms used in many datasets (not touching normalize_team_name)
+CACHE_ALIAS_EXPAND = {
+    "man city": "manchester city",
+    "man utd": "manchester united",
+    "wolves": "wolverhampton wanderers",
+    "west brom": "west bromwich albion",
+    "brighton": "brighton and hove albion",
+    "newcastle": "newcastle united",
+    "tottenham": "tottenham hotspur",
+    "psg": "paris saint germain",
+    "inter": "internazionale",
+    # a few safe UK/Championship bridges
+    "sheffield utd": "sheffield united",
+    "ipswich": "ipswich town",
+    "blackburn": "blackburn rovers",
+}
+
+CACHE_ALIAS_SHRINK = {v: k for k, v in CACHE_ALIAS_EXPAND.items()}
+
+def cache_key_candidates(team_norm: str, hist_aliases: dict | None = None) -> list:
+    """
+    Returns candidate keys for cache lookups ONLY.
+    - Start with team_norm (from normalize_team_name)
+    - Apply history aliases mapping if present
+    - Add expand/shrink variants (PL/UK)
+    - Add mild utd/united swap variants (cache-only)
+    """
+    out = []
+    seen = set()
+
+    def add(x):
+        if not x:
+            return
+        x = str(x).strip()
+        if not x or x in seen:
+            return
+        seen.add(x)
+        out.append(x)
+
+    add(team_norm)
+
+    if isinstance(hist_aliases, dict):
+        add(hist_aliases.get(team_norm))
+
+    # expand/shrink
+    base_snapshot = list(out)
+    for x in base_snapshot:
+        add(CACHE_ALIAS_EXPAND.get(x))
+        add(CACHE_ALIAS_SHRINK.get(x))
+
+    # utd/united swap (cache-only)
+    for x in list(out):
+        if " utd" in x:
+            add(x.replace(" utd", " united"))
+        if " united" in x:
+            add(x.replace(" united", " utd"))
+
+    return out
 
 def token_set(s: str):
     return set([t for t in s.split() if t])
@@ -253,7 +264,6 @@ def jaccard(a: set, b: set) -> float:
     uni = len(a | b)
     return inter / uni if uni else 0.0
 
-# ------------------------- SEASON RESOLUTION -------------------------
 def resolve_season_candidates(now_utc: datetime.datetime):
     candidates = []
     if FOOTBALL_SEASON_ENV:
@@ -275,7 +285,6 @@ def resolve_season_candidates(now_utc: datetime.datetime):
             seen.add(c)
     return out[:4]
 
-# ------------------------- API FOOTBALL: fixtures -------------------------
 def fetch_fixtures(league_id: int, league_name: str, season_used: str):
     if not API_FOOTBALL_KEY:
         log("❌ Missing FOOTBALL_API_KEY – NO fixtures will be fetched!")
@@ -311,26 +320,23 @@ def fetch_fixtures(league_id: int, league_name: str, season_used: str):
         home = fx["teams"]["home"]
         away = fx["teams"]["away"]
 
-        out.append(
-            {
-                "id": fx["fixture"]["id"],
-                "league_id": league_id,
-                "league_name": league_name,
-                "home": home["name"],
-                "away": away["name"],
-                "home_id": home["id"],
-                "away_id": away["id"],
-                "home_norm": normalize_team_name(home["name"]),
-                "away_norm": normalize_team_name(away["name"]),
-                "date_raw": fx["fixture"]["date"],
-                "commence_utc": dt,
-            }
-        )
+        out.append({
+            "id": fx["fixture"]["id"],
+            "league_id": league_id,
+            "league_name": league_name,
+            "home": home["name"],
+            "away": away["name"],
+            "home_id": home["id"],
+            "away_id": away["id"],
+            "home_norm": normalize_team_name(home["name"]),
+            "away_norm": normalize_team_name(away["name"]),
+            "date_raw": fx["fixture"]["date"],
+            "commence_utc": dt,
+        })
 
     log(f"→ {league_name}: kept {len(out)} fixtures within {WINDOW_HOURS}h (season={season_used})")
     return out
 
-# ------------------------- TEAM RECENT GOALS (API-FOOTBALL) -------------------------
 def _recency_weights(n: int):
     base = [1.0, 0.85, 0.72, 0.61, 0.52]
     w = base[: max(0, min(5, n))]
@@ -413,7 +419,6 @@ def fetch_team_recent_stats(team_id: int, league_id: int, season_used: str, want
     TEAM_STATS_CACHE[ck] = stats
     return stats
 
-# ------------------------- LEAGUE BASELINES -------------------------
 def fetch_league_baselines_static(league_id: int):
     base = {"avg_goals_per_match": 2.6, "home_advantage": 0.16, "avg_draw_rate": 0.26, "avg_over25_rate": 0.55}
     overrides = {
@@ -485,7 +490,6 @@ def fetch_league_baselines_dynamic(league_id: int, season_used: str):
 def fetch_league_baselines(league_id: int, season_used: str):
     return fetch_league_baselines_dynamic(league_id, season_used) if USE_DYNAMIC_LEAGUE_BASELINES else fetch_league_baselines_static(league_id)
 
-# ------------------------- HELPERS: medians + multipliers -------------------------
 def _median(nums):
     xs = sorted([float(x) for x in nums if x is not None])
     if not xs:
@@ -517,7 +521,6 @@ def _safe_ratio(a, b):
         return None
     return hi / lo
 
-# ------------------------- CACHE LOADERS -------------------------
 def load_market_values():
     meta = {"loaded": False, "path": TEAM_VALUES_PATH, "as_of": None, "unit": None, "matched": 0, "unmatched": 0}
     leagues_norm = {}
@@ -656,7 +659,6 @@ def load_style_cache():
     except Exception:
         return None, meta, {}
 
-# ------------------------- POISSON + LAMBDAS -------------------------
 def poisson_pmf(k: int, lam: float) -> float:
     if lam <= 0:
         return 0.0
@@ -764,7 +766,6 @@ def compute_probabilities(lambda_home: float, lambda_away: float):
     pu = 1.0 - po
     return {"home_prob": ph, "draw_prob": pd, "away_prob": pa, "over_2_5_prob": po, "under_2_5_prob": pu}
 
-# ------------------------- ODDS (TheOddsAPI) -------------------------
 def _odds_request(sport_key: str, params: dict):
     url = f"{ODDS_BASE_URL}/{sport_key}/odds"
     try:
@@ -802,29 +803,6 @@ def fetch_odds_for_league(league_name: str, window_from: datetime.datetime, wind
     if data:
         return data
     return _odds_request(sport_key, base_params)
-
-def build_events_cache(odds_events):
-    out = []
-    for ev in odds_events or []:
-        h_raw = ev.get("home_team", "") or ""
-        a_raw = ev.get("away_team", "") or ""
-        h = normalize_team_name(h_raw)
-        a = normalize_team_name(a_raw)
-        if not h or not a:
-            continue
-        try:
-            ct = parser.isoparse(ev.get("commence_time")).astimezone(datetime.timezone.utc)
-        except Exception:
-            ct = None
-        out.append({
-            "home_norm": h,
-            "away_norm": a,
-            "home_tokens": token_set(h),
-            "away_tokens": token_set(a),
-            "commence_time": ct,
-            "raw": ev,
-        })
-    return out
 
 def _best_odds_from_event(ev_raw, event_home_norm, event_away_norm, swapped: bool):
     best_home = best_draw = best_away = None
@@ -943,7 +921,6 @@ def pick_best_odds_for_fixture(fx, league_events_cache):
     }
     return odds, debug
 
-# ------------------------- VALUE% + EV -------------------------
 def value_pct(offered, fair):
     if offered is None or fair is None:
         return None
@@ -963,7 +940,6 @@ def ev_per_unit(prob, offered):
         return None
     return round((prob * offered) - 1.0, 4)
 
-# ------------------------- STABILIZATION -------------------------
 def _renorm_1x2(ph, pd, pa):
     ph = max(CAP_OUTCOME_MIN, ph)
     pd = max(CAP_OUTCOME_MIN, pd)
@@ -1051,7 +1027,6 @@ def market_snap_probs(ph, pd, pa, po, pu, off1, offx, off2, offo, offu):
 
     return ph2, pd2, pa2, po2, pu2
 
-# ------------------------- CONFIDENCE + SUITABILITY -------------------------
 def confidence_score(home_stats, away_stats, match_debug, lam_h, lam_a):
     n_h = int((home_stats or {}).get("matches_count") or 0)
     n_a = int((away_stats or {}).get("matches_count") or 0)
@@ -1095,7 +1070,6 @@ def _max_snap_gap(m_ph, m_pd, m_pa, m_po, m_pu, s_ph, s_pd, s_pa, s_po, s_pu):
         return None
     return round(max(vals), 3)
 
-# ------------------------- MAIN PIPELINE -------------------------
 def build_fixture_blocks():
     fixtures_out = []
     now = datetime.datetime.now(datetime.timezone.utc)
@@ -1163,12 +1137,11 @@ def build_fixture_blocks():
         home_stats = fetch_team_recent_stats(fx["home_id"], league_id, season_used, want_home_context=True)
         away_stats = fetch_team_recent_stats(fx["away_id"], league_id, season_used, want_home_context=False)
 
-        hn = fx["home_norm"]
-        an = fx["away_norm"]
-        if isinstance(hist_aliases, dict):
-            hn = hist_aliases.get(hn, hn)
-            an = hist_aliases.get(an, an)
+        # --- cache-only candidate keys ---
+        home_cands = cache_key_candidates(fx["home_norm"], hist_aliases)
+        away_cands = cache_key_candidates(fx["away_norm"], hist_aliases)
 
+        # ================== Market values (cache-only candidates) ==================
         tv_home = tv_away = None
         tv_ratio = None
         value_missing = False
@@ -1177,20 +1150,28 @@ def build_fixture_blocks():
 
         if mv_meta.get("loaded") and USE_TEAM_VALUE_MODEL:
             league_bucket = (mv_leagues or {}).get(league_name) or {}
-            if isinstance(mv_aliases_raw, dict):
-                hn_mv = normalize_team_name(mv_aliases_raw.get(hn, hn))
-                an_mv = normalize_team_name(mv_aliases_raw.get(an, an))
-            else:
-                hn_mv = hn
-                an_mv = an
 
-            tv_home = safe_float((league_bucket or {}).get(hn_mv), None)
-            tv_away = safe_float((league_bucket or {}).get(an_mv), None)
+            def mv_lookup(cands):
+                # apply mv_aliases_raw if present
+                for c in cands:
+                    c2 = c
+                    if isinstance(mv_aliases_raw, dict):
+                        c2 = mv_aliases_raw.get(c2, c2)
+                    c2 = normalize_team_name(c2)
+                    if c2 in league_bucket:
+                        return safe_float(league_bucket.get(c2), None)
+                # global fallback
+                for c in cands:
+                    c2 = c
+                    if isinstance(mv_aliases_raw, dict):
+                        c2 = mv_aliases_raw.get(c2, c2)
+                    c2 = normalize_team_name(c2)
+                    if isinstance(mv_global, dict) and c2 in mv_global:
+                        return safe_float(mv_global.get(c2), None)
+                return None
 
-            if tv_home is None:
-                tv_home = safe_float((mv_global or {}).get(hn_mv), None)
-            if tv_away is None:
-                tv_away = safe_float((mv_global or {}).get(an_mv), None)
+            tv_home = mv_lookup(home_cands)
+            tv_away = mv_lookup(away_cands)
 
             if tv_home is None or tv_away is None:
                 value_missing = True
@@ -1213,6 +1194,7 @@ def build_fixture_blocks():
                     v_att_a = _mult_from_z(VALUE_K_ATT, z_a, VALUE_MAX_CAP, invert=False)
                     v_def_a = _mult_from_z(VALUE_K_DEF, z_a, VALUE_MAX_CAP, invert=True)
 
+        # ================== History (cache-only candidates) ==================
         hist_missing = False
         hs_home = hs_away = None
         hs_gap = None
@@ -1223,24 +1205,34 @@ def build_fixture_blocks():
             bucket = (hist_countries or {}).get(country) if country else None
             teams = (bucket or {}).get("teams") if isinstance(bucket, dict) else None
 
-            if not teams or not isinstance(teams, dict):
+            def hist_lookup(cands):
+                if not teams or not isinstance(teams, dict):
+                    return None
+                for c in cands:
+                    if c in teams:
+                        v = (teams.get(c) or {}).get("history_score_20")
+                        vv = safe_float(v, None)
+                        if vv is not None:
+                            return vv
+                return None
+
+            hs_home = hist_lookup(home_cands)
+            hs_away = hist_lookup(away_cands)
+
+            if hs_home is None or hs_away is None:
                 hist_missing = True
             else:
-                hs_home = safe_float((teams.get(hn) or {}).get("history_score_20"), None)
-                hs_away = safe_float((teams.get(an) or {}).get("history_score_20"), None)
-                if hs_home is None or hs_away is None:
-                    hist_missing = True
-                else:
-                    hs_gap = round(hs_home - hs_away, 3)
-                    medh = hist_medians.get(country)
-                    if medh is not None:
-                        z_h = math.log((hs_home + HISTORY_EPS) / (medh + HISTORY_EPS))
-                        z_a = math.log((hs_away + HISTORY_EPS) / (medh + HISTORY_EPS))
-                        h_att_h = _mult_from_z(HISTORY_K_ATT, z_h, HISTORY_MAX_CAP, invert=False)
-                        h_def_h = _mult_from_z(HISTORY_K_DEF, z_h, HISTORY_MAX_CAP, invert=True)
-                        h_att_a = _mult_from_z(HISTORY_K_ATT, z_a, HISTORY_MAX_CAP, invert=False)
-                        h_def_a = _mult_from_z(HISTORY_K_DEF, z_a, HISTORY_MAX_CAP, invert=True)
+                hs_gap = round(hs_home - hs_away, 3)
+                medh = hist_medians.get(country)
+                if medh is not None:
+                    z_h = math.log((hs_home + HISTORY_EPS) / (medh + HISTORY_EPS))
+                    z_a = math.log((hs_away + HISTORY_EPS) / (medh + HISTORY_EPS))
+                    h_att_h = _mult_from_z(HISTORY_K_ATT, z_h, HISTORY_MAX_CAP, invert=False)
+                    h_def_h = _mult_from_z(HISTORY_K_DEF, z_h, HISTORY_MAX_CAP, invert=True)
+                    h_att_a = _mult_from_z(HISTORY_K_ATT, z_a, HISTORY_MAX_CAP, invert=False)
+                    h_def_a = _mult_from_z(HISTORY_K_DEF, z_a, HISTORY_MAX_CAP, invert=True)
 
+        # ================== Style (cache-only candidates) ==================
         style_missing = False
         tempo_index_h = tempo_index_a = None
         s_att_h = s_def_h = s_att_a = s_def_a = 1.0
@@ -1256,8 +1248,14 @@ def build_fixture_blocks():
                 if not tt or not isinstance(tt, dict):
                     style_missing = True
                 else:
-                    st_h = tt.get(hn)
-                    st_a = tt.get(an)
+                    def style_lookup(cands):
+                        for c in cands:
+                            if c in tt and isinstance(tt.get(c), dict):
+                                return tt.get(c)
+                        return None
+
+                    st_h = style_lookup(home_cands)
+                    st_a = style_lookup(away_cands)
                     if not isinstance(st_h, dict) or not isinstance(st_a, dict):
                         style_missing = True
                     else:
@@ -1291,6 +1289,7 @@ def build_fixture_blocks():
                             zt = math.log((t_avg + TEMPO_EPS) / (med_tempo + TEMPO_EPS))
                             tempo_mult = _mult_from_z(TEMPO_K_TOTAL, zt, TEMPO_MAX_CAP, invert=False)
 
+        # combine multipliers
         home_att_mult = v_att_h * h_att_h * s_att_h
         home_def_mult = v_def_h * h_def_h * s_def_h
         away_att_mult = v_att_a * h_att_a * s_att_a
@@ -1499,7 +1498,7 @@ def build_fixture_blocks():
 
             "team_value_home_eurm": tv_home,
             "team_value_away_eurm": tv_away,
-            "team_value_ratio": None if tv_ratio is None else round(tv_ratio, 3),
+            "team_value_ratio": None if tv_ratio is None else (round(tv_ratio, 3) if tv_ratio is not None else None),
             "value_att_mult_home": round(v_att_h, 4),
             "value_def_mult_home": round(v_def_h, 4),
             "value_att_mult_away": round(v_att_a, 4),
@@ -1542,7 +1541,6 @@ def main():
         "window": {"from": now.date().isoformat(), "to": to_dt.date().isoformat(), "hours": WINDOW_HOURS},
         "fixtures_total": len(fixtures),
         "fixtures": fixtures,
-
         "team_values_cache": mv_meta,
         "history_cache": hist_meta,
         "style_cache": style_meta,
@@ -1554,29 +1552,23 @@ def main():
             "USE_ODDS_API": USE_ODDS_API,
             "ODDS_SIM_THRESHOLD": ODDS_SIM_THRESHOLD,
             "STRICT_ODDS_MATCH_SCORE": STRICT_ODDS_MATCH_SCORE,
-
             "TEAM_VALUES_PATH": TEAM_VALUES_PATH,
             "HISTORY_CACHE_PATH": HISTORY_CACHE_PATH,
             "STYLE_CACHE_PATH": STYLE_CACHE_PATH,
-
             "USE_TEAM_VALUE_MODEL": USE_TEAM_VALUE_MODEL,
             "USE_HISTORY_MODEL": USE_HISTORY_MODEL,
             "USE_STYLE_MODEL": USE_STYLE_MODEL,
-
             "VALUE_K_ATT": VALUE_K_ATT,
             "VALUE_K_DEF": VALUE_K_DEF,
             "VALUE_MAX_CAP": VALUE_MAX_CAP,
             "TEAM_VALUE_MISMATCH_RATIO": TEAM_VALUE_MISMATCH_RATIO,
-
             "HISTORY_K_ATT": HISTORY_K_ATT,
             "HISTORY_K_DEF": HISTORY_K_DEF,
             "HISTORY_MAX_CAP": HISTORY_MAX_CAP,
             "HISTORY_EPS": HISTORY_EPS,
-
             "STYLE_K_ATT": STYLE_K_ATT,
             "STYLE_K_DEF": STYLE_K_DEF,
             "STYLE_MAX_CAP": STYLE_MAX_CAP,
-
             "TEMPO_K_TOTAL": TEMPO_K_TOTAL,
             "TEMPO_MAX_CAP": TEMPO_MAX_CAP,
             "TEMPO_EPS": TEMPO_EPS,
