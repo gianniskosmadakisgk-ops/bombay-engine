@@ -27,7 +27,7 @@
         "birmingham city": {
           "team_tm": "Birmingham City",
           "norm_key_input": "birmingham_city",
-          "history_score_20": 5.411,
+          "history_score_20": 6.221,
           "seasons": {
             "2024/25": {
               "domestic_comp": "League One",
@@ -41,119 +41,119 @@
               "tier": 2,
               "final_pos": 22,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/birmingham-city/platzierungen/verein/337"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2023"
             },
             "2022/23": {
               "domestic_comp": "Championship",
               "tier": 2,
               "final_pos": 17,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/birmingham-city/platzierungen/verein/337"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2022"
             },
             "2021/22": {
               "domestic_comp": "Championship",
               "tier": 2,
               "final_pos": 20,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/birmingham-city/platzierungen/verein/337"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2021"
             },
             "2020/21": {
               "domestic_comp": "Championship",
               "tier": 2,
               "final_pos": 18,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/birmingham-city/platzierungen/verein/337"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2020"
             }
           }
         },
         "blackburn rovers": {
           "team_tm": "Blackburn Rovers",
           "norm_key_input": "blackburn_rovers",
-          "history_score_20": 8.448,
+          "history_score_20": 9.649,
           "seasons": {
             "2024/25": {
               "domestic_comp": "Championship",
               "tier": 2,
               "final_pos": 7,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/blackburn-rovers/platzierungen/verein/164"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2024"
             },
             "2023/24": {
               "domestic_comp": "Championship",
               "tier": 2,
               "final_pos": 19,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/blackburn-rovers/platzierungen/verein/164"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2023"
             },
             "2022/23": {
               "domestic_comp": "Championship",
               "tier": 2,
               "final_pos": 7,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/blackburn-rovers/platzierungen/verein/164"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2022"
             },
             "2021/22": {
               "domestic_comp": "Championship",
               "tier": 2,
               "final_pos": 8,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/blackburn-rovers/platzierungen/verein/164"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2021"
             },
             "2020/21": {
               "domestic_comp": "Championship",
               "tier": 2,
               "final_pos": 15,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/blackburn-rovers/platzierungen/verein/164"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2020"
             }
           }
         },
         "bristol city": {
           "team_tm": "Bristol City",
           "norm_key_input": "bristol_city",
-          "history_score_20": 7.6,
+          "history_score_20": 8.77,
           "seasons": {
             "2024/25": {
               "domestic_comp": "Championship",
               "tier": 2,
               "final_pos": 6,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/bristol-city/platzierungen/verein/698"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2024"
             },
             "2023/24": {
               "domestic_comp": "Championship",
               "tier": 2,
               "final_pos": 11,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/bristol-city/platzierungen/verein/698"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2023"
             },
             "2022/23": {
               "domestic_comp": "Championship",
               "tier": 2,
               "final_pos": 14,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/bristol-city/platzierungen/verein/698"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2022"
             },
             "2021/22": {
               "domestic_comp": "Championship",
               "tier": 2,
               "final_pos": 17,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/bristol-city/platzierungen/verein/698"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2021"
             },
             "2020/21": {
               "domestic_comp": "Championship",
               "tier": 2,
               "final_pos": 19,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/bristol-city/platzierungen/verein/698"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2020"
             }
           }
         },
         "charlton athletic": {
           "team_tm": "Charlton Athletic",
           "norm_key_input": "charlton_athletic",
-          "history_score_20": 7.273,
+          "history_score_20": 8.374,
           "seasons": {
             "2024/25": {
               "domestic_comp": "League One",
@@ -195,56 +195,56 @@
         "coventry city": {
           "team_tm": "Coventry City",
           "norm_key_input": "coventry_city",
-          "history_score_20": 10.031,
+          "history_score_20": 11.606,
           "seasons": {
             "2024/25": {
               "domestic_comp": "Championship",
               "tier": 2,
               "final_pos": 5,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/coventry-city/platzierungen/verein/990"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2024"
             },
             "2023/24": {
               "domestic_comp": "Championship",
               "tier": 2,
               "final_pos": 9,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/coventry-city/platzierungen/verein/990"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2023"
             },
             "2022/23": {
               "domestic_comp": "Championship",
               "tier": 2,
               "final_pos": 5,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/coventry-city/platzierungen/verein/990"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2022"
             },
             "2021/22": {
               "domestic_comp": "Championship",
               "tier": 2,
               "final_pos": 12,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/coventry-city/platzierungen/verein/990"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2021"
             },
             "2020/21": {
               "domestic_comp": "Championship",
               "tier": 2,
               "final_pos": 16,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/coventry-city/platzierungen/verein/990"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2020"
             }
           }
         },
         "derby county": {
           "team_tm": "Derby County",
           "norm_key_input": "derby_county",
-          "history_score_20": 5.627,
+          "history_score_20": 6.853,
           "seasons": {
             "2024/25": {
               "domestic_comp": "Championship",
               "tier": 2,
               "final_pos": 19,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/derby-county/platzierungen/verein/22"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2024"
             },
             "2023/24": {
               "domestic_comp": "League One",
@@ -265,49 +265,49 @@
               "tier": 2,
               "final_pos": 23,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/derby-county/platzierungen/verein/22"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2021"
             },
             "2020/21": {
               "domestic_comp": "Championship",
               "tier": 2,
               "final_pos": 21,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/derby-county/platzierungen/verein/22"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2020"
             }
           }
         },
         "hull city": {
           "team_tm": "Hull City",
           "norm_key_input": "hull_city",
-          "history_score_20": 6.442,
+          "history_score_20": 7.207,
           "seasons": {
             "2024/25": {
               "domestic_comp": "Championship",
               "tier": 2,
               "final_pos": 21,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/hull-city/platzierungen/verein/3008"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2024"
             },
             "2023/24": {
               "domestic_comp": "Championship",
               "tier": 2,
               "final_pos": 7,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/hull-city/platzierungen/verein/3008"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2023"
             },
             "2022/23": {
               "domestic_comp": "Championship",
               "tier": 2,
               "final_pos": 15,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/hull-city/platzierungen/verein/3008"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2022"
             },
             "2021/22": {
               "domestic_comp": "Championship",
               "tier": 2,
               "final_pos": 19,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/hull-city/platzierungen/verein/3008"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2021"
             },
             "2020/21": {
               "domestic_comp": "League One",
@@ -320,8 +320,8 @@
         },
         "ipswich town": {
           "team_tm": "Ipswich Town",
-          "norm_key_input": "ipswich town",
-          "history_score_20": 1.053,
+          "norm_key_input": "ipswich_town",
+          "history_score_20": 9.406,
           "seasons": {
             "2024/25": {
               "domestic_comp": "Premier League",
@@ -329,13 +329,41 @@
               "final_pos": 19,
               "teams_count": 20,
               "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2024"
+            },
+            "2023/24": {
+              "domestic_comp": "Championship",
+              "tier": 2,
+              "final_pos": 2,
+              "teams_count": 24,
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2023"
+            },
+            "2022/23": {
+              "domestic_comp": "League One",
+              "tier": 3,
+              "final_pos": 2,
+              "teams_count": 24,
+              "source_url": "https://www.transfermarkt.com/ipswich-town/platzierungen/verein/677"
+            },
+            "2021/22": {
+              "domestic_comp": "League One",
+              "tier": 3,
+              "final_pos": 11,
+              "teams_count": 24,
+              "source_url": "https://www.transfermarkt.com/ipswich-town/platzierungen/verein/677"
+            },
+            "2020/21": {
+              "domestic_comp": "League One",
+              "tier": 3,
+              "final_pos": 9,
+              "teams_count": 24,
+              "source_url": "https://www.transfermarkt.com/ipswich-town/platzierungen/verein/677"
             }
           }
         },
         "leicester city": {
           "team_tm": "Leicester City",
-          "norm_key_input": "leicester city",
-          "history_score_20": 6.316,
+          "norm_key_input": "leicester_city",
+          "history_score_20": 8.915,
           "seasons": {
             "2024/25": {
               "domestic_comp": "Premier League",
@@ -343,6 +371,13 @@
               "final_pos": 18,
               "teams_count": 20,
               "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2024"
+            },
+            "2023/24": {
+              "domestic_comp": "Championship",
+              "tier": 2,
+              "final_pos": 1,
+              "teams_count": 24,
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2023"
             },
             "2022/23": {
               "domestic_comp": "Premier League",
@@ -370,140 +405,140 @@
         "middlesbrough": {
           "team_tm": "Middlesbrough FC",
           "norm_key_input": "middlesbrough",
-          "history_score_20": 10.514,
+          "history_score_20": 12.026,
           "seasons": {
             "2024/25": {
               "domestic_comp": "Championship",
               "tier": 2,
               "final_pos": 10,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/fc-middlesbrough/platzierungen/verein/641"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2024"
             },
             "2023/24": {
               "domestic_comp": "Championship",
               "tier": 2,
               "final_pos": 8,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/fc-middlesbrough/platzierungen/verein/641"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2023"
             },
             "2022/23": {
               "domestic_comp": "Championship",
               "tier": 2,
               "final_pos": 4,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/fc-middlesbrough/platzierungen/verein/641"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2022"
             },
             "2021/22": {
               "domestic_comp": "Championship",
               "tier": 2,
               "final_pos": 7,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/fc-middlesbrough/platzierungen/verein/641"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2021"
             },
             "2020/21": {
               "domestic_comp": "Championship",
               "tier": 2,
               "final_pos": 10,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/fc-middlesbrough/platzierungen/verein/641"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2020"
             }
           }
         },
         "millwall": {
           "team_tm": "Millwall FC",
           "norm_key_input": "millwall",
-          "history_score_20": 9.303,
+          "history_score_20": 10.568,
           "seasons": {
             "2024/25": {
               "domestic_comp": "Championship",
               "tier": 2,
               "final_pos": 8,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/fc-millwall/platzierungen/verein/1028"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2024"
             },
             "2023/24": {
               "domestic_comp": "Championship",
               "tier": 2,
               "final_pos": 13,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/fc-millwall/platzierungen/verein/1028"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2023"
             },
             "2022/23": {
               "domestic_comp": "Championship",
               "tier": 2,
               "final_pos": 8,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/fc-millwall/platzierungen/verein/1028"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2022"
             },
             "2021/22": {
               "domestic_comp": "Championship",
               "tier": 2,
               "final_pos": 9,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/fc-millwall/platzierungen/verein/1028"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2021"
             },
             "2020/21": {
               "domestic_comp": "Championship",
               "tier": 2,
               "final_pos": 11,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/fc-millwall/platzierungen/verein/1028"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2020"
             }
           }
         },
         "norwich city": {
           "team_tm": "Norwich City",
           "norm_key_input": "norwich_city",
-          "history_score_20": 8.14,
+          "history_score_20": 9.029,
           "seasons": {
             "2024/25": {
               "domestic_comp": "Championship",
               "tier": 2,
               "final_pos": 13,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/norwich-city/platzierungen/verein/1123"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2024"
             },
             "2023/24": {
               "domestic_comp": "Championship",
               "tier": 2,
               "final_pos": 6,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/norwich-city/platzierungen/verein/1123"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2023"
             },
             "2022/23": {
               "domestic_comp": "Championship",
               "tier": 2,
               "final_pos": 13,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/norwich-city/platzierungen/verein/1123"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2022"
             },
             "2021/22": {
               "domestic_comp": "Premier League",
               "tier": 1,
               "final_pos": 20,
               "teams_count": 20,
-              "source_url": "https://www.transfermarkt.com/norwich-city/platzierungen/verein/1123"
+              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2021"
             },
             "2020/21": {
               "domestic_comp": "Championship",
               "tier": 2,
               "final_pos": 1,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/norwich-city/platzierungen/verein/1123"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2020"
             }
           }
         },
         "oxford united": {
           "team_tm": "Oxford United",
           "norm_key_input": "oxford_united",
-          "history_score_20": 6.715,
+          "history_score_20": 7.633,
           "seasons": {
             "2024/25": {
               "domestic_comp": "Championship",
               "tier": 2,
               "final_pos": 17,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/oxford-united/platzierungen/verein/988"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2024"
             },
             "2023/24": {
               "domestic_comp": "League One",
@@ -538,14 +573,14 @@
         "portsmouth": {
           "team_tm": "Portsmouth FC",
           "norm_key_input": "portsmouth",
-          "history_score_20": 8.169,
+          "history_score_20": 9.544,
           "seasons": {
             "2024/25": {
               "domestic_comp": "Championship",
               "tier": 2,
               "final_pos": 16,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/fc-portsmouth/platzierungen/verein/1020"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2024"
             },
             "2023/24": {
               "domestic_comp": "League One",
@@ -580,147 +615,147 @@
         "preston north end": {
           "team_tm": "Preston North End",
           "norm_key_input": "preston_north_end",
-          "history_score_20": 6.516,
+          "history_score_20": 7.431,
           "seasons": {
             "2024/25": {
               "domestic_comp": "Championship",
               "tier": 2,
               "final_pos": 20,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/preston-north-end/platzierungen/verein/466"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2024"
             },
             "2023/24": {
               "domestic_comp": "Championship",
               "tier": 2,
               "final_pos": 10,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/preston-north-end/platzierungen/verein/466"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2023"
             },
             "2022/23": {
               "domestic_comp": "Championship",
               "tier": 2,
               "final_pos": 12,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/preston-north-end/platzierungen/verein/466"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2022"
             },
             "2021/22": {
               "domestic_comp": "Championship",
               "tier": 2,
               "final_pos": 13,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/preston-north-end/platzierungen/verein/466"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2021"
             },
             "2020/21": {
               "domestic_comp": "Championship",
               "tier": 2,
               "final_pos": 13,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/preston-north-end/platzierungen/verein/466"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2020"
             }
           }
         },
         "queens park rangers": {
           "team_tm": "Queens Park Rangers",
           "norm_key_input": "queens_park_rangers",
-          "history_score_20": 5.766,
+          "history_score_20": 6.273,
           "seasons": {
             "2024/25": {
               "domestic_comp": "Championship",
               "tier": 2,
               "final_pos": 15,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/queens-park-rangers/platzierungen/verein/1039"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2024"
             },
             "2023/24": {
               "domestic_comp": "Championship",
               "tier": 2,
               "final_pos": 18,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/queens-park-rangers/platzierungen/verein/1039"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2023"
             },
             "2022/23": {
               "domestic_comp": "Championship",
               "tier": 2,
               "final_pos": 20,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/queens-park-rangers/platzierungen/verein/1039"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2022"
             },
             "2021/22": {
               "domestic_comp": "Championship",
               "tier": 2,
               "final_pos": 11,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/queens-park-rangers/platzierungen/verein/1039"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2021"
             },
             "2020/21": {
               "domestic_comp": "Championship",
               "tier": 2,
               "final_pos": 9,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/queens-park-rangers/platzierungen/verein/1039"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2020"
             }
           }
         },
         "sheffield united": {
           "team_tm": "Sheffield United",
           "norm_key_input": "sheffield_united",
-          "history_score_20": 8.536,
+          "history_score_20": 9.988,
           "seasons": {
             "2024/25": {
               "domestic_comp": "Championship",
               "tier": 2,
               "final_pos": 3,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/sheffield-united/platzierungen/verein/350"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2024"
             },
             "2023/24": {
               "domestic_comp": "Premier League",
               "tier": 1,
               "final_pos": 20,
               "teams_count": 20,
-              "source_url": "https://www.transfermarkt.com/sheffield-united/platzierungen/verein/350"
+              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2023"
             },
             "2022/23": {
               "domestic_comp": "Championship",
               "tier": 2,
               "final_pos": 2,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/sheffield-united/platzierungen/verein/350"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2022"
             },
             "2021/22": {
               "domestic_comp": "Championship",
               "tier": 2,
               "final_pos": 5,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/sheffield-united/platzierungen/verein/350"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2021"
             },
             "2020/21": {
               "domestic_comp": "Premier League",
               "tier": 1,
               "final_pos": 20,
               "teams_count": 20,
-              "source_url": "https://www.transfermarkt.com/sheffield-united/platzierungen/verein/350"
+              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2020"
             }
           }
         },
         "sheffield wednesday": {
           "team_tm": "Sheffield Wednesday",
           "norm_key_input": "sheffield_wednesday",
-          "history_score_20": 6.567,
+          "history_score_20": 7.854,
           "seasons": {
             "2024/25": {
               "domestic_comp": "Championship",
               "tier": 2,
               "final_pos": 12,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/sheffield-wednesday/platzierungen/verein/1035"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2024"
             },
             "2023/24": {
               "domestic_comp": "Championship",
               "tier": 2,
               "final_pos": 20,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/sheffield-wednesday/platzierungen/verein/1035"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2023"
             },
             "2022/23": {
               "domestic_comp": "League One",
@@ -741,14 +776,14 @@
               "tier": 2,
               "final_pos": 24,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/sheffield-wednesday/platzierungen/verein/1035"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2020"
             }
           }
         },
         "southampton": {
-          "team_tm": "Southampton",
+          "team_tm": "Southampton FC",
           "norm_key_input": "southampton",
-          "history_score_20": 1.88,
+          "history_score_20": 5.018,
           "seasons": {
             "2024/25": {
               "domestic_comp": "Premier League",
@@ -756,6 +791,13 @@
               "final_pos": 20,
               "teams_count": 20,
               "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2024"
+            },
+            "2023/24": {
+              "domestic_comp": "Championship",
+              "tier": 2,
+              "final_pos": 4,
+              "teams_count": 24,
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2023"
             },
             "2022/23": {
               "domestic_comp": "Premier League",
@@ -783,175 +825,175 @@
         "stoke city": {
           "team_tm": "Stoke City",
           "norm_key_input": "stoke_city",
-          "history_score_20": 5.113,
+          "history_score_20": 5.733,
           "seasons": {
             "2024/25": {
               "domestic_comp": "Championship",
               "tier": 2,
               "final_pos": 18,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/stoke-city/platzierungen/verein/512"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2024"
             },
             "2023/24": {
               "domestic_comp": "Championship",
               "tier": 2,
               "final_pos": 17,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/stoke-city/platzierungen/verein/512"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2023"
             },
             "2022/23": {
               "domestic_comp": "Championship",
               "tier": 2,
               "final_pos": 16,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/stoke-city/platzierungen/verein/512"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2022"
             },
             "2021/22": {
               "domestic_comp": "Championship",
               "tier": 2,
               "final_pos": 14,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/stoke-city/platzierungen/verein/512"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2021"
             },
             "2020/21": {
               "domestic_comp": "Championship",
               "tier": 2,
               "final_pos": 14,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/stoke-city/platzierungen/verein/512"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2020"
             }
           }
         },
         "swansea city": {
           "team_tm": "Swansea City",
           "norm_key_input": "swansea_city",
-          "history_score_20": 8.367,
+          "history_score_20": 9.309,
           "seasons": {
             "2024/25": {
               "domestic_comp": "Championship",
               "tier": 2,
               "final_pos": 11,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/swansea-city/platzierungen/verein/2288"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2024"
             },
             "2023/24": {
               "domestic_comp": "Championship",
               "tier": 2,
               "final_pos": 14,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/swansea-city/platzierungen/verein/2288"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2023"
             },
             "2022/23": {
               "domestic_comp": "Championship",
               "tier": 2,
               "final_pos": 10,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/swansea-city/platzierungen/verein/2288"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2022"
             },
             "2021/22": {
               "domestic_comp": "Championship",
               "tier": 2,
               "final_pos": 15,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/swansea-city/platzierungen/verein/2288"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2021"
             },
             "2020/21": {
               "domestic_comp": "Championship",
               "tier": 2,
               "final_pos": 4,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/swansea-city/platzierungen/verein/2288"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2020"
             }
           }
         },
         "watford": {
           "team_tm": "Watford FC",
           "norm_key_input": "watford",
-          "history_score_20": 6.951,
+          "history_score_20": 7.622,
           "seasons": {
             "2024/25": {
               "domestic_comp": "Championship",
               "tier": 2,
               "final_pos": 14,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/fc-watford/platzierungen/verein/1010"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2024"
             },
             "2023/24": {
               "domestic_comp": "Championship",
               "tier": 2,
               "final_pos": 15,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/fc-watford/platzierungen/verein/1010"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2023"
             },
             "2022/23": {
               "domestic_comp": "Championship",
               "tier": 2,
               "final_pos": 11,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/fc-watford/platzierungen/verein/1010"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2022"
             },
             "2021/22": {
               "domestic_comp": "Premier League",
               "tier": 1,
               "final_pos": 19,
               "teams_count": 20,
-              "source_url": "https://www.transfermarkt.com/fc-watford/platzierungen/verein/1010"
+              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2021"
             },
             "2020/21": {
               "domestic_comp": "Championship",
               "tier": 2,
               "final_pos": 2,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/fc-watford/platzierungen/verein/1010"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2020"
             }
           }
         },
         "west brom": {
           "team_tm": "West Bromwich Albion",
           "norm_key_input": "west_bromwich_albion",
-          "history_score_20": 9.047,
+          "history_score_20": 10.601,
           "seasons": {
             "2024/25": {
               "domestic_comp": "Championship",
               "tier": 2,
               "final_pos": 9,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/west-bromwich-albion/platzierungen/verein/984"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2024"
             },
             "2023/24": {
               "domestic_comp": "Championship",
               "tier": 2,
               "final_pos": 5,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/west-bromwich-albion/platzierungen/verein/984"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2023"
             },
             "2022/23": {
               "domestic_comp": "Championship",
               "tier": 2,
               "final_pos": 9,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/west-bromwich-albion/platzierungen/verein/984"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2022"
             },
             "2021/22": {
               "domestic_comp": "Championship",
               "tier": 2,
               "final_pos": 10,
               "teams_count": 24,
-              "source_url": "https://www.transfermarkt.com/west-bromwich-albion/platzierungen/verein/984"
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2021"
             },
             "2020/21": {
               "domestic_comp": "Premier League",
               "tier": 1,
               "final_pos": 19,
               "teams_count": 20,
-              "source_url": "https://www.transfermarkt.com/west-bromwich-albion/platzierungen/verein/984"
+              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2020"
             }
           }
         },
         "wrexham": {
           "team_tm": "Wrexham AFC",
           "norm_key_input": "wrexham",
-          "history_score_20": 8.885,
+          "history_score_20": 10.862,
           "seasons": {
             "2024/25": {
               "domestic_comp": "League One",
@@ -990,31 +1032,45 @@
             }
           }
         },
-        "afc bournemouth": {
-          "team_tm": "AFC Bournemouth",
-          "norm_key_input": "afc bournemouth",
-          "history_score_20": 8.655,
+        "liverpool": {
+          "team_tm": "Liverpool",
+          "norm_key_input": "liverpool",
+          "history_score_20": 18.179,
           "seasons": {
             "2024/25": {
               "domestic_comp": "Premier League",
               "tier": 1,
-              "final_pos": 9,
+              "final_pos": 1,
               "teams_count": 20,
               "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2024"
             },
             "2023/24": {
               "domestic_comp": "Premier League",
               "tier": 1,
-              "final_pos": 12,
+              "final_pos": 3,
               "teams_count": 20,
               "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2023"
             },
             "2022/23": {
               "domestic_comp": "Premier League",
               "tier": 1,
-              "final_pos": 15,
+              "final_pos": 5,
               "teams_count": 20,
               "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2022"
+            },
+            "2021/22": {
+              "domestic_comp": "Premier League",
+              "tier": 1,
+              "final_pos": 2,
+              "teams_count": 20,
+              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2021"
+            },
+            "2020/21": {
+              "domestic_comp": "Premier League",
+              "tier": 1,
+              "final_pos": 3,
+              "teams_count": 20,
+              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2020"
             }
           }
         },
@@ -1055,6 +1111,132 @@
               "domestic_comp": "Premier League",
               "tier": 1,
               "final_pos": 8,
+              "teams_count": 20,
+              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2020"
+            }
+          }
+        },
+        "man city": {
+          "team_tm": "Manchester City",
+          "norm_key_input": "man city",
+          "history_score_20": 19.431,
+          "seasons": {
+            "2024/25": {
+              "domestic_comp": "Premier League",
+              "tier": 1,
+              "final_pos": 3,
+              "teams_count": 20,
+              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2024"
+            },
+            "2023/24": {
+              "domestic_comp": "Premier League",
+              "tier": 1,
+              "final_pos": 1,
+              "teams_count": 20,
+              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2023"
+            },
+            "2022/23": {
+              "domestic_comp": "Premier League",
+              "tier": 1,
+              "final_pos": 1,
+              "teams_count": 20,
+              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2022"
+            },
+            "2021/22": {
+              "domestic_comp": "Premier League",
+              "tier": 1,
+              "final_pos": 1,
+              "teams_count": 20,
+              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2021"
+            },
+            "2020/21": {
+              "domestic_comp": "Premier League",
+              "tier": 1,
+              "final_pos": 1,
+              "teams_count": 20,
+              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2020"
+            }
+          }
+        },
+        "chelsea": {
+          "team_tm": "Chelsea",
+          "norm_key_input": "chelsea",
+          "history_score_20": 14.68,
+          "seasons": {
+            "2024/25": {
+              "domestic_comp": "Premier League",
+              "tier": 1,
+              "final_pos": 4,
+              "teams_count": 20,
+              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2024"
+            },
+            "2023/24": {
+              "domestic_comp": "Premier League",
+              "tier": 1,
+              "final_pos": 6,
+              "teams_count": 20,
+              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2023"
+            },
+            "2022/23": {
+              "domestic_comp": "Premier League",
+              "tier": 1,
+              "final_pos": 12,
+              "teams_count": 20,
+              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2022"
+            },
+            "2021/22": {
+              "domestic_comp": "Premier League",
+              "tier": 1,
+              "final_pos": 3,
+              "teams_count": 20,
+              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2021"
+            },
+            "2020/21": {
+              "domestic_comp": "Premier League",
+              "tier": 1,
+              "final_pos": 4,
+              "teams_count": 20,
+              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2020"
+            }
+          }
+        },
+        "newcastle": {
+          "team_tm": "Newcastle United",
+          "norm_key_input": "newcastle",
+          "history_score_20": 13.684,
+          "seasons": {
+            "2024/25": {
+              "domestic_comp": "Premier League",
+              "tier": 1,
+              "final_pos": 5,
+              "teams_count": 20,
+              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2024"
+            },
+            "2023/24": {
+              "domestic_comp": "Premier League",
+              "tier": 1,
+              "final_pos": 7,
+              "teams_count": 20,
+              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2023"
+            },
+            "2022/23": {
+              "domestic_comp": "Premier League",
+              "tier": 1,
+              "final_pos": 4,
+              "teams_count": 20,
+              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2022"
+            },
+            "2021/22": {
+              "domestic_comp": "Premier League",
+              "tier": 1,
+              "final_pos": 11,
+              "teams_count": 20,
+              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2021"
+            },
+            "2020/21": {
+              "domestic_comp": "Premier League",
+              "tier": 1,
+              "final_pos": 12,
               "teams_count": 20,
               "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2020"
             }
@@ -1102,44 +1284,51 @@
             }
           }
         },
-        "brentford": {
-          "team_tm": "Brentford",
-          "norm_key_input": "brentford",
-          "history_score_20": 8.485,
+        "nottingham forest": {
+          "team_tm": "Nottingham Forest",
+          "norm_key_input": "nottingham forest",
+          "history_score_20": 8.333,
           "seasons": {
             "2024/25": {
               "domestic_comp": "Premier League",
               "tier": 1,
-              "final_pos": 10,
+              "final_pos": 7,
               "teams_count": 20,
               "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2024"
             },
             "2023/24": {
               "domestic_comp": "Premier League",
               "tier": 1,
-              "final_pos": 16,
+              "final_pos": 17,
               "teams_count": 20,
               "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2023"
             },
             "2022/23": {
               "domestic_comp": "Premier League",
               "tier": 1,
-              "final_pos": 9,
+              "final_pos": 16,
               "teams_count": 20,
               "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2022"
             },
             "2021/22": {
-              "domestic_comp": "Premier League",
-              "tier": 1,
-              "final_pos": 13,
-              "teams_count": 20,
-              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2021"
+              "domestic_comp": "Championship",
+              "tier": 2,
+              "final_pos": 4,
+              "teams_count": 24,
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2021"
+            },
+            "2020/21": {
+              "domestic_comp": "Championship",
+              "tier": 2,
+              "final_pos": 17,
+              "teams_count": 24,
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2020"
             }
           }
         },
-        "brighton and hove albion": {
+        "brighton": {
           "team_tm": "Brighton & Hove Albion",
-          "norm_key_input": "brighton and hove albion",
+          "norm_key_input": "brighton",
           "history_score_20": 11.238,
           "seasons": {
             "2024/25": {
@@ -1179,43 +1368,127 @@
             }
           }
         },
-        "chelsea": {
-          "team_tm": "Chelsea",
-          "norm_key_input": "chelsea",
-          "history_score_20": 14.68,
+        "bournemouth": {
+          "team_tm": "AFC Bournemouth",
+          "norm_key_input": "bournemouth",
+          "history_score_20": 10.391,
           "seasons": {
             "2024/25": {
               "domestic_comp": "Premier League",
               "tier": 1,
-              "final_pos": 4,
+              "final_pos": 9,
               "teams_count": 20,
               "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2024"
             },
             "2023/24": {
               "domestic_comp": "Premier League",
               "tier": 1,
-              "final_pos": 6,
+              "final_pos": 12,
               "teams_count": 20,
               "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2023"
             },
             "2022/23": {
               "domestic_comp": "Premier League",
               "tier": 1,
-              "final_pos": 12,
+              "final_pos": 15,
+              "teams_count": 20,
+              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2022"
+            },
+            "2021/22": {
+              "domestic_comp": "Championship",
+              "tier": 2,
+              "final_pos": 2,
+              "teams_count": 24,
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2021"
+            },
+            "2020/21": {
+              "domestic_comp": "Championship",
+              "tier": 2,
+              "final_pos": 6,
+              "teams_count": 24,
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2020"
+            }
+          }
+        },
+        "brentford": {
+          "team_tm": "Brentford",
+          "norm_key_input": "brentford",
+          "history_score_20": 9.246,
+          "seasons": {
+            "2024/25": {
+              "domestic_comp": "Premier League",
+              "tier": 1,
+              "final_pos": 10,
+              "teams_count": 20,
+              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2024"
+            },
+            "2023/24": {
+              "domestic_comp": "Premier League",
+              "tier": 1,
+              "final_pos": 16,
+              "teams_count": 20,
+              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2023"
+            },
+            "2022/23": {
+              "domestic_comp": "Premier League",
+              "tier": 1,
+              "final_pos": 9,
               "teams_count": 20,
               "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2022"
             },
             "2021/22": {
               "domestic_comp": "Premier League",
               "tier": 1,
-              "final_pos": 3,
+              "final_pos": 13,
               "teams_count": 20,
               "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2021"
             },
             "2020/21": {
+              "domestic_comp": "Championship",
+              "tier": 2,
+              "final_pos": 3,
+              "teams_count": 24,
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2020"
+            }
+          }
+        },
+        "fulham": {
+          "team_tm": "Fulham",
+          "norm_key_input": "fulham",
+          "history_score_20": 9.613,
+          "seasons": {
+            "2024/25": {
               "domestic_comp": "Premier League",
               "tier": 1,
-              "final_pos": 4,
+              "final_pos": 11,
+              "teams_count": 20,
+              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2024"
+            },
+            "2023/24": {
+              "domestic_comp": "Premier League",
+              "tier": 1,
+              "final_pos": 13,
+              "teams_count": 20,
+              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2023"
+            },
+            "2022/23": {
+              "domestic_comp": "Premier League",
+              "tier": 1,
+              "final_pos": 10,
+              "teams_count": 20,
+              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2022"
+            },
+            "2021/22": {
+              "domestic_comp": "Championship",
+              "tier": 2,
+              "final_pos": 1,
+              "teams_count": 24,
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2021"
+            },
+            "2020/21": {
+              "domestic_comp": "Premier League",
+              "tier": 1,
+              "final_pos": 18,
               "teams_count": 20,
               "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2020"
             }
@@ -1305,279 +1578,6 @@
             }
           }
         },
-        "fulham": {
-          "team_tm": "Fulham",
-          "norm_key_input": "fulham",
-          "history_score_20": 8.183,
-          "seasons": {
-            "2024/25": {
-              "domestic_comp": "Premier League",
-              "tier": 1,
-              "final_pos": 11,
-              "teams_count": 20,
-              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2024"
-            },
-            "2023/24": {
-              "domestic_comp": "Premier League",
-              "tier": 1,
-              "final_pos": 13,
-              "teams_count": 20,
-              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2023"
-            },
-            "2022/23": {
-              "domestic_comp": "Premier League",
-              "tier": 1,
-              "final_pos": 10,
-              "teams_count": 20,
-              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2022"
-            },
-            "2020/21": {
-              "domestic_comp": "Premier League",
-              "tier": 1,
-              "final_pos": 18,
-              "teams_count": 20,
-              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2020"
-            }
-          }
-        },
-        "liverpool": {
-          "team_tm": "Liverpool",
-          "norm_key_input": "liverpool",
-          "history_score_20": 18.179,
-          "seasons": {
-            "2024/25": {
-              "domestic_comp": "Premier League",
-              "tier": 1,
-              "final_pos": 1,
-              "teams_count": 20,
-              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2024"
-            },
-            "2023/24": {
-              "domestic_comp": "Premier League",
-              "tier": 1,
-              "final_pos": 3,
-              "teams_count": 20,
-              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2023"
-            },
-            "2022/23": {
-              "domestic_comp": "Premier League",
-              "tier": 1,
-              "final_pos": 5,
-              "teams_count": 20,
-              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2022"
-            },
-            "2021/22": {
-              "domestic_comp": "Premier League",
-              "tier": 1,
-              "final_pos": 2,
-              "teams_count": 20,
-              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2021"
-            },
-            "2020/21": {
-              "domestic_comp": "Premier League",
-              "tier": 1,
-              "final_pos": 3,
-              "teams_count": 20,
-              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2020"
-            }
-          }
-        },
-        "manchester city": {
-          "team_tm": "Manchester City",
-          "norm_key_input": "manchester city",
-          "history_score_20": 19.431,
-          "seasons": {
-            "2024/25": {
-              "domestic_comp": "Premier League",
-              "tier": 1,
-              "final_pos": 3,
-              "teams_count": 20,
-              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2024"
-            },
-            "2023/24": {
-              "domestic_comp": "Premier League",
-              "tier": 1,
-              "final_pos": 1,
-              "teams_count": 20,
-              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2023"
-            },
-            "2022/23": {
-              "domestic_comp": "Premier League",
-              "tier": 1,
-              "final_pos": 1,
-              "teams_count": 20,
-              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2022"
-            },
-            "2021/22": {
-              "domestic_comp": "Premier League",
-              "tier": 1,
-              "final_pos": 1,
-              "teams_count": 20,
-              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2021"
-            },
-            "2020/21": {
-              "domestic_comp": "Premier League",
-              "tier": 1,
-              "final_pos": 1,
-              "teams_count": 20,
-              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2020"
-            }
-          }
-        },
-        "manchester united": {
-          "team_tm": "Manchester United",
-          "norm_key_input": "manchester united",
-          "history_score_20": 12.802,
-          "seasons": {
-            "2024/25": {
-              "domestic_comp": "Premier League",
-              "tier": 1,
-              "final_pos": 15,
-              "teams_count": 20,
-              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2024"
-            },
-            "2023/24": {
-              "domestic_comp": "Premier League",
-              "tier": 1,
-              "final_pos": 8,
-              "teams_count": 20,
-              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2023"
-            },
-            "2022/23": {
-              "domestic_comp": "Premier League",
-              "tier": 1,
-              "final_pos": 3,
-              "teams_count": 20,
-              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2022"
-            },
-            "2021/22": {
-              "domestic_comp": "Premier League",
-              "tier": 1,
-              "final_pos": 6,
-              "teams_count": 20,
-              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2021"
-            },
-            "2020/21": {
-              "domestic_comp": "Premier League",
-              "tier": 1,
-              "final_pos": 2,
-              "teams_count": 20,
-              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2020"
-            }
-          }
-        },
-        "newcastle united": {
-          "team_tm": "Newcastle United",
-          "norm_key_input": "newcastle united",
-          "history_score_20": 13.684,
-          "seasons": {
-            "2024/25": {
-              "domestic_comp": "Premier League",
-              "tier": 1,
-              "final_pos": 5,
-              "teams_count": 20,
-              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2024"
-            },
-            "2023/24": {
-              "domestic_comp": "Premier League",
-              "tier": 1,
-              "final_pos": 7,
-              "teams_count": 20,
-              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2023"
-            },
-            "2022/23": {
-              "domestic_comp": "Premier League",
-              "tier": 1,
-              "final_pos": 4,
-              "teams_count": 20,
-              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2022"
-            },
-            "2021/22": {
-              "domestic_comp": "Premier League",
-              "tier": 1,
-              "final_pos": 11,
-              "teams_count": 20,
-              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2021"
-            },
-            "2020/21": {
-              "domestic_comp": "Premier League",
-              "tier": 1,
-              "final_pos": 12,
-              "teams_count": 20,
-              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2020"
-            }
-          }
-        },
-        "nottingham forest": {
-          "team_tm": "Nottingham Forest",
-          "norm_key_input": "nottingham forest",
-          "history_score_20": 7.368,
-          "seasons": {
-            "2024/25": {
-              "domestic_comp": "Premier League",
-              "tier": 1,
-              "final_pos": 7,
-              "teams_count": 20,
-              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2024"
-            },
-            "2023/24": {
-              "domestic_comp": "Premier League",
-              "tier": 1,
-              "final_pos": 17,
-              "teams_count": 20,
-              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2023"
-            },
-            "2022/23": {
-              "domestic_comp": "Premier League",
-              "tier": 1,
-              "final_pos": 16,
-              "teams_count": 20,
-              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2022"
-            }
-          }
-        },
-        "tottenham hotspur": {
-          "team_tm": "Tottenham Hotspur",
-          "norm_key_input": "tottenham hotspur",
-          "history_score_20": 11.636,
-          "seasons": {
-            "2024/25": {
-              "domestic_comp": "Premier League",
-              "tier": 1,
-              "final_pos": 17,
-              "teams_count": 20,
-              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2024"
-            },
-            "2023/24": {
-              "domestic_comp": "Premier League",
-              "tier": 1,
-              "final_pos": 5,
-              "teams_count": 20,
-              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2023"
-            },
-            "2022/23": {
-              "domestic_comp": "Premier League",
-              "tier": 1,
-              "final_pos": 8,
-              "teams_count": 20,
-              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2022"
-            },
-            "2021/22": {
-              "domestic_comp": "Premier League",
-              "tier": 1,
-              "final_pos": 4,
-              "teams_count": 20,
-              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2021"
-            },
-            "2020/21": {
-              "domestic_comp": "Premier League",
-              "tier": 1,
-              "final_pos": 7,
-              "teams_count": 20,
-              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2020"
-            }
-          }
-        },
         "west ham united": {
           "team_tm": "West Ham United",
           "norm_key_input": "west ham united",
@@ -1620,9 +1620,51 @@
             }
           }
         },
-        "wolverhampton wanderers": {
+        "man utd": {
+          "team_tm": "Manchester United",
+          "norm_key_input": "man utd",
+          "history_score_20": 12.802,
+          "seasons": {
+            "2024/25": {
+              "domestic_comp": "Premier League",
+              "tier": 1,
+              "final_pos": 15,
+              "teams_count": 20,
+              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2024"
+            },
+            "2023/24": {
+              "domestic_comp": "Premier League",
+              "tier": 1,
+              "final_pos": 8,
+              "teams_count": 20,
+              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2023"
+            },
+            "2022/23": {
+              "domestic_comp": "Premier League",
+              "tier": 1,
+              "final_pos": 3,
+              "teams_count": 20,
+              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2022"
+            },
+            "2021/22": {
+              "domestic_comp": "Premier League",
+              "tier": 1,
+              "final_pos": 6,
+              "teams_count": 20,
+              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2021"
+            },
+            "2020/21": {
+              "domestic_comp": "Premier League",
+              "tier": 1,
+              "final_pos": 2,
+              "teams_count": 20,
+              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2020"
+            }
+          }
+        },
+        "wolves": {
           "team_tm": "Wolverhampton Wanderers",
-          "norm_key_input": "wolverhampton wanderers",
+          "norm_key_input": "wolves",
           "history_score_20": 6.771,
           "seasons": {
             "2024/25": {
@@ -1659,6 +1701,440 @@
               "final_pos": 13,
               "teams_count": 20,
               "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2020"
+            }
+          }
+        },
+        "tottenham": {
+          "team_tm": "Tottenham Hotspur",
+          "norm_key_input": "tottenham",
+          "history_score_20": 11.636,
+          "seasons": {
+            "2024/25": {
+              "domestic_comp": "Premier League",
+              "tier": 1,
+              "final_pos": 17,
+              "teams_count": 20,
+              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2024"
+            },
+            "2023/24": {
+              "domestic_comp": "Premier League",
+              "tier": 1,
+              "final_pos": 5,
+              "teams_count": 20,
+              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2023"
+            },
+            "2022/23": {
+              "domestic_comp": "Premier League",
+              "tier": 1,
+              "final_pos": 8,
+              "teams_count": 20,
+              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2022"
+            },
+            "2021/22": {
+              "domestic_comp": "Premier League",
+              "tier": 1,
+              "final_pos": 4,
+              "teams_count": 20,
+              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2021"
+            },
+            "2020/21": {
+              "domestic_comp": "Premier League",
+              "tier": 1,
+              "final_pos": 7,
+              "teams_count": 20,
+              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2020"
+            }
+          }
+        },
+        "leeds united": {
+          "team_tm": "Leeds United",
+          "norm_key_input": "leeds united",
+          "history_score_20": 10.362,
+          "seasons": {
+            "2024/25": {
+              "domestic_comp": "Championship",
+              "tier": 2,
+              "final_pos": 1,
+              "teams_count": 24,
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2024"
+            },
+            "2023/24": {
+              "domestic_comp": "Championship",
+              "tier": 2,
+              "final_pos": 3,
+              "teams_count": 24,
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2023"
+            },
+            "2022/23": {
+              "domestic_comp": "Premier League",
+              "tier": 1,
+              "final_pos": 19,
+              "teams_count": 20,
+              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2022"
+            },
+            "2021/22": {
+              "domestic_comp": "Premier League",
+              "tier": 1,
+              "final_pos": 17,
+              "teams_count": 20,
+              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2021"
+            },
+            "2020/21": {
+              "domestic_comp": "Premier League",
+              "tier": 1,
+              "final_pos": 9,
+              "teams_count": 20,
+              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2020"
+            }
+          }
+        },
+        "burnley": {
+          "team_tm": "Burnley",
+          "norm_key_input": "burnley",
+          "history_score_20": 9.009,
+          "seasons": {
+            "2024/25": {
+              "domestic_comp": "Championship",
+              "tier": 2,
+              "final_pos": 2,
+              "teams_count": 24,
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2024"
+            },
+            "2023/24": {
+              "domestic_comp": "Premier League",
+              "tier": 1,
+              "final_pos": 19,
+              "teams_count": 20,
+              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2023"
+            },
+            "2022/23": {
+              "domestic_comp": "Championship",
+              "tier": 2,
+              "final_pos": 1,
+              "teams_count": 24,
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2022"
+            },
+            "2021/22": {
+              "domestic_comp": "Premier League",
+              "tier": 1,
+              "final_pos": 18,
+              "teams_count": 20,
+              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2021"
+            },
+            "2020/21": {
+              "domestic_comp": "Premier League",
+              "tier": 1,
+              "final_pos": 17,
+              "teams_count": 20,
+              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2020"
+            }
+          }
+        },
+        "sunderland": {
+          "team_tm": "Sunderland",
+          "norm_key_input": "sunderland",
+          "history_score_20": 11.388,
+          "seasons": {
+            "2024/25": {
+              "domestic_comp": "Championship",
+              "tier": 2,
+              "final_pos": 4,
+              "teams_count": 24,
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2024"
+            },
+            "2023/24": {
+              "domestic_comp": "Championship",
+              "tier": 2,
+              "final_pos": 16,
+              "teams_count": 24,
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2023"
+            },
+            "2022/23": {
+              "domestic_comp": "Championship",
+              "tier": 2,
+              "final_pos": 6,
+              "teams_count": 24,
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2022"
+            }
+          }
+        },
+        "luton town": {
+          "team_tm": "Luton Town",
+          "norm_key_input": "luton town",
+          "history_score_20": 7.384,
+          "seasons": {
+            "2024/25": {
+              "domestic_comp": "Championship",
+              "tier": 2,
+              "final_pos": 22,
+              "teams_count": 24,
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2024"
+            },
+            "2023/24": {
+              "domestic_comp": "Premier League",
+              "tier": 1,
+              "final_pos": 18,
+              "teams_count": 20,
+              "source_url": "https://www.transfermarkt.com/premier-league/tabelle/wettbewerb/GB1?saison_id=2023"
+            },
+            "2022/23": {
+              "domestic_comp": "Championship",
+              "tier": 2,
+              "final_pos": 3,
+              "teams_count": 24,
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2022"
+            },
+            "2021/22": {
+              "domestic_comp": "Championship",
+              "tier": 2,
+              "final_pos": 6,
+              "teams_count": 24,
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2021"
+            },
+            "2020/21": {
+              "domestic_comp": "Championship",
+              "tier": 2,
+              "final_pos": 12,
+              "teams_count": 24,
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2020"
+            }
+          }
+        },
+        "plymouth argyle": {
+          "team_tm": "Plymouth Argyle",
+          "norm_key_input": "plymouth argyle",
+          "history_score_20": 1.439,
+          "seasons": {
+            "2024/25": {
+              "domestic_comp": "Championship",
+              "tier": 2,
+              "final_pos": 23,
+              "teams_count": 24,
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2024"
+            },
+            "2023/24": {
+              "domestic_comp": "Championship",
+              "tier": 2,
+              "final_pos": 21,
+              "teams_count": 24,
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2023"
+            }
+          }
+        },
+        "cardiff city": {
+          "team_tm": "Cardiff City",
+          "norm_key_input": "cardiff city",
+          "history_score_20": 4.635,
+          "seasons": {
+            "2024/25": {
+              "domestic_comp": "Championship",
+              "tier": 2,
+              "final_pos": 24,
+              "teams_count": 24,
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2024"
+            },
+            "2023/24": {
+              "domestic_comp": "Championship",
+              "tier": 2,
+              "final_pos": 12,
+              "teams_count": 24,
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2023"
+            },
+            "2022/23": {
+              "domestic_comp": "Championship",
+              "tier": 2,
+              "final_pos": 21,
+              "teams_count": 24,
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2022"
+            },
+            "2021/22": {
+              "domestic_comp": "Championship",
+              "tier": 2,
+              "final_pos": 18,
+              "teams_count": 24,
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2021"
+            },
+            "2020/21": {
+              "domestic_comp": "Championship",
+              "tier": 2,
+              "final_pos": 8,
+              "teams_count": 24,
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2020"
+            }
+          }
+        },
+        "huddersfield town": {
+          "team_tm": "Huddersfield Town",
+          "norm_key_input": "huddersfield town",
+          "history_score_20": 5.448,
+          "seasons": {
+            "2023/24": {
+              "domestic_comp": "Championship",
+              "tier": 2,
+              "final_pos": 23,
+              "teams_count": 24,
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2023"
+            },
+            "2022/23": {
+              "domestic_comp": "Championship",
+              "tier": 2,
+              "final_pos": 18,
+              "teams_count": 24,
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2022"
+            },
+            "2021/22": {
+              "domestic_comp": "Championship",
+              "tier": 2,
+              "final_pos": 3,
+              "teams_count": 24,
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2021"
+            },
+            "2020/21": {
+              "domestic_comp": "Championship",
+              "tier": 2,
+              "final_pos": 20,
+              "teams_count": 24,
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2020"
+            }
+          }
+        },
+        "rotherham united": {
+          "team_tm": "Rotherham United",
+          "norm_key_input": "rotherham united",
+          "history_score_20": 1.549,
+          "seasons": {
+            "2023/24": {
+              "domestic_comp": "Championship",
+              "tier": 2,
+              "final_pos": 24,
+              "teams_count": 24,
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2023"
+            },
+            "2022/23": {
+              "domestic_comp": "Championship",
+              "tier": 2,
+              "final_pos": 19,
+              "teams_count": 24,
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2022"
+            },
+            "2020/21": {
+              "domestic_comp": "Championship",
+              "tier": 2,
+              "final_pos": 23,
+              "teams_count": 24,
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2020"
+            }
+          }
+        },
+        "wigan athletic": {
+          "team_tm": "Wigan Athletic",
+          "norm_key_input": "wigan athletic",
+          "history_score_20": 1.478,
+          "seasons": {
+            "2022/23": {
+              "domestic_comp": "Championship",
+              "tier": 2,
+              "final_pos": 22,
+              "teams_count": 24,
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2022"
+            }
+          }
+        },
+        "reading": {
+          "team_tm": "Reading",
+          "norm_key_input": "reading",
+          "history_score_20": 3.86,
+          "seasons": {
+            "2022/23": {
+              "domestic_comp": "Championship",
+              "tier": 2,
+              "final_pos": 23,
+              "teams_count": 24,
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2022"
+            },
+            "2021/22": {
+              "domestic_comp": "Championship",
+              "tier": 2,
+              "final_pos": 21,
+              "teams_count": 24,
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2021"
+            },
+            "2020/21": {
+              "domestic_comp": "Championship",
+              "tier": 2,
+              "final_pos": 7,
+              "teams_count": 24,
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2020"
+            }
+          }
+        },
+        "blackpool": {
+          "team_tm": "Blackpool",
+          "norm_key_input": "blackpool",
+          "history_score_20": 2.534,
+          "seasons": {
+            "2022/23": {
+              "domestic_comp": "Championship",
+              "tier": 2,
+              "final_pos": 24,
+              "teams_count": 24,
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2022"
+            },
+            "2021/22": {
+              "domestic_comp": "Championship",
+              "tier": 2,
+              "final_pos": 16,
+              "teams_count": 24,
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2021"
+            }
+          }
+        },
+        "peterborough united": {
+          "team_tm": "Peterborough United",
+          "norm_key_input": "peterborough united",
+          "history_score_20": 1.478,
+          "seasons": {
+            "2021/22": {
+              "domestic_comp": "Championship",
+              "tier": 2,
+              "final_pos": 22,
+              "teams_count": 24,
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2021"
+            }
+          }
+        },
+        "barnsley": {
+          "team_tm": "Barnsley",
+          "norm_key_input": "barnsley",
+          "history_score_20": 5.617,
+          "seasons": {
+            "2021/22": {
+              "domestic_comp": "Championship",
+              "tier": 2,
+              "final_pos": 24,
+              "teams_count": 24,
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2021"
+            },
+            "2020/21": {
+              "domestic_comp": "Championship",
+              "tier": 2,
+              "final_pos": 5,
+              "teams_count": 24,
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2020"
+            }
+          }
+        },
+        "wycombe wanderers": {
+          "team_tm": "Wycombe Wanderers",
+          "norm_key_input": "wycombe wanderers",
+          "history_score_20": 1.478,
+          "seasons": {
+            "2020/21": {
+              "domestic_comp": "Championship",
+              "tier": 2,
+              "final_pos": 22,
+              "teams_count": 24,
+              "source_url": "https://www.transfermarkt.com/championship/tabelle/wettbewerb/GB2?saison_id=2020"
             }
           }
         }
@@ -7144,15 +7620,22 @@
     "st etienne": "as saint tienne",
     "reims": "stade reims",
     "boulogne": "us boulogne",
-    "man city": "manchester city",
-    "man utd": "manchester united",
-    "spurs": "tottenham hotspur",
-    "wolves": "wolverhampton wanderers",
-    "west ham": "west ham united",
+    "manchester city": "man city",
+    "manchester united": "man utd",
+    "spurs": "tottenham",
+    "tottenham hotspur": "tottenham",
+    "wolverhampton wanderers": "wolves",
+    "west bromwich albion": "west brom",
+    "brighton and hove albion": "brighton",
+    "newcastle united": "newcastle",
+    "west ham united": "west ham",
+    "afc bournemouth": "bournemouth",
+    "nott'm forest": "nottingham forest",
     "forest": "nottingham forest",
-    "bournemouth": "afc bournemouth",
-    "brighton": "brighton and hove albion",
-    "newcastle": "newcastle united"
+    "qpr": "queens park rangers",
+    "sheff utd": "sheffield united",
+    "sheff wed": "sheffield wednesday",
+    "boro": "middlesbrough"
   },
   "meta": {
     "note": "Consolidated cache. Countries appended incrementally from user batches.",
