@@ -1,5 +1,5 @@
 {
-  "as_of": "2026-02-02",
+  "as_of": "2026-02-03",
   "countries": {
     "England": {
       "teams": {
@@ -119,6 +119,161 @@
           "tempo_index": 1.0
         },
         "wrexham": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "arsenal": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "aston villa": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "barnsley": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "blackpool": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "bournemouth": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "brentford": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "brighton": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "burnley": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "cardiff city": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "chelsea": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "crystal palace": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "everton": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "fulham": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "huddersfield town": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "leeds united": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "liverpool": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "luton town": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "man city": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "man utd": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "newcastle": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "nottingham forest": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "peterborough united": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "plymouth argyle": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "reading": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "rotherham united": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "sunderland": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "tottenham": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "west ham united": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "wigan athletic": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "wolves": {
+          "xch_for_90": 1.0,
+          "xch_against_90": 1.0,
+          "tempo_index": 1.0
+        },
+        "wycombe wanderers": {
           "xch_for_90": 1.0,
           "xch_against_90": 1.0,
           "tempo_index": 1.0
@@ -813,6 +968,6 @@
       "xch_against_90": 1.0,
       "tempo_index": 1.0
     },
-    "note": "Bootstrap style cache: neutral values (no effect). Replace with real proxies later."
+    "note": "England filled with neutral style metrics (1.0) for all England history teams; replace later with real data."
   }
 }
