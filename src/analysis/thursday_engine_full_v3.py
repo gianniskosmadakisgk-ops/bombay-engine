@@ -804,6 +804,28 @@ def fetch_odds_for_league(league_name: str, window_from: datetime.datetime, wind
         return data
     return _odds_request(sport_key, base_params)
 
+def build_events_cache(odds_events):
+    out = []
+    for ev in odds_events or []:
+        h_raw = ev.get("home_team", "") or ""
+        a_raw = ev.get("away_team", "") or ""
+        h = normalize_team_name(h_raw)
+        a = normalize_team_name(a_raw)
+        if not h or not a:
+            continue
+        try:
+            ct = parser.isoparse(ev.get("commence_time")).astimezone(datetime.timezone.utc)
+        except Exception:
+            ct = None
+        out.append({
+            "home_norm": h,
+            "away_norm": a,
+            "home_tokens": token_set(h),
+            "away_tokens": a and token_set(a) or set(),
+            "commence_time": ct,
+            "raw": ev,
+        })
+    return out
 def _best_odds_from_event(ev_raw, event_home_norm, event_away_norm, swapped: bool):
     best_home = best_draw = best_away = None
     best_over = best_under = None
