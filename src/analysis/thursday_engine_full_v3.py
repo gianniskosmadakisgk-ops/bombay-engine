@@ -17,18 +17,10 @@ from dateutil import parser
 #   - League allowlist is LOCKED (only configured leagues can appear).
 #   - No fixture filtering beyond time window (ALL fixtures in window included).
 #
-#  v3.70 (MODEL: OPTION B)
-#   - Market values (Transfermarkt cache) affect lambdas via attack/def multipliers
-#     (league-median normalized, capped) + FIX: normalized keys + global fallback
-#   - 5-year domestic history score affects lambdas via attack/def multipliers
-#     (country median normalized, capped) + FIX: uses aliases mapping
-#   - Style cache supported via data/team_style_metrics.json
-#     (pressing/chances proxy) + FIX: uses history aliases mapping
-#   - Root report includes cache status + optional engine_config
-#
-#  Safety:
-#   - Additive fields only (schema-safe).
-#   - Missing cache entries => neutral multipliers (1.0) + flags.*_missing=true
+#  v3.71 (MODEL: OPTION B)
+#   - Same as v3.70
+#   - FIX: Better name normalization for UK/Championship:
+#       utd -> united, ipswich -> ipswich town, blackburn -> blackburn rovers, etc.
 # ============================================================
 
 # -------------------- API KEYS --------------------
@@ -200,6 +192,10 @@ def _strip_accents(s: str) -> str:
     return "".join(ch for ch in s if not unicodedata.combining(ch))
 
 def normalize_team_name(raw: str) -> str:
+    """
+    Normalizes names used everywhere: fixtures, odds, caches.
+    v3.71: adds safe UK/Championship aliases to improve cache match-rate.
+    """
     if not raw:
         return ""
     s = _strip_accents(raw).lower().strip()
@@ -207,11 +203,18 @@ def normalize_team_name(raw: str) -> str:
     s = re.sub(r"[^a-z0-9\s]+", " ", s)
     s = re.sub(r"\s+", " ", s).strip()
 
+    # common abbreviation normalization (safe)
+    # "utd" -> "united"
+    s = re.sub(r"\butd\b", "united", s)
+    # "weds" -> "wednesday"
+    s = re.sub(r"\bweds\b", "wednesday", s)
+
     kill = {"fc", "afc", "cf", "sc", "sv", "ssc", "ac", "cd", "ud", "bk", "fk", "if"}
     parts = [p for p in s.split() if p not in kill]
     s = " ".join(parts).strip()
 
     aliases = {
+        # EPL common
         "wolverhampton wanderers": "wolves",
         "wolverhampton": "wolves",
         "brighton and hove albion": "brighton",
@@ -223,6 +226,20 @@ def normalize_team_name(raw: str) -> str:
         "bayern munchen": "bayern munich",
         "paris saint germain": "psg",
         "internazionale": "inter",
+
+        # UK / Championship safe expansions
+        "sheffield united": "sheffield united",  # keep canonical
+        "sheffield united fc": "sheffield united",
+        "sheffield utd": "sheffield united",
+        "sheffield wednesday": "sheffield wednesday",
+        "sheffield wednesday fc": "sheffield wednesday",
+        "ipswich": "ipswich town",
+        "ipswich town": "ipswich town",
+        "blackburn": "blackburn rovers",
+        "blackburn rovers": "blackburn rovers",
+        "qpr": "queens park rangers",
+        "queens park rangers": "queens park rangers",
+        "west brom": "west brom",
     }
     return aliases.get(s, s)
 
@@ -502,14 +519,6 @@ def _safe_ratio(a, b):
 
 # ------------------------- CACHE LOADERS -------------------------
 def load_market_values():
-    """
-    Returns:
-      leagues_norm: {league_name: {team_norm: eurm}}
-      aliases_raw:  {alt_norm: canonical_norm}  (optional, from file)
-      medians:      {league_name: median_eurm}
-      global_norm:  {team_norm: eurm}          (best available across leagues)
-      meta:         {loaded, path, as_of, unit, matched, unmatched}
-    """
     meta = {"loaded": False, "path": TEAM_VALUES_PATH, "as_of": None, "unit": None, "matched": 0, "unmatched": 0}
     leagues_norm = {}
     aliases_raw = {}
@@ -554,14 +563,6 @@ def load_market_values():
         return {}, {}, {}, {}, meta
 
 def load_history_cache():
-    """
-    Returns:
-      countries: {Country: {teams:{team_norm:{history_score_20,...}}}}
-      league_to_country: mapping
-      medians_country: {Country: median_history_score_20}
-      aliases: {alt_norm: canonical_norm}
-      meta
-    """
     meta = {"loaded": False, "path": HISTORY_CACHE_PATH, "as_of": None, "countries": 0}
     countries = {}
     league_to_country = {}
@@ -588,7 +589,6 @@ def load_history_cache():
             for k, v in file_map.items():
                 league_to_country[str(k)] = str(v)
 
-        # fallback hard mapping (engine names)
         league_to_country.setdefault("Premier League", "England")
         league_to_country.setdefault("Championship", "England")
         league_to_country.setdefault("Serie A", "Italy")
@@ -616,11 +616,6 @@ def load_history_cache():
         return {}, {}, {}, {}, meta
 
 def load_style_cache():
-    """
-    Optional cache. We primarily use 'countries' structure like:
-      {"as_of":"..","countries":{"England":{"teams":{"man city":{"xch_for_90":..,"xch_against_90":..,"tempo_index":..}}}}}
-    We compute country medians for normalization.
-    """
     meta = {"loaded": False, "path": STYLE_CACHE_PATH, "as_of": None}
     js = None
     med_country = {}
@@ -1131,7 +1126,6 @@ def build_fixture_blocks():
     log(f"Season used: {season_used} | Total fixtures collected: {len(all_fixtures)}")
     log(f"Engine leagues: {list(LEAGUES.keys())}")
 
-    # Odds cache
     odds_cache_by_league = {}
     if USE_ODDS_API and ODDS_API_KEY:
         total_events = 0
@@ -1143,7 +1137,6 @@ def build_fixture_blocks():
     else:
         log("⚠️ USE_ODDS_API=False or ODDS_API_KEY missing → skipping odds.")
 
-    # Load caches once
     mv_leagues, mv_aliases_raw, mv_medians, mv_global, mv_meta = load_market_values()
     hist_countries, hist_league_map, hist_medians, hist_aliases, hist_meta = load_history_cache()
     style_js, style_meta, style_medians = load_style_cache()
@@ -1170,21 +1163,12 @@ def build_fixture_blocks():
         home_stats = fetch_team_recent_stats(fx["home_id"], league_id, season_used, want_home_context=True)
         away_stats = fetch_team_recent_stats(fx["away_id"], league_id, season_used, want_home_context=False)
 
-        # multipliers default
-        home_att_mult = 1.0
-        home_def_mult = 1.0
-        away_att_mult = 1.0
-        away_def_mult = 1.0
-        total_tempo_mult = 1.0
-
-        # ------------------ resolve canonical keys via history aliases ------------------
         hn = fx["home_norm"]
         an = fx["away_norm"]
         if isinstance(hist_aliases, dict):
             hn = hist_aliases.get(hn, hn)
             an = hist_aliases.get(an, an)
 
-        # ================== Market values ==================
         tv_home = tv_away = None
         tv_ratio = None
         value_missing = False
@@ -1193,7 +1177,6 @@ def build_fixture_blocks():
 
         if mv_meta.get("loaded") and USE_TEAM_VALUE_MODEL:
             league_bucket = (mv_leagues or {}).get(league_name) or {}
-            # also support file aliases (if any) then normalize
             if isinstance(mv_aliases_raw, dict):
                 hn_mv = normalize_team_name(mv_aliases_raw.get(hn, hn))
                 an_mv = normalize_team_name(mv_aliases_raw.get(an, an))
@@ -1204,7 +1187,6 @@ def build_fixture_blocks():
             tv_home = safe_float((league_bucket or {}).get(hn_mv), None)
             tv_away = safe_float((league_bucket or {}).get(an_mv), None)
 
-            # global fallback
             if tv_home is None:
                 tv_home = safe_float((mv_global or {}).get(hn_mv), None)
             if tv_away is None:
@@ -1220,7 +1202,6 @@ def build_fixture_blocks():
                     value_mismatch = True
 
                 medv = mv_medians.get(league_name)
-                # if league median missing, fallback to global median (median of global values)
                 if medv is None and isinstance(mv_global, dict) and mv_global:
                     medv = _median(mv_global.values())
 
@@ -1232,7 +1213,6 @@ def build_fixture_blocks():
                     v_att_a = _mult_from_z(VALUE_K_ATT, z_a, VALUE_MAX_CAP, invert=False)
                     v_def_a = _mult_from_z(VALUE_K_DEF, z_a, VALUE_MAX_CAP, invert=True)
 
-        # ================== History (5-year) ==================
         hist_missing = False
         hs_home = hs_away = None
         hs_gap = None
@@ -1261,7 +1241,6 @@ def build_fixture_blocks():
                         h_att_a = _mult_from_z(HISTORY_K_ATT, z_a, HISTORY_MAX_CAP, invert=False)
                         h_def_a = _mult_from_z(HISTORY_K_DEF, z_a, HISTORY_MAX_CAP, invert=True)
 
-        # ================== Style (pressing/chances proxy) ==================
         style_missing = False
         tempo_index_h = tempo_index_a = None
         s_att_h = s_def_h = s_att_a = s_def_a = 1.0
@@ -1312,14 +1291,12 @@ def build_fixture_blocks():
                             zt = math.log((t_avg + TEMPO_EPS) / (med_tempo + TEMPO_EPS))
                             tempo_mult = _mult_from_z(TEMPO_K_TOTAL, zt, TEMPO_MAX_CAP, invert=False)
 
-        # combine multipliers
         home_att_mult = v_att_h * h_att_h * s_att_h
         home_def_mult = v_def_h * h_def_h * s_def_h
         away_att_mult = v_att_a * h_att_a * s_att_a
         away_def_mult = v_def_a * h_def_a * s_def_a
         total_tempo_mult = tempo_mult
 
-        # build lambdas
         lam_h, lam_a = compute_expected_goals(
             home_stats, away_stats, league_baseline,
             home_att_mult=home_att_mult, home_def_mult=home_def_mult,
@@ -1329,7 +1306,6 @@ def build_fixture_blocks():
 
         probs = compute_probabilities(lam_h, lam_a)
 
-        # odds
         offered = {}
         match_debug = {"matched": False, "reason": "odds_off", "grade": None}
         if USE_ODDS_API and ODDS_API_KEY:
@@ -1344,7 +1320,6 @@ def build_fixture_blocks():
         off_o = offered.get("over")
         off_u = offered.get("under")
 
-        # stabilize + snap
         m_ph, m_pd, m_pa, m_po, m_pu = stabilize_probs(
             league_name=league_name,
             league_baseline=league_baseline,
