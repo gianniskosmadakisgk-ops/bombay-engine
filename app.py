@@ -99,45 +99,36 @@ def save_json_report(report_rel_path: str, obj: dict):
     atomic_write_json(full_path, obj)
     return full_path
 
-def list_logs_dir():
+def list_dir(p: str):
     try:
-        if not os.path.exists(LOGS_DIR):
-            return {"exists": False, "path": LOGS_DIR, "files": []}
+        if not os.path.exists(p):
+            return {"exists": False, "path": p, "files": []}
         files = []
-        for name in sorted(os.listdir(LOGS_DIR)):
-            p = os.path.join(LOGS_DIR, name)
+        for name in sorted(os.listdir(p)):
+            fp = os.path.join(p, name)
             try:
                 files.append({
                     "name": name,
-                    "size": os.path.getsize(p),
-                    "mtime": datetime.utcfromtimestamp(os.path.getmtime(p)).isoformat() + "Z"
+                    "size": os.path.getsize(fp),
+                    "mtime": datetime.utcfromtimestamp(os.path.getmtime(fp)).isoformat() + "Z"
                 })
             except Exception:
                 files.append({"name": name})
-        return {"exists": True, "path": LOGS_DIR, "files": files}
+        return {"exists": True, "path": p, "files": files}
     except Exception as e:
-        return {"exists": None, "path": LOGS_DIR, "error": str(e), "files": []}
+        return {"exists": None, "path": p, "error": str(e), "files": []}
+
+def list_logs_dir():
+    return list_dir(LOGS_DIR)
 
 def list_data_dir():
-    try:
-        if not os.path.exists(DATA_DIR):
-            return {"exists": False, "path": DATA_DIR, "files": []}
-        files = []
-        for name in sorted(os.listdir(DATA_DIR)):
-            p = os.path.join(DATA_DIR, name)
-            try:
-                files.append({
-                    "name": name,
-                    "size": os.path.getsize(p),
-                    "mtime": datetime.utcfromtimestamp(os.path.getmtime(p)).isoformat() + "Z"
-                })
-            except Exception:
-                files.append({"name": name})
-        return {"exists": True, "path": DATA_DIR, "files": files}
-    except Exception as e:
-        return {"exists": None, "path": DATA_DIR, "error": str(e), "files": []}
+    return list_dir(DATA_DIR)
 
 def _tz_convert_date_time(date_str: str, time_str: str, tz_name: str):
+    """
+    Display-only conversion: assumes date+time are UTC.
+    Returns (date_out, time_out) in tz_name, or (None, None) if cannot convert.
+    """
     if not ZoneInfo:
         return None, None
     if not date_str or not time_str:
@@ -177,9 +168,9 @@ def _slim_fixture_for_display(fx: dict):
         "odds_strict_ok": flags.get("odds_strict_ok"),
         "prob_instability": flags.get("prob_instability"),
         "snap_gap_max": flags.get("snap_gap_max"),
-        "style_missing": flags.get("style_missing"),
-        "history_missing": flags.get("history_missing"),
         "value_missing": flags.get("value_missing"),
+        "history_missing": flags.get("history_missing"),
+        "style_missing": flags.get("style_missing"),
     }
 
     om = fx.get("odds_match") or {}
@@ -265,14 +256,17 @@ UPLOAD_HTML = """<!doctype html>
 <head><meta charset="utf-8"/><title>Bombay Upload</title></head>
 <body style="font-family:Arial;margin:24px">
   <h2>Upload JSON into server</h2>
+  <p><b>Important:</b> Style MUST be uploaded to <code>data/team_style_metrics.json</code> so Thursday reads it.</p>
   <form method="post" action="/upload" enctype="multipart/form-data">
     <label>Τύπος</label>
     <select name="kind">
-      <option value="thursday">Thursday (logs/thursday_report_v3.json)</option>
-      <option value="friday">Friday (logs/friday_shortlist_v3.json)</option>
-      <option value="tuesday">Tuesday (logs/tuesday_recap_v3.json)</option>
-      <option value="history">History (logs/tuesday_history_v3.json)</option>
-      <option value="style">Style Metrics (data/team_style_metrics.json)</option>
+      <option value="thursday">Thursday report (logs/thursday_report_v3.json)</option>
+      <option value="friday">Friday shortlist (logs/friday_shortlist_v3.json)</option>
+      <option value="tuesday">Tuesday recap (logs/tuesday_recap_v3.json)</option>
+      <option value="history">Tuesday history (logs/tuesday_history_v3.json)</option>
+      <option value="style">Style metrics (data/team_style_metrics.json)</option>
+      <option value="domestic_history">Domestic history (data/team_domestic_history_last5.json)</option>
+      <option value="market_values">Market values (data/team_market_values.json)</option>
     </select>
     <br/><br/>
     <label>JSON αρχείο</label>
@@ -306,6 +300,7 @@ def upload_post():
     except Exception as e:
         return jsonify({"status": "error", "message": f"invalid json: {e}"}), 400
 
+    # LOGS targets
     if kind == "thursday":
         rel = "logs/thursday_report_v3.json"
     elif kind == "friday":
@@ -314,8 +309,14 @@ def upload_post():
         rel = "logs/tuesday_recap_v3.json"
     elif kind == "history":
         rel = "logs/tuesday_history_v3.json"
+
+    # DATA targets (THIS is the fix)
     elif kind == "style":
         rel = "data/team_style_metrics.json"
+    elif kind == "domestic_history":
+        rel = "data/team_domestic_history_last5.json"
+    elif kind == "market_values":
+        rel = "data/team_market_values.json"
     else:
         return jsonify({"status": "error", "message": "invalid kind"}), 400
 
@@ -360,6 +361,7 @@ def run_tuesday():
 def run_tuesday_alias():
     return run_tuesday()
 
+# optional: run style builder on server (if you ever want)
 @app.route("/run/style-builder-v1", methods=["GET"])
 def run_style_builder():
     guard = require_admin()
@@ -409,8 +411,9 @@ def download_tuesday_history():
         return jsonify({"status":"error","message":"missing","path":p,"logs":list_logs_dir()}), 404
     return send_file(p, mimetype="application/json", as_attachment=True)
 
+# download current style (so you can verify server is using your upload)
 @app.route("/download/style-metrics", methods=["GET"])
-def download_style_metrics():
+def download_style():
     guard = require_admin()
     if guard:
         return guard
