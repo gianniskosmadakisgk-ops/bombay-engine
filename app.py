@@ -18,6 +18,7 @@ def abs_path(rel_path: str) -> str:
     return os.path.join(PROJECT_ROOT, rel_path)
 
 LOGS_DIR = abs_path("logs")
+DATA_DIR = abs_path("data")
 
 # Optional admin protection
 ADMIN_KEY = os.environ.get("ADMIN_KEY", "").strip()
@@ -117,11 +118,26 @@ def list_logs_dir():
     except Exception as e:
         return {"exists": None, "path": LOGS_DIR, "error": str(e), "files": []}
 
+def list_data_dir():
+    try:
+        if not os.path.exists(DATA_DIR):
+            return {"exists": False, "path": DATA_DIR, "files": []}
+        files = []
+        for name in sorted(os.listdir(DATA_DIR)):
+            p = os.path.join(DATA_DIR, name)
+            try:
+                files.append({
+                    "name": name,
+                    "size": os.path.getsize(p),
+                    "mtime": datetime.utcfromtimestamp(os.path.getmtime(p)).isoformat() + "Z"
+                })
+            except Exception:
+                files.append({"name": name})
+        return {"exists": True, "path": DATA_DIR, "files": files}
+    except Exception as e:
+        return {"exists": None, "path": DATA_DIR, "error": str(e), "files": []}
+
 def _tz_convert_date_time(date_str: str, time_str: str, tz_name: str):
-    """
-    Display-only conversion: assumes date+time are UTC.
-    Returns (date_out, time_out) in tz_name, or (None, None) if cannot convert.
-    """
     if not ZoneInfo:
         return None, None
     if not date_str or not time_str:
@@ -158,10 +174,12 @@ def _slim_fixture_for_display(fx: dict):
         "over_friendly_league": flags.get("over_friendly_league"),
         "draw_friendly_league": flags.get("draw_friendly_league"),
         "low_tempo_league": flags.get("low_tempo_league"),
-        # additive flags won't break anything if present:
         "odds_strict_ok": flags.get("odds_strict_ok"),
         "prob_instability": flags.get("prob_instability"),
         "snap_gap_max": flags.get("snap_gap_max"),
+        "style_missing": flags.get("style_missing"),
+        "history_missing": flags.get("history_missing"),
+        "value_missing": flags.get("value_missing"),
     }
 
     om = fx.get("odds_match") or {}
@@ -239,13 +257,14 @@ def debug_logs():
         "timestamp": datetime.utcnow().isoformat(),
         "project_root": PROJECT_ROOT,
         "logs": list_logs_dir(),
+        "data": list_data_dir(),
     })
 
 UPLOAD_HTML = """<!doctype html>
 <html>
 <head><meta charset="utf-8"/><title>Bombay Upload</title></head>
 <body style="font-family:Arial;margin:24px">
-  <h2>Upload JSON into server logs</h2>
+  <h2>Upload JSON into server</h2>
   <form method="post" action="/upload" enctype="multipart/form-data">
     <label>Τύπος</label>
     <select name="kind">
@@ -253,6 +272,7 @@ UPLOAD_HTML = """<!doctype html>
       <option value="friday">Friday (logs/friday_shortlist_v3.json)</option>
       <option value="tuesday">Tuesday (logs/tuesday_recap_v3.json)</option>
       <option value="history">History (logs/tuesday_history_v3.json)</option>
+      <option value="style">Style Metrics (data/team_style_metrics.json)</option>
     </select>
     <br/><br/>
     <label>JSON αρχείο</label>
@@ -294,6 +314,8 @@ def upload_post():
         rel = "logs/tuesday_recap_v3.json"
     elif kind == "history":
         rel = "logs/tuesday_history_v3.json"
+    elif kind == "style":
+        rel = "data/team_style_metrics.json"
     else:
         return jsonify({"status": "error", "message": "invalid kind"}), 400
 
@@ -306,6 +328,7 @@ def upload_post():
         "exists_after_write": os.path.exists(full),
         "size_bytes": os.path.getsize(full) if os.path.exists(full) else None,
         "logs_dir": list_logs_dir(),
+        "data_dir": list_data_dir(),
     })
 
 # ---------------- RUN endpoints (manual runs) ----------------
@@ -336,6 +359,14 @@ def run_tuesday():
 @app.route("/run/tuesday-recap", methods=["GET"])
 def run_tuesday_alias():
     return run_tuesday()
+
+@app.route("/run/style-builder-v1", methods=["GET"])
+def run_style_builder():
+    guard = require_admin()
+    if guard:
+        return guard
+    r = run_script("src/tools/style_builder_v1.py")
+    return jsonify({**r, "status": "ok" if r["ok"] else "error", "timestamp": datetime.utcnow().isoformat()})
 
 # ---------------- DOWNLOAD endpoints ----------------
 @app.route("/download/thursday-report-v3", methods=["GET"])
@@ -376,6 +407,16 @@ def download_tuesday_history():
     p = abs_path("logs/tuesday_history_v3.json")
     if not os.path.exists(p):
         return jsonify({"status":"error","message":"missing","path":p,"logs":list_logs_dir()}), 404
+    return send_file(p, mimetype="application/json", as_attachment=True)
+
+@app.route("/download/style-metrics", methods=["GET"])
+def download_style_metrics():
+    guard = require_admin()
+    if guard:
+        return guard
+    p = abs_path("data/team_style_metrics.json")
+    if not os.path.exists(p):
+        return jsonify({"status":"error","message":"missing","path":p,"data":list_data_dir()}), 404
     return send_file(p, mimetype="application/json", as_attachment=True)
 
 # ---------------- GPT read endpoints (report-only) ----------------
