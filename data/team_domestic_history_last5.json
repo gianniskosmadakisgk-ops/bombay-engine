@@ -7652,7 +7652,12 @@
     "rotherham": "rotherham united",
     "luton": "luton town",
     "leeds": "leeds united",
-    "manchester utd": "man utd"
+    "manchester utd": "man utd",
+    "coventry": "coventry city",
+    "norwich": "norwich city",
+    "swansea": "swansea city",
+    "blackburn": "blackburn rovers",
+    "charlton": "charlton athletic"
   },
   "meta": {
     "note": "Merged England PL+CH updated standings into all-countries history file.",
