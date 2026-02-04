@@ -3,7 +3,209 @@
   "as_of": "2026-01-15",
   "unit": "EURm",
   "season": "2025-2026",
+
   "leagues": {
+    "Premier League": {
+      "man city": 1270.0,
+      "arsenal": 1310.0,
+      "chelsea": 1190.0,
+      "liverpool": 1040.0,
+      "tottenham": 873.5,
+      "man utd": 719.15,
+      "newcastle": 711.55,
+      "nottingham forest": 602.6,
+      "aston villa": 531.8,
+      "brighton": 526.5,
+      "crystal palace": 529.1,
+      "bournemouth": 414.45,
+      "brentford": 457.5,
+      "everton": 402.05,
+      "fulham": 357.95,
+      "sunderland": 361.75,
+      "wolves": 352.85,
+      "west ham united": 381.25,
+      "leeds united": 313.03,
+      "burnley": 249.65
+    },
+
+    "Championship": {
+      "ipswich town": 187.75,
+      "southampton": 166.4,
+      "coventry city": 156.8,
+      "leicester city": 145.4,
+      "sheffield united": 126.6,
+      "middlesbrough": 124.1,
+      "norwich city": 103.45,
+      "birmingham city": 94.5,
+      "west brom": 75.8,
+      "swansea city": 72.65,
+      "stoke city": 73.93,
+      "hull city": 61.55,
+      "bristol city": 78.0,
+      "watford": 56.25,
+      "millwall": 54.63,
+      "wrexham": 56.35,
+      "derby county": 53.38,
+      "queens park rangers": 51.38,
+      "preston north end": 43.75,
+      "blackburn rovers": 40.55,
+      "oxford united": 34.83,
+      "portsmouth": 33.18,
+      "charlton athletic": 31.6,
+      "sheffield wednesday": 19.9
+    },
+
+    "Ligue 1": {
+      "psg": 1190.0,
+      "olympique marseille": 387.8,
+      "as monaco": 351.55,
+      "rc strasbourg alsace": 316.75,
+      "losc lille": 232.0,
+      "olympique lyon": 218.1,
+      "stade rennais": 188.2,
+      "ogc nice": 165.0,
+      "rc lens": 115.15,
+      "paris": 95.25,
+      "toulouse": 107.95,
+      "nantes": 94.25,
+      "stade brestois 29": 83.4,
+      "lorient": 73.05,
+      "aj auxerre": 74.6,
+      "angers sco": 52.5,
+      "le havre": 50.0,
+      "metz": 47.6
+    },
+
+    "Ligue 2": {
+      "as saint etienne": 63.95,
+      "stade reims": 59.1,
+      "estac troyes": 27.85,
+      "montpellier hsc": 22.05,
+      "amiens": 17.65,
+      "usl dunkerque": 21.9,
+      "ea guingamp": 17.0,
+      "red star": 13.55,
+      "pau": 13.2,
+      "bastia": 11.85,
+      "grenoble foot 38": 11.7,
+      "as nancy lorraine": 9.9,
+      "clermont foot 63": 10.1,
+      "rodez af": 10.0,
+      "stade lavallois": 8.63,
+      "le mans": 8.33,
+      "annecy": 8.85,
+      "us boulogne": 6.85
+    },
+
+    "Bundesliga": {
+      "bayern munich": 980.95,
+      "borussia dortmund": 502.9,
+      "bayer 04 leverkusen": 431.25,
+      "rb leipzig": 410.75,
+      "eintracht frankfurt": 394.4,
+      "vfb stuttgart": 344.9,
+      "vfl wolfsburg": 236.2,
+      "tsg 1899 hoffenheim": 202.45,
+      "werder bremen": 195.8,
+      "freiburg": 182.2,
+      "borussia monchengladbach": 153.65,
+      "augsburg": 142.88,
+      "1 fsv mainz 05": 141.3,
+      "hamburger": 134.2,
+      "1 koln": 135.28,
+      "1 union berlin": 125.15,
+      "st pauli": 64.85,
+      "1 heidenheim 1846": 54.35
+    },
+
+    "Serie A": {
+      "inter milan": 670.3,
+      "juventus": 551.7,
+      "milan": 493.5,
+      "napoli": 466.8,
+      "atalanta bc": 412.6,
+      "as roma": 412.0,
+      "como 1907": 325.3,
+      "bologna 1909": 291.5,
+      "acf fiorentina": 253.45,
+      "ss lazio": 213.85,
+      "us sassuolo": 158.7,
+      "parma calcio 1913": 153.4,
+      "udinese calcio": 157.35,
+      "genoa cfc": 130.9,
+      "torino": 138.9,
+      "cagliari calcio": 125.8,
+      "pisa sporting club": 105.0,
+      "us lecce": 98.08,
+      "hellas verona": 97.6,
+      "us cremonese": 76.75
+    },
+
+    "La Liga": {
+      "real madrid": 1350.0,
+      "barcelona": 1130.0,
+      "atletico de madrid": 563.0,
+      "athletic bilbao": 303.0,
+      "villarreal": 263.8,
+      "real sociedad": 246.7,
+      "real betis balompie": 219.8,
+      "valencia": 160.0,
+      "girona": 146.5,
+      "celta de vigo": 146.4,
+      "sevilla": 131.6,
+      "rcd espanyol barcelona": 102.7,
+      "rayo vallecano": 96.8,
+      "elche": 101.1,
+      "ca osasuna": 88.5,
+      "levante": 87.9,
+      "rcd mallorca": 80.6,
+      "getafe": 68.6,
+      "real oviedo": 65.0,
+      "deportivo alaves": 69.5
+    },
+
+    "Eredivisie": {
+      "psv eindhoven": 275.0,
+      "feyenoord rotterdam": 236.15,
+      "ajax amsterdam": 163.0,
+      "az alkmaar": 146.88,
+      "utrecht": 81.85,
+      "twente enschede": 56.65,
+      "heerenveen": 43.83,
+      "nec nijmegen": 37.2,
+      "groningen": 33.05,
+      "go ahead eagles": 31.38,
+      "sparta rotterdam": 24.15,
+      "pec zwolle": 23.05,
+      "fortuna sittard": 17.63,
+      "excelsior rotterdam": 16.55,
+      "heracles almelo": 13.58,
+      "nac breda": 16.2,
+      "volendam": 12.75,
+      "telstar": 9.7
+    },
+
+    "Belgium First Division A": {
+      "club brugge kv": 194.1,
+      "krc genk": 142.65,
+      "union saint gilloise": 107.65,
+      "rsc anderlecht": 104.2,
+      "kaa gent": 59.95,
+      "royal antwerp": 44.55,
+      "standard liege": 40.5,
+      "kvc westerlo": 40.75,
+      "kv mechelen": 39.6,
+      "royal charleroi": 36.1,
+      "cercle brugge": 35.9,
+      "sint truidense vv": 33.4,
+      "oud heverlee leuven": 32.1,
+      "zulte waregem": 22.3,
+      "fcv dender eh": 18.8,
+      "raal la louviere": 15.2
+    }
+  },
+
+  "data": {
     "Premier League": {
       "man city": 1270.0,
       "arsenal": 1310.0,
@@ -195,8 +397,10 @@
       "raal la louviere": 15.2
     }
   },
+
   "aliases": {
     "inter": "inter milan",
+    "internazionale": "inter milan",
     "marseille": "olympique marseille",
     "auxerre": "aj auxerre",
     "lyon": "olympique lyon",
@@ -207,6 +411,7 @@
     "nice": "ogc nice",
     "lens": "rc lens",
     "saint etienne": "as saint etienne",
+    "st etienne": "as saint etienne",
     "guingamp": "ea guingamp",
     "dunkerque": "usl dunkerque",
     "montpellier": "montpellier hsc",
@@ -218,10 +423,14 @@
     "grenoble": "grenoble foot 38",
     "rodez": "rodez af",
     "1899 hoffenheim": "tsg 1899 hoffenheim",
+    "hoffenheim": "tsg 1899 hoffenheim",
     "1 heidenheim": "1 heidenheim 1846",
     "fsv mainz 05": "1 fsv mainz 05",
+    "mainz": "1 fsv mainz 05",
     "union berlin": "1 union berlin",
     "bayer leverkusen": "bayer 04 leverkusen",
+    "leverkusen": "bayer 04 leverkusen",
+    "koln": "1 koln",
     "pisa": "pisa sporting club",
     "verona": "hellas verona",
     "osasuna": "ca osasuna",
@@ -266,8 +475,18 @@
     "lazio": "ss lazio",
     "atalanta": "atalanta bc",
     "cremonese": "us cremonese",
-    "cagliari": "cagliari calcio"
+    "cagliari": "cagliari calcio",
+
+    "manchester united": "man utd",
+    "manchester city": "man city",
+    "tottenham hotspur": "tottenham",
+    "wolverhampton wanderers": "wolves",
+    "brighton and hove albion": "brighton",
+    "west bromwich albion": "west brom",
+    "psg": "psg",
+    "paris saint germain": "psg"
   },
+
   "meta": {
     "expected_team_counts": {
       "Premier League": 20,
@@ -303,885 +522,5 @@
       "Belgium First Division A": 0
     },
     "has_all_counts": true
-  },
-  "sources": {
-    "Premier League": {
-      "man city": {
-        "team_tm": "Manchester City",
-        "value_display": "€1.27bn",
-        "league_raw": "Premier League"
-      },
-      "arsenal": {
-        "team_tm": "Arsenal FC",
-        "value_display": "€1.31bn",
-        "league_raw": "Premier League"
-      },
-      "chelsea": {
-        "team_tm": "Chelsea FC",
-        "value_display": "€1.19bn",
-        "league_raw": "Premier League"
-      },
-      "liverpool": {
-        "team_tm": "Liverpool FC",
-        "value_display": "€1.04bn",
-        "league_raw": "Premier League"
-      },
-      "tottenham": {
-        "team_tm": "Tottenham Hotspur",
-        "value_display": "€873.50m",
-        "league_raw": "Premier League"
-      },
-      "man utd": {
-        "team_tm": "Manchester United",
-        "value_display": "€719.15m",
-        "league_raw": "Premier League"
-      },
-      "newcastle": {
-        "team_tm": "Newcastle United",
-        "value_display": "€711.55m",
-        "league_raw": "Premier League"
-      },
-      "nottingham forest": {
-        "team_tm": "Nottingham Forest",
-        "value_display": "€602.60m",
-        "league_raw": "Premier League"
-      },
-      "aston villa": {
-        "team_tm": "Aston Villa",
-        "value_display": "€531.80m",
-        "league_raw": "Premier League"
-      },
-      "brighton": {
-        "team_tm": "Brighton & Hove Albion",
-        "value_display": "€526.50m",
-        "league_raw": "Premier League"
-      },
-      "crystal palace": {
-        "team_tm": "Crystal Palace",
-        "value_display": "€529.10m",
-        "league_raw": "Premier League"
-      },
-      "bournemouth": {
-        "team_tm": "AFC Bournemouth",
-        "value_display": "€414.45m",
-        "league_raw": "Premier League"
-      },
-      "brentford": {
-        "team_tm": "Brentford FC",
-        "value_display": "€457.50m",
-        "league_raw": "Premier League"
-      },
-      "everton": {
-        "team_tm": "Everton FC",
-        "value_display": "€402.05m",
-        "league_raw": "Premier League"
-      },
-      "fulham": {
-        "team_tm": "Fulham FC",
-        "value_display": "€357.95m",
-        "league_raw": "Premier League"
-      },
-      "sunderland": {
-        "team_tm": "Sunderland AFC",
-        "value_display": "€361.75m",
-        "league_raw": "Premier League"
-      },
-      "wolves": {
-        "team_tm": "Wolverhampton Wanderers",
-        "value_display": "€352.85m",
-        "league_raw": "Premier League"
-      },
-      "west ham united": {
-        "team_tm": "West Ham United",
-        "value_display": "€381.25m",
-        "league_raw": "Premier League"
-      },
-      "leeds united": {
-        "team_tm": "Leeds United",
-        "value_display": "€313.03m",
-        "league_raw": "Premier League"
-      },
-      "burnley": {
-        "team_tm": "Burnley FC",
-        "value_display": "€249.65m",
-        "league_raw": "Premier League"
-      }
-    },
-    "Championship": {
-      "ipswich town": {
-        "team_tm": "Ipswich Town",
-        "value_display": "€187.75m",
-        "league_raw": "Championship"
-      },
-      "southampton": {
-        "team_tm": "Southampton FC",
-        "value_display": "€166.40m",
-        "league_raw": "Championship"
-      },
-      "coventry city": {
-        "team_tm": "Coventry City",
-        "value_display": "€156.80m",
-        "league_raw": "Championship"
-      },
-      "leicester city": {
-        "team_tm": "Leicester City",
-        "value_display": "€145.40m",
-        "league_raw": "Championship"
-      },
-      "sheffield united": {
-        "team_tm": "Sheffield United",
-        "value_display": "€126.60m",
-        "league_raw": "Championship"
-      },
-      "middlesbrough": {
-        "team_tm": "Middlesbrough FC",
-        "value_display": "€124.10m",
-        "league_raw": "Championship"
-      },
-      "norwich city": {
-        "team_tm": "Norwich City",
-        "value_display": "€103.45m",
-        "league_raw": "Championship"
-      },
-      "birmingham city": {
-        "team_tm": "Birmingham City",
-        "value_display": "€94.50m",
-        "league_raw": "Championship"
-      },
-      "west brom": {
-        "team_tm": "West Bromwich Albion",
-        "value_display": "€75.80m",
-        "league_raw": "Championship"
-      },
-      "swansea city": {
-        "team_tm": "Swansea City",
-        "value_display": "€72.65m",
-        "league_raw": "Championship"
-      },
-      "stoke city": {
-        "team_tm": "Stoke City",
-        "value_display": "€73.93m",
-        "league_raw": "Championship"
-      },
-      "hull city": {
-        "team_tm": "Hull City",
-        "value_display": "€61.55m",
-        "league_raw": "Championship"
-      },
-      "bristol city": {
-        "team_tm": "Bristol City",
-        "value_display": "€78.00m",
-        "league_raw": "Championship"
-      },
-      "watford": {
-        "team_tm": "Watford FC",
-        "value_display": "€56.25m",
-        "league_raw": "Championship"
-      },
-      "millwall": {
-        "team_tm": "Millwall FC",
-        "value_display": "€54.63m",
-        "league_raw": "Championship"
-      },
-      "wrexham": {
-        "team_tm": "Wrexham AFC",
-        "value_display": "€56.35m",
-        "league_raw": "Championship"
-      },
-      "derby county": {
-        "team_tm": "Derby County",
-        "value_display": "€53.38m",
-        "league_raw": "Championship"
-      },
-      "queens park rangers": {
-        "team_tm": "Queens Park Rangers",
-        "value_display": "€51.38m",
-        "league_raw": "Championship"
-      },
-      "preston north end": {
-        "team_tm": "Preston North End",
-        "value_display": "€43.75m",
-        "league_raw": "Championship"
-      },
-      "blackburn rovers": {
-        "team_tm": "Blackburn Rovers",
-        "value_display": "€40.55m",
-        "league_raw": "Championship"
-      },
-      "oxford united": {
-        "team_tm": "Oxford United",
-        "value_display": "€34.83m",
-        "league_raw": "Championship"
-      },
-      "portsmouth": {
-        "team_tm": "Portsmouth FC",
-        "value_display": "€33.18m",
-        "league_raw": "Championship"
-      },
-      "charlton athletic": {
-        "team_tm": "Charlton Athletic",
-        "value_display": "€31.60m",
-        "league_raw": "Championship"
-      },
-      "sheffield wednesday": {
-        "team_tm": "Sheffield Wednesday",
-        "value_display": "€19.90m",
-        "league_raw": "Championship"
-      }
-    },
-    "Ligue 1": {
-      "psg": {
-        "team_tm": "Paris Saint-Germain",
-        "value_display": "€1.19bn",
-        "league_raw": "Ligue 1"
-      },
-      "olympique marseille": {
-        "team_tm": "Olympique Marseille",
-        "value_display": "€387.80m",
-        "league_raw": "Ligue 1"
-      },
-      "as monaco": {
-        "team_tm": "AS Monaco",
-        "value_display": "€351.55m",
-        "league_raw": "Ligue 1"
-      },
-      "rc strasbourg alsace": {
-        "team_tm": "RC Strasbourg Alsace",
-        "value_display": "€316.75m",
-        "league_raw": "Ligue 1"
-      },
-      "losc lille": {
-        "team_tm": "LOSC Lille",
-        "value_display": "€232.00m",
-        "league_raw": "Ligue 1"
-      },
-      "olympique lyon": {
-        "team_tm": "Olympique Lyon",
-        "value_display": "€218.10m",
-        "league_raw": "Ligue 1"
-      },
-      "stade rennais": {
-        "team_tm": "Stade Rennais FC",
-        "value_display": "€188.20m",
-        "league_raw": "Ligue 1"
-      },
-      "ogc nice": {
-        "team_tm": "OGC Nice",
-        "value_display": "€165.00m",
-        "league_raw": "Ligue 1"
-      },
-      "rc lens": {
-        "team_tm": "RC Lens",
-        "value_display": "€115.15m",
-        "league_raw": "Ligue 1"
-      },
-      "paris": {
-        "team_tm": "Paris FC",
-        "value_display": "€95.25m",
-        "league_raw": "Ligue 1"
-      },
-      "toulouse": {
-        "team_tm": "FC Toulouse",
-        "value_display": "€107.95m",
-        "league_raw": "Ligue 1"
-      },
-      "nantes": {
-        "team_tm": "FC Nantes",
-        "value_display": "€94.25m",
-        "league_raw": "Ligue 1"
-      },
-      "stade brestois 29": {
-        "team_tm": "Stade Brestois 29",
-        "value_display": "€83.40m",
-        "league_raw": "Ligue 1"
-      },
-      "lorient": {
-        "team_tm": "FC Lorient",
-        "value_display": "€73.05m",
-        "league_raw": "Ligue 1"
-      },
-      "aj auxerre": {
-        "team_tm": "AJ Auxerre",
-        "value_display": "€74.60m",
-        "league_raw": "Ligue 1"
-      },
-      "angers sco": {
-        "team_tm": "Angers SCO",
-        "value_display": "€52.50m",
-        "league_raw": "Ligue 1"
-      },
-      "le havre": {
-        "team_tm": "Le Havre AC",
-        "value_display": "€50.00m",
-        "league_raw": "Ligue 1"
-      },
-      "metz": {
-        "team_tm": "FC Metz",
-        "value_display": "€47.60m",
-        "league_raw": "Ligue 1"
-      }
-    },
-    "Ligue 2": {
-      "as saint etienne": {
-        "team_tm": "AS Saint-Étienne",
-        "value_display": "€63.95m",
-        "league_raw": "Ligue 2"
-      },
-      "stade reims": {
-        "team_tm": "Stade Reims",
-        "value_display": "€59.10m",
-        "league_raw": "Ligue 2"
-      },
-      "estac troyes": {
-        "team_tm": "ESTAC Troyes",
-        "value_display": "€27.85m",
-        "league_raw": "Ligue 2"
-      },
-      "montpellier hsc": {
-        "team_tm": "Montpellier HSC",
-        "value_display": "€22.05m",
-        "league_raw": "Ligue 2"
-      },
-      "amiens": {
-        "team_tm": "Amiens SC",
-        "value_display": "€17.65m",
-        "league_raw": "Ligue 2"
-      },
-      "usl dunkerque": {
-        "team_tm": "USL Dunkerque",
-        "value_display": "€21.90m",
-        "league_raw": "Ligue 2"
-      },
-      "ea guingamp": {
-        "team_tm": "EA Guingamp",
-        "value_display": "€17.00m",
-        "league_raw": "Ligue 2"
-      },
-      "red star": {
-        "team_tm": "Red Star FC",
-        "value_display": "€13.55m",
-        "league_raw": "Ligue 2"
-      },
-      "pau": {
-        "team_tm": "Pau FC",
-        "value_display": "€13.20m",
-        "league_raw": "Ligue 2"
-      },
-      "bastia": {
-        "team_tm": "SC Bastia",
-        "value_display": "€11.85m",
-        "league_raw": "Ligue 2"
-      },
-      "grenoble foot 38": {
-        "team_tm": "Grenoble Foot 38",
-        "value_display": "€11.70m",
-        "league_raw": "Ligue 2"
-      },
-      "as nancy lorraine": {
-        "team_tm": "AS Nancy-Lorraine",
-        "value_display": "€9.90m",
-        "league_raw": "Ligue 2"
-      },
-      "clermont foot 63": {
-        "team_tm": "Clermont Foot 63",
-        "value_display": "€10.10m",
-        "league_raw": "Ligue 2"
-      },
-      "rodez af": {
-        "team_tm": "Rodez AF",
-        "value_display": "€10.00m",
-        "league_raw": "Ligue 2"
-      },
-      "stade lavallois": {
-        "team_tm": "Stade Lavallois",
-        "value_display": "€8.63m",
-        "league_raw": "Ligue 2"
-      },
-      "le mans": {
-        "team_tm": "Le Mans FC",
-        "value_display": "€8.33m",
-        "league_raw": "Ligue 2"
-      },
-      "annecy": {
-        "team_tm": "FC Annecy",
-        "value_display": "€8.85m",
-        "league_raw": "Ligue 2"
-      },
-      "us boulogne": {
-        "team_tm": "US Boulogne",
-        "value_display": "€6.85m",
-        "league_raw": "Ligue 2"
-      }
-    },
-    "Bundesliga": {
-      "bayern munich": {
-        "team_tm": "Bayern Munich",
-        "value_display": "€980.95m",
-        "league_raw": "Bundesliga"
-      },
-      "borussia dortmund": {
-        "team_tm": "Borussia Dortmund",
-        "value_display": "€502.90m",
-        "league_raw": "Bundesliga"
-      },
-      "bayer 04 leverkusen": {
-        "team_tm": "Bayer 04 Leverkusen",
-        "value_display": "€431.25m",
-        "league_raw": "Bundesliga"
-      },
-      "rb leipzig": {
-        "team_tm": "RB Leipzig",
-        "value_display": "€410.75m",
-        "league_raw": "Bundesliga"
-      },
-      "eintracht frankfurt": {
-        "team_tm": "Eintracht Frankfurt",
-        "value_display": "€394.40m",
-        "league_raw": "Bundesliga"
-      },
-      "vfb stuttgart": {
-        "team_tm": "VfB Stuttgart",
-        "value_display": "€344.90m",
-        "league_raw": "Bundesliga"
-      },
-      "vfl wolfsburg": {
-        "team_tm": "VfL Wolfsburg",
-        "value_display": "€236.20m",
-        "league_raw": "Bundesliga"
-      },
-      "tsg 1899 hoffenheim": {
-        "team_tm": "TSG 1899 Hoffenheim",
-        "value_display": "€202.45m",
-        "league_raw": "Bundesliga"
-      },
-      "werder bremen": {
-        "team_tm": "SV Werder Bremen",
-        "value_display": "€195.80m",
-        "league_raw": "Bundesliga"
-      },
-      "freiburg": {
-        "team_tm": "SC Freiburg",
-        "value_display": "€182.20m",
-        "league_raw": "Bundesliga"
-      },
-      "borussia monchengladbach": {
-        "team_tm": "Borussia Mönchengladbach",
-        "value_display": "€153.65m",
-        "league_raw": "Bundesliga"
-      },
-      "augsburg": {
-        "team_tm": "FC Augsburg",
-        "value_display": "€142.88m",
-        "league_raw": "Bundesliga"
-      },
-      "1 fsv mainz 05": {
-        "team_tm": "1.FSV Mainz 05",
-        "value_display": "€141.30m",
-        "league_raw": "Bundesliga"
-      },
-      "hamburger": {
-        "team_tm": "Hamburger SV",
-        "value_display": "€134.20m",
-        "league_raw": "Bundesliga"
-      },
-      "1 koln": {
-        "team_tm": "1.FC Köln",
-        "value_display": "€135.28m",
-        "league_raw": "Bundesliga"
-      },
-      "1 union berlin": {
-        "team_tm": "1.FC Union Berlin",
-        "value_display": "€125.15m",
-        "league_raw": "Bundesliga"
-      },
-      "st pauli": {
-        "team_tm": "FC St. Pauli",
-        "value_display": "€64.85m",
-        "league_raw": "Bundesliga"
-      },
-      "1 heidenheim 1846": {
-        "team_tm": "1.FC Heidenheim 1846",
-        "value_display": "€54.35m",
-        "league_raw": "Bundesliga"
-      }
-    },
-    "Serie A": {
-      "inter milan": {
-        "team_tm": "Inter Milan",
-        "value_display": "€670.30m",
-        "league_raw": "Serie A"
-      },
-      "juventus": {
-        "team_tm": "Juventus FC",
-        "value_display": "€551.70m",
-        "league_raw": "Serie A"
-      },
-      "milan": {
-        "team_tm": "AC Milan",
-        "value_display": "€493.50m",
-        "league_raw": "Serie A"
-      },
-      "napoli": {
-        "team_tm": "SSC Napoli",
-        "value_display": "€466.80m",
-        "league_raw": "Serie A"
-      },
-      "atalanta bc": {
-        "team_tm": "Atalanta BC",
-        "value_display": "€412.60m",
-        "league_raw": "Serie A"
-      },
-      "as roma": {
-        "team_tm": "AS Roma",
-        "value_display": "€412.00m",
-        "league_raw": "Serie A"
-      },
-      "como 1907": {
-        "team_tm": "Como 1907",
-        "value_display": "€325.30m",
-        "league_raw": "Serie A"
-      },
-      "bologna 1909": {
-        "team_tm": "Bologna FC 1909",
-        "value_display": "€291.50m",
-        "league_raw": "Serie A"
-      },
-      "acf fiorentina": {
-        "team_tm": "ACF Fiorentina",
-        "value_display": "€253.45m",
-        "league_raw": "Serie A"
-      },
-      "ss lazio": {
-        "team_tm": "SS Lazio",
-        "value_display": "€213.85m",
-        "league_raw": "Serie A"
-      },
-      "us sassuolo": {
-        "team_tm": "US Sassuolo",
-        "value_display": "€158.70m",
-        "league_raw": "Serie A"
-      },
-      "parma calcio 1913": {
-        "team_tm": "Parma Calcio 1913",
-        "value_display": "€153.40m",
-        "league_raw": "Serie A"
-      },
-      "udinese calcio": {
-        "team_tm": "Udinese Calcio",
-        "value_display": "€157.35m",
-        "league_raw": "Serie A"
-      },
-      "genoa cfc": {
-        "team_tm": "Genoa CFC",
-        "value_display": "€130.90m",
-        "league_raw": "Serie A"
-      },
-      "torino": {
-        "team_tm": "Torino FC",
-        "value_display": "€138.90m",
-        "league_raw": "Serie A"
-      },
-      "cagliari calcio": {
-        "team_tm": "Cagliari Calcio",
-        "value_display": "€125.80m",
-        "league_raw": "Serie A"
-      },
-      "pisa sporting club": {
-        "team_tm": "Pisa Sporting Club",
-        "value_display": "€105.00m",
-        "league_raw": "Serie A"
-      },
-      "us lecce": {
-        "team_tm": "US Lecce",
-        "value_display": "€98.08m",
-        "league_raw": "Serie A"
-      },
-      "hellas verona": {
-        "team_tm": "Hellas Verona",
-        "value_display": "€97.60m",
-        "league_raw": "Serie A"
-      },
-      "us cremonese": {
-        "team_tm": "US Cremonese",
-        "value_display": "€76.75m",
-        "league_raw": "Serie A"
-      }
-    },
-    "La Liga": {
-      "real madrid": {
-        "team_tm": "Real Madrid",
-        "value_display": "€1.35bn",
-        "league_raw": "LaLiga"
-      },
-      "barcelona": {
-        "team_tm": "FC Barcelona",
-        "value_display": "€1.13bn",
-        "league_raw": "LaLiga"
-      },
-      "atletico de madrid": {
-        "team_tm": "Atlético de Madrid",
-        "value_display": "€563.00m",
-        "league_raw": "LaLiga"
-      },
-      "athletic bilbao": {
-        "team_tm": "Athletic Bilbao",
-        "value_display": "€303.00m",
-        "league_raw": "LaLiga"
-      },
-      "villarreal": {
-        "team_tm": "Villarreal CF",
-        "value_display": "€263.80m",
-        "league_raw": "LaLiga"
-      },
-      "real sociedad": {
-        "team_tm": "Real Sociedad",
-        "value_display": "€246.70m",
-        "league_raw": "LaLiga"
-      },
-      "real betis balompie": {
-        "team_tm": "Real Betis Balompié",
-        "value_display": "€219.80m",
-        "league_raw": "LaLiga"
-      },
-      "valencia": {
-        "team_tm": "Valencia CF",
-        "value_display": "€160.00m",
-        "league_raw": "LaLiga"
-      },
-      "girona": {
-        "team_tm": "Girona FC",
-        "value_display": "€146.50m",
-        "league_raw": "LaLiga"
-      },
-      "celta de vigo": {
-        "team_tm": "Celta de Vigo",
-        "value_display": "€146.40m",
-        "league_raw": "LaLiga"
-      },
-      "sevilla": {
-        "team_tm": "Sevilla FC",
-        "value_display": "€131.60m",
-        "league_raw": "LaLiga"
-      },
-      "rcd espanyol barcelona": {
-        "team_tm": "RCD Espanyol Barcelona",
-        "value_display": "€102.70m",
-        "league_raw": "LaLiga"
-      },
-      "rayo vallecano": {
-        "team_tm": "Rayo Vallecano",
-        "value_display": "€96.80m",
-        "league_raw": "LaLiga"
-      },
-      "elche": {
-        "team_tm": "Elche CF",
-        "value_display": "€101.10m",
-        "league_raw": "LaLiga"
-      },
-      "ca osasuna": {
-        "team_tm": "CA Osasuna",
-        "value_display": "€88.50m",
-        "league_raw": "LaLiga"
-      },
-      "levante": {
-        "team_tm": "Levante UD",
-        "value_display": "€87.90m",
-        "league_raw": "LaLiga"
-      },
-      "rcd mallorca": {
-        "team_tm": "RCD Mallorca",
-        "value_display": "€80.60m",
-        "league_raw": "LaLiga"
-      },
-      "getafe": {
-        "team_tm": "Getafe CF",
-        "value_display": "€68.60m",
-        "league_raw": "LaLiga"
-      },
-      "real oviedo": {
-        "team_tm": "Real Oviedo",
-        "value_display": "€65.00m",
-        "league_raw": "LaLiga"
-      },
-      "deportivo alaves": {
-        "team_tm": "Deportivo Alavés",
-        "value_display": "€69.50m",
-        "league_raw": "LaLiga"
-      }
-    },
-    "Eredivisie": {
-      "psv eindhoven": {
-        "team_tm": "PSV Eindhoven",
-        "value_display": "€275.00m",
-        "league_raw": "Eredivisie"
-      },
-      "feyenoord rotterdam": {
-        "team_tm": "Feyenoord Rotterdam",
-        "value_display": "€236.15m",
-        "league_raw": "Eredivisie"
-      },
-      "ajax amsterdam": {
-        "team_tm": "Ajax Amsterdam",
-        "value_display": "€163.00m",
-        "league_raw": "Eredivisie"
-      },
-      "az alkmaar": {
-        "team_tm": "AZ Alkmaar",
-        "value_display": "€146.88m",
-        "league_raw": "Eredivisie"
-      },
-      "utrecht": {
-        "team_tm": "FC Utrecht",
-        "value_display": "€81.85m",
-        "league_raw": "Eredivisie"
-      },
-      "twente enschede": {
-        "team_tm": "Twente Enschede FC",
-        "value_display": "€56.65m",
-        "league_raw": "Eredivisie"
-      },
-      "heerenveen": {
-        "team_tm": "SC Heerenveen",
-        "value_display": "€43.83m",
-        "league_raw": "Eredivisie"
-      },
-      "nec nijmegen": {
-        "team_tm": "NEC Nijmegen",
-        "value_display": "€37.20m",
-        "league_raw": "Eredivisie"
-      },
-      "groningen": {
-        "team_tm": "FC Groningen",
-        "value_display": "€33.05m",
-        "league_raw": "Eredivisie"
-      },
-      "go ahead eagles": {
-        "team_tm": "Go Ahead Eagles",
-        "value_display": "€31.38m",
-        "league_raw": "Eredivisie"
-      },
-      "sparta rotterdam": {
-        "team_tm": "Sparta Rotterdam",
-        "value_display": "€24.15m",
-        "league_raw": "Eredivisie"
-      },
-      "pec zwolle": {
-        "team_tm": "PEC Zwolle",
-        "value_display": "€23.05m",
-        "league_raw": "Eredivisie"
-      },
-      "fortuna sittard": {
-        "team_tm": "Fortuna Sittard",
-        "value_display": "€17.63m",
-        "league_raw": "Eredivisie"
-      },
-      "excelsior rotterdam": {
-        "team_tm": "Excelsior Rotterdam",
-        "value_display": "€16.55m",
-        "league_raw": "Eredivisie"
-      },
-      "heracles almelo": {
-        "team_tm": "Heracles Almelo",
-        "value_display": "€13.58m",
-        "league_raw": "Eredivisie"
-      },
-      "nac breda": {
-        "team_tm": "NAC Breda",
-        "value_display": "€16.20m",
-        "league_raw": "Eredivisie"
-      },
-      "volendam": {
-        "team_tm": "FC Volendam",
-        "value_display": "€12.75m",
-        "league_raw": "Eredivisie"
-      },
-      "telstar": {
-        "team_tm": "SC Telstar",
-        "value_display": "€9.70m",
-        "league_raw": "Eredivisie"
-      }
-    },
-    "Belgium First Division A": {
-      "club brugge kv": {
-        "team_tm": "Club Brugge KV",
-        "value_display": "€194.10m",
-        "league_raw": "Jupiler Pro League"
-      },
-      "krc genk": {
-        "team_tm": "KRC Genk",
-        "value_display": "€142.65m",
-        "league_raw": "Jupiler Pro League"
-      },
-      "union saint gilloise": {
-        "team_tm": "Union Saint-Gilloise",
-        "value_display": "€107.65m",
-        "league_raw": "Jupiler Pro League"
-      },
-      "rsc anderlecht": {
-        "team_tm": "RSC Anderlecht",
-        "value_display": "€104.20m",
-        "league_raw": "Jupiler Pro League"
-      },
-      "kaa gent": {
-        "team_tm": "KAA Gent",
-        "value_display": "€59.95m",
-        "league_raw": "Jupiler Pro League"
-      },
-      "royal antwerp": {
-        "team_tm": "Royal Antwerp FC",
-        "value_display": "€44.55m",
-        "league_raw": "Jupiler Pro League"
-      },
-      "standard liege": {
-        "team_tm": "Standard Liège",
-        "value_display": "€40.50m",
-        "league_raw": "Jupiler Pro League"
-      },
-      "kvc westerlo": {
-        "team_tm": "KVC Westerlo",
-        "value_display": "€40.75m",
-        "league_raw": "Jupiler Pro League"
-      },
-      "kv mechelen": {
-        "team_tm": "KV Mechelen",
-        "value_display": "€39.60m",
-        "league_raw": "Jupiler Pro League"
-      },
-      "royal charleroi": {
-        "team_tm": "Royal Charleroi SC",
-        "value_display": "€36.10m",
-        "league_raw": "Jupiler Pro League"
-      },
-      "cercle brugge": {
-        "team_tm": "Cercle Brugge",
-        "value_display": "€35.90m",
-        "league_raw": "Jupiler Pro League"
-      },
-      "sint truidense vv": {
-        "team_tm": "Sint-Truidense VV",
-        "value_display": "€33.40m",
-        "league_raw": "Jupiler Pro League"
-      },
-      "oud heverlee leuven": {
-        "team_tm": "Oud-Heverlee Leuven",
-        "value_display": "€32.10m",
-        "league_raw": "Jupiler Pro League"
-      },
-      "zulte waregem": {
-        "team_tm": "Zulte Waregem",
-        "value_display": "€22.30m",
-        "league_raw": "Jupiler Pro League"
-      },
-      "fcv dender eh": {
-        "team_tm": "FCV Dender EH",
-        "value_display": "€18.80m",
-        "league_raw": "Jupiler Pro League"
-      },
-      "raal la louviere": {
-        "team_tm": "RAAL La Louvière",
-        "value_display": "€15.20m",
-        "league_raw": "Jupiler Pro League"
-      }
-    }
   }
 }
