@@ -1,19 +1,28 @@
 # filename: src/analysis/friday_shortlist_v3.py
 # ============================================================
-# FRIDAY SHORTLIST v3.35 — CoreBet + FunBet + DrawBet (PRODUCTION)
+# FRIDAY SHORTLIST v3.36 — CoreBet + FunBet + DrawBet (PRODUCTION)
 #
-# Key behavior:
-# - copy_play NEVER has null date/time/league for Double/System
-# - STRICT ODDS: if flags.odds_strict_ok missing, fallback to odds_match.score >= STRICT_ODDS_SCORE
-# - FunBet pool: dynamic primary fun picks in [FUN_PRIMARY_MIN..FUN_PRIMARY_MAX]
-#   based on strength; fill remaining slots from Core singles to reach 7
-# - DrawBet can be 0; that's fine.
+# Patch v3.36 (this package):
+#   1) QUALITY GATE (pre-filter) via src/analysis/quality_gate_v1.py
+#   2) CORE rules:
+#      - Max 7 TOTAL bets (singles + doubles_count)
+#      - Doubles only if BOTH legs are "low" (< 1.60) and paired among themselves
+#        (no mixing low+single >=1.60). Otherwise, NO doubles.
+#   3) Output adds display-friendly blocks for UI layouts (bankroll summary + system line)
+#
+# Key behavior kept:
+#   - copy_play NEVER has null date/time/league for Double/System
+#   - STRICT ODDS: if flags.odds_strict_ok missing, fallback to odds_match.score >= STRICT_ODDS_SCORE
+#   - FunBet pool: dynamic primary fun picks in [FUN_PRIMARY_MIN..FUN_PRIMARY_MAX]
+#   - DrawBet can be 0; that's fine.
 # ============================================================
 
 import os
 import json
 from datetime import datetime, date
 from math import comb
+
+from src.analysis.quality_gate_v1 import fixture_quality_score
 
 THURSDAY_REPORT_PATH = os.getenv("THURSDAY_REPORT_PATH", "logs/thursday_report_v3.json")
 FRIDAY_REPORT_PATH   = os.getenv("FRIDAY_REPORT_PATH",   "logs/friday_shortlist_v3.json")
@@ -36,6 +45,11 @@ ODDS_MATCH_MIN_SCORE_DRAW = float(os.getenv("ODDS_MATCH_MIN_SCORE_DRAW", "0.70")
 CORE_MIN_CONFIDENCE = float(os.getenv("CORE_MIN_CONFIDENCE", "0.50"))
 FUN_MIN_CONFIDENCE  = float(os.getenv("FUN_MIN_CONFIDENCE",  "0.45"))
 DRAW_MIN_CONFIDENCE = float(os.getenv("DRAW_MIN_CONFIDENCE", "0.50"))
+
+# QUALITY gate thresholds (new)
+CORE_MIN_QUALITY = float(os.getenv("CORE_MIN_QUALITY", "0.70"))
+FUN_MIN_QUALITY  = float(os.getenv("FUN_MIN_QUALITY",  "0.60"))
+DRAW_MIN_QUALITY = float(os.getenv("DRAW_MIN_QUALITY", "0.70"))
 
 # overlap toggle (default false). User is ok with overlap.
 FUN_AVOID_CORE_OVERLAP = os.getenv("FUN_AVOID_CORE_OVERLAP", "false").lower() == "true"
@@ -201,12 +215,16 @@ def _odds_from_fx(fx, code: str):
 def build_candidates(fixtures):
     out = []
     for fx in fixtures:
+        # compute once per fixture
+        q = fixture_quality_score(fx)
+
         for code in ["1","2","X","O25","U25"]:
             odds = _odds_from_fx(fx, code)
             if odds is None or odds <= 1.0:
                 continue
             if odds > HARD_MAX_ODDS:
                 continue
+
             out.append({
                 "fixture_id": fx.get("fixture_id"),
                 "date": fx.get("date"),
@@ -219,6 +237,7 @@ def build_candidates(fixtures):
                 "prob": _prob_from_fx(fx, code),
                 "ev": _ev_from_fx(fx, code),
                 "confidence": safe_float((fx.get("flags") or {}).get("confidence"), None),
+                "quality": q,
                 "fx": fx,
             })
     return out
@@ -228,7 +247,9 @@ CORE_MIN_ODDS = float(os.getenv("CORE_MIN_ODDS", "1.60"))
 CORE_MAX_ODDS = float(os.getenv("CORE_MAX_ODDS", "2.10"))
 CORE_LOW_MIN  = float(os.getenv("CORE_LOW_MIN", "1.30"))
 CORE_LOW_MAX  = float(os.getenv("CORE_LOW_MAX", "1.60"))
-CORE_MAX_SINGLES = int(os.getenv("CORE_MAX_SINGLES", "8"))
+
+# user requirement: max 7 TOTAL bets (singles + doubles)
+CORE_MAX_TOTAL_BETS = int(os.getenv("CORE_MAX_TOTAL_BETS", "7"))
 
 def core_stake_ladder(odds: float) -> float:
     if 1.60 <= odds <= 1.75:
@@ -255,8 +276,14 @@ def pick_core(cands, bankroll_core):
 
     singles_pool = []
     low_pool = []
+
     for p in cands:
         fx = p["fx"]
+
+        # QUALITY GATE (Core)
+        if safe_float(p.get("quality"), 0.0) < CORE_MIN_QUALITY:
+            continue
+
         if p["market_code"] == "X":
             continue
         if not odds_match_ok(fx, ODDS_MATCH_MIN_SCORE_CORE, CORE_REQUIRE_STRICT_ODDS):
@@ -272,54 +299,69 @@ def pick_core(cands, bankroll_core):
         if odds is None or evv is None or pr is None:
             continue
 
+        # existing under constraint
         if p["market_code"] == "U25" and pr < 0.58:
             continue
 
+        # singles band
         if CORE_MIN_ODDS <= odds <= CORE_MAX_ODDS:
             st = core_stake_ladder(odds)
             if st > 0:
                 singles_pool.append({**p, "stake": st})
+
+        # low band (for possible double only)
         elif CORE_LOW_MIN <= odds < CORE_LOW_MAX:
             low_pool.append(p)
 
     singles_pool.sort(key=_rank_key, reverse=True)
     low_pool.sort(key=_rank_key, reverse=True)
 
+    # ---- CORE DOUBLES RULE (NEW):
+    # Only if we have TWO low picks, and pair low-low only.
+    # One double max.
+    doubles = []
+    if len(low_pool) >= 2:
+        leg1 = None
+        leg2 = None
+        used_match = set()
+        for a in low_pool:
+            if a["match"] in used_match:
+                continue
+            leg1 = a
+            used_match.add(a["match"])
+            break
+        if leg1 is not None:
+            for b in low_pool:
+                if b["match"] == leg1["match"]:
+                    continue
+                if b["match"] in used_match:
+                    continue
+                leg2 = b
+                break
+
+        if leg1 is not None and leg2 is not None:
+            combo = safe_float(leg1["odds"], 1.0) * safe_float(leg2["odds"], 1.0)
+            doubles.append({
+                "legs": [_strip_leg(leg1), _strip_leg(leg2)],
+                "combo_odds": round(combo, 2),
+                "stake": core_double_stake(combo),
+                "tag": "core_double",
+            })
+
+    # ---- singles max is based on total cap 7
+    max_singles = max(0, CORE_MAX_TOTAL_BETS - len(doubles))
+
     singles = []
     used = set()
     for p in singles_pool:
-        if len(singles) >= CORE_MAX_SINGLES:
+        if len(singles) >= max_singles:
             break
         if p["match"] in used:
             continue
         singles.append(_strip_pick(p, tag="core_single"))
         used.add(p["match"])
 
-    doubles = []
-    if low_pool:
-        partner_pool = singles_pool[:]
-        partner_pool.sort(key=_rank_key, reverse=True)
-        used_d = set()
-        for leg1 in low_pool:
-            if len(doubles) >= 2:
-                break
-            for leg2 in partner_pool:
-                if leg2["match"] == leg1["match"]:
-                    continue
-                if leg1["match"] in used_d or leg2["match"] in used_d:
-                    continue
-                combo = safe_float(leg1["odds"], 1.0) * safe_float(leg2["odds"], 1.0)
-                if combo < 2.0:
-                    continue
-                doubles.append({
-                    "legs": [_strip_leg(leg1), _strip_leg(leg2)],
-                    "combo_odds": round(combo, 2),
-                    "stake": core_double_stake(combo),
-                    "tag": "core_double",
-                })
-                used_d.add(leg1["match"]); used_d.add(leg2["match"])
-                break
-
+    # ---- exposure scaling
     open_total = sum(x["stake"] for x in singles) + sum(d["stake"] for d in doubles)
     scale = 1.0
     if cap > 0 and open_total > cap and open_total > 0:
@@ -365,6 +407,7 @@ def _as_candidate_from_stripped_pick(sp: dict):
         "prob": safe_float(sp.get("prob"), None),
         "ev": safe_float(sp.get("ev"), None),
         "confidence": safe_float(sp.get("confidence"), None),
+        "quality": safe_float(sp.get("quality"), None),
         "fx": {},
     }
 
@@ -377,7 +420,6 @@ def _is_strong_fun(p):
     return (evv >= FUN_STRONG_EV) and (conf >= FUN_STRONG_CONF) and (pr >= FUN_STRONG_PROB)
 
 def _compute_primary_n(picks_total, target_n: int) -> int:
-    # If fixed is set, honor it.
     if FUN_PRIMARY_PICKS_FIXED:
         try:
             fx = int(FUN_PRIMARY_PICKS_FIXED)
@@ -385,17 +427,14 @@ def _compute_primary_n(picks_total, target_n: int) -> int:
         except Exception:
             pass
 
-    # Dynamic 3..5 based on strong picks available.
     strong_cnt = sum(1 for p in picks_total if _is_strong_fun(p))
     lo = max(0, min(target_n, int(FUN_PRIMARY_MIN)))
     hi = max(lo, min(target_n, int(FUN_PRIMARY_MAX)))
-    # Choose within [lo..hi], leaning to 5 if we have many strong.
     n = strong_cnt
     if n < lo:
         n = lo
     if n > hi:
         n = hi
-    # Can't exceed available picks_total
     return min(n, len(picks_total))
 
 def pick_fun(cands, bankroll_fun, core_singles):
@@ -411,6 +450,11 @@ def pick_fun(cands, bankroll_fun, core_singles):
     pool_cands = []
     for p in cands:
         fx = p["fx"]
+
+        # QUALITY GATE (Fun)
+        if safe_float(p.get("quality"), 0.0) < FUN_MIN_QUALITY:
+            continue
+
         if not fun_pick_filter(p):
             continue
         if FUN_AVOID_CORE_OVERLAP and p.get("fixture_id") in core_fixture_ids:
@@ -434,7 +478,6 @@ def pick_fun(cands, bankroll_fun, core_singles):
 
     pool_cands.sort(key=_rank_key, reverse=True)
 
-    # picks_total: best unique matches from fun candidates
     picks_total = []
     used_matches = set()
     for p in pool_cands:
@@ -445,14 +488,13 @@ def pick_fun(cands, bankroll_fun, core_singles):
         if len(picks_total) >= FUN_MAX_PICKS:
             break
 
-    # Build system pool to target size (default 7)
     target_n = max(5, min(7, int(FUN_TARGET_POOL)))
     primary_n = _compute_primary_n(picks_total, target_n)
 
     pool = []
     pool_used = set()
 
-    # 1) take primary fun picks (dynamic 3..5)
+    # 1) primary fun picks
     for p in picks_total:
         if p["match"] in pool_used:
             continue
@@ -486,7 +528,7 @@ def pick_fun(cands, bankroll_fun, core_singles):
             pool.append(p)
             pool_used.add(p["match"])
 
-    # Final clamp to 7/6/5
+    # clamp 7/6/5
     if len(pool) >= 7:
         pool = pool[:7]
     elif len(pool) >= 6:
@@ -547,6 +589,11 @@ def pick_draw(cands, bankroll_draw):
     draws = []
     for p in cands:
         fx = p["fx"]
+
+        # QUALITY GATE (Draw)
+        if safe_float(p.get("quality"), 0.0) < DRAW_MIN_QUALITY:
+            continue
+
         if p["market_code"] != "X":
             continue
         if not odds_match_ok(fx, ODDS_MATCH_MIN_SCORE_DRAW, DRAW_REQUIRE_STRICT_ODDS):
@@ -629,6 +676,7 @@ def _strip_pick(p, tag="pick"):
         "prob": p.get("prob"),
         "ev": p.get("ev"),
         "confidence": p.get("confidence"),
+        "quality": p.get("quality"),
         "stake": round(float(p.get("stake") or 0.0), 2) if "stake" in p else None,
         "tag": tag,
     }
@@ -726,6 +774,11 @@ def build_copy_play(core, fun, draw, window: dict):
         x.pop("_sort_key", None)
     return lines
 
+def _system_line(system: dict, label_prefix: str) -> str | None:
+    if not system or not system.get("label"):
+        return None
+    return f"{label_prefix}: {system.get('label')} — Columns: {system.get('columns')} — Min Hits: {system.get('min_hits')} — Stake: {system.get('stake')}"
+
 def main():
     fixtures, th_meta = load_thursday_fixtures()
     history = load_history()
@@ -757,6 +810,11 @@ def main():
         "doubles": core_doubles,
         "open": core_meta["open"],
         "after_open": core_meta["after_open"],
+        "rules": {
+            "max_total_bets": CORE_MAX_TOTAL_BETS,
+            "doubles_low_only": True,
+            "quality_gate_min": CORE_MIN_QUALITY,
+        },
     }
 
     fun_section = {
@@ -764,6 +822,7 @@ def main():
         "bankroll": DEFAULT_BANKROLL_FUN,
         "bankroll_start": fun_bankroll_start,
         "bankroll_source": ("history" if fun_start is not None else "default"),
+        "rules": {"quality_gate_min": FUN_MIN_QUALITY},
         **fun_payload
     }
 
@@ -772,6 +831,7 @@ def main():
         "bankroll": DEFAULT_BANKROLL_DRAW,
         "bankroll_start": draw_bankroll_start,
         "bankroll_source": ("history" if draw_start is not None else "default"),
+        "rules": {"quality_gate_min": DRAW_MIN_QUALITY},
         **draw_payload
     }
 
@@ -787,7 +847,50 @@ def main():
         "drawbet": draw_section,
     }
 
+    # copy/play list
     report["copy_play"] = build_copy_play(core_section, fun_section, draw_section, window)
+
+    # display-friendly blocks (for UI like screenshots)
+    report["bankroll_summary"] = [
+        {
+            "portfolio": "CoreBet",
+            "bankroll": DEFAULT_BANKROLL_CORE,
+            "week_start": round(core_bankroll_start, 2),
+            "open": core_section["open"],
+            "after_open": core_section["after_open"],
+        },
+        {
+            "portfolio": "FunBet",
+            "bankroll": DEFAULT_BANKROLL_FUN,
+            "week_start": round(fun_bankroll_start, 2),
+            "open": fun_section["open"],
+            "after_open": fun_section["after_open"],
+        },
+        {
+            "portfolio": "DrawBet",
+            "bankroll": DEFAULT_BANKROLL_DRAW,
+            "week_start": round(draw_bankroll_start, 2),
+            "open": draw_section["open"],
+            "after_open": draw_section["after_open"],
+        },
+    ]
+
+    report["display"] = {
+        "title": f"Bombay Friday — {wf['week_label']}",
+        "window_line": f"Παράθυρο: {window.get('from','—')} → {window.get('to','—')} ({window.get('hours','—')} ώρες)" if isinstance(window, dict) else None,
+        "core": {
+            "singles_table": core_section.get("singles") or [],
+            "doubles": core_section.get("doubles") or [],
+        },
+        "funbet": {
+            "system_pool_table": fun_section.get("system_pool") or [],
+            "system_line": _system_line(fun_section.get("system") or {}, "System"),
+        },
+        "drawbet": {
+            "system_pool_table": draw_section.get("system_pool") or [],
+            "system_line": _system_line(draw_section.get("system") or {}, "System"),
+        },
+    }
 
     os.makedirs("logs", exist_ok=True)
     with open(FRIDAY_REPORT_PATH, "w", encoding="utf-8") as f:
