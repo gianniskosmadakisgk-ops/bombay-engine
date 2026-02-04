@@ -1,3 +1,4 @@
+# filename: src/tools/style_builder_v1.py
 import os
 import json
 import math
@@ -40,6 +41,8 @@ LEAGUE_COUNTRY_MAP = {
     "Bundesliga": "Germany",
     "Eredivisie": "Netherlands",
 }
+
+FINAL_STATUSES = {"FT", "AET", "PEN"}
 
 def log(msg: str):
     print(msg, flush=True)
@@ -85,14 +88,7 @@ def normalize_team_name(raw: str) -> str:
     }
     return aliases.get(s, s)
 
-def resolve_season(now_utc: datetime.datetime):
-    # Keep it simple: prefer env, else now.year
-    if FOOTBALL_SEASON_ENV:
-        return FOOTBALL_SEASON_ENV
-    return str(now_utc.year)
-
 def _recency_weights(n: int):
-    # Same idea as Thursday, but extendable
     base = [1.0, 0.85, 0.72, 0.61, 0.52, 0.45, 0.40, 0.36, 0.33, 0.30, 0.28, 0.26]
     w = base[: max(1, min(len(base), n))]
     s = sum(w)
@@ -104,10 +100,9 @@ def api_get(path: str, params: dict, timeout=25):
     url = f"{API_FOOTBALL_BASE}{path}"
     r = requests.get(url, headers=HEADERS, params=params, timeout=timeout)
     try:
-        js = r.json()
+        return r.json()
     except Exception:
         return {}
-    return js
 
 def fetch_teams_in_league(league_id: int, season: str):
     js = api_get("/teams", {"league": league_id, "season": season})
@@ -121,22 +116,55 @@ def fetch_teams_in_league(league_id: int, season: str):
             out.append({"id": tid, "name": name, "norm": normalize_team_name(name)})
     return out
 
+def resolve_season_candidates(now_utc: datetime.datetime):
+    cands = []
+    if FOOTBALL_SEASON_ENV:
+        cands.append(FOOTBALL_SEASON_ENV)
+        try:
+            y = int(FOOTBALL_SEASON_ENV)
+            cands += [str(y - 1), str(y + 1)]
+        except Exception:
+            pass
+    cands += [str(now_utc.year - 1), str(now_utc.year)]
+    out = []
+    seen = set()
+    for c in cands:
+        if c and c not in seen:
+            out.append(c)
+            seen.add(c)
+    return out[:4]
+
+def resolve_season(now_utc: datetime.datetime):
+    # Pick first season that actually returns teams for a big league
+    cands = resolve_season_candidates(now_utc)
+    probe_league_id = 39  # Premier League
+    for s in cands:
+        try:
+            teams = fetch_teams_in_league(probe_league_id, s)
+            if teams and len(teams) >= 10:
+                return s
+        except Exception:
+            continue
+    return cands[0] if cands else str(now_utc.year - 1)
+
 def fetch_last_finished_fixtures(team_id: int, league_id: int, season: str, last_n: int):
-    # API-Football supports last + status=FT in many accounts. If status ignored, we still filter.
-    js = api_get("/fixtures", {"team": team_id, "league": league_id, "season": season, "last": max(last_n, 5)})
+    js = api_get("/fixtures", {"team": team_id, "league": league_id, "season": season, "last": max(last_n, 8)})
     resp = js.get("response") or []
     out = []
     for fx in resp:
-        st = (fx.get("fixture", {}).get("status", {}).get("short") or "")
-        if st != "FT":
+        st = (fx.get("fixture", {}).get("status", {}).get("short") or "").upper()
+        if st not in FINAL_STATUSES:
             continue
+
         hg = fx.get("goals", {}).get("home")
         ag = fx.get("goals", {}).get("away")
         if hg is None or ag is None:
             continue
+
         home_id = fx.get("teams", {}).get("home", {}).get("id")
         away_id = fx.get("teams", {}).get("away", {}).get("id")
         is_home = (home_id == team_id)
+
         gf = int(hg) if is_home else int(ag)
         ga = int(ag) if is_home else int(hg)
         out.append({"gf": gf, "ga": ga})
@@ -145,7 +173,6 @@ def fetch_last_finished_fixtures(team_id: int, league_id: int, season: str, last
 def compute_style_from_last(fixtures):
     if not fixtures:
         return None
-
     m = len(fixtures)
     w = _recency_weights(m)
 
@@ -158,7 +185,6 @@ def compute_style_from_last(fixtures):
         ga += w[i] * ga_i
         tg += w[i] * tg_i
 
-    # Return per-match proxies (engine later normalizes vs country median)
     return {
         "xch_for_90": round(gf, 4),
         "xch_against_90": round(ga, 4),
@@ -168,6 +194,7 @@ def compute_style_from_last(fixtures):
 def main():
     now = datetime.datetime.now(datetime.timezone.utc)
     season = resolve_season(now)
+    log(f"✅ Style Builder season selected: {season}")
 
     countries = {}
     totals = {"teams": 0, "filled": 0, "missing": 0}
@@ -190,8 +217,12 @@ def main():
 
             if style is None:
                 totals["missing"] += 1
-                # Keep a safe neutral fallback, but mark it as computed_neutral
-                style = {"xch_for_90": 1.0, "xch_against_90": 1.0, "tempo_index": 1.0, "_computed_neutral": True}
+                style = {
+                    "xch_for_90": 1.0,
+                    "xch_against_90": 1.0,
+                    "tempo_index": 1.0,
+                    "_computed_neutral": True
+                }
             else:
                 totals["filled"] += 1
 
@@ -206,6 +237,7 @@ def main():
             "builder": {
                 "season": season,
                 "last_n_finished": STYLE_LAST_N,
+                "final_statuses": sorted(list(FINAL_STATUSES)),
                 "note": "Proxies from last finished fixtures: goals_for, goals_against, total_goals (tempo).",
             },
             "counts": totals,
