@@ -6,16 +6,52 @@ import requests
 import datetime
 import unicodedata
 import re
+from pathlib import Path
 from dateutil import parser
 
 # ============================================================
 # BOMBAY THURSDAY FULL ENGINE v3 — PRODUCTION (LOCKED LEAGUES)
 #
 # v3.73 — CACHE-ONLY cache-key resolver + normalized cache index
-# - DOES NOT change normalize_team_name logic for odds matching stability
-# - Adds cache_key_candidates(): tries short/long variants + underscores/spaces
-# - load_history_cache(): builds teams_norm index per country
-# - load_style_cache(): builds teams_norm index per country
+# + v3.74 — Render path-robust PROJECT_ROOT (fixes /src/src/...),
+#           consistent DATA_DIR/LOGS_DIR read+write.
+# ============================================================
+
+# -------------------------
+# Path / IO robustness
+# -------------------------
+
+def _find_project_root(start: Path) -> Path:
+    """
+    Search upwards for a folder containing:
+      - logs/
+      - data/
+    On Render, script path often is /opt/render/project/src/src/analysis/...
+    but logs+data live in /opt/render/project/src/logs and /opt/render/project/src/data
+    """
+    for p in [start] + list(start.parents):
+        if (p / "logs").is_dir() and (p / "data").is_dir():
+            return p
+    # fallback: two parents up
+    return start.parents[1]
+
+_THIS_FILE = Path(__file__).resolve()
+PROJECT_ROOT = _find_project_root(_THIS_FILE.parent)
+LOGS_DIR = PROJECT_ROOT / "logs"
+DATA_DIR = PROJECT_ROOT / "data"
+
+def _resolve_path(p: str, base: Path) -> str:
+    """
+    If env overrides give an absolute path -> keep it.
+    If relative -> resolve relative to PROJECT_ROOT.
+    """
+    if not p:
+        return str(base)
+    pp = Path(p)
+    if pp.is_absolute():
+        return str(pp)
+    return str((PROJECT_ROOT / pp).resolve())
+
 # ============================================================
 
 API_FOOTBALL_KEY = os.getenv("FOOTBALL_API_KEY")
@@ -97,10 +133,10 @@ UNDER_ELITE_ABSGAP_MAX = float(os.getenv("UNDER_ELITE_ABSGAP_MAX", "0.35"))
 OVER_SHAPE_PROB_MIN = float(os.getenv("OVER_SHAPE_PROB_MIN", "0.55"))
 OVER_SHAPE_TL_MIN = float(os.getenv("OVER_SHAPE_TL_MIN", "2.70"))
 
-# Cache paths
-TEAM_VALUES_PATH = os.getenv("TEAM_VALUES_PATH", "data/team_market_values.json")
-HISTORY_CACHE_PATH = os.getenv("HISTORY_CACHE_PATH", "data/team_domestic_history_last5.json")
-STYLE_CACHE_PATH = os.getenv("STYLE_CACHE_PATH", "data/team_style_metrics.json")
+# Cache paths (resolve to PROJECT_ROOT if relative)
+TEAM_VALUES_PATH = _resolve_path(os.getenv("TEAM_VALUES_PATH", "data/team_market_values.json"), DATA_DIR / "team_market_values.json")
+HISTORY_CACHE_PATH = _resolve_path(os.getenv("HISTORY_CACHE_PATH", "data/team_domestic_history_last5.json"), DATA_DIR / "team_domestic_history_last5.json")
+STYLE_CACHE_PATH = _resolve_path(os.getenv("STYLE_CACHE_PATH", "data/team_style_metrics.json"), DATA_DIR / "team_style_metrics.json")
 
 # Toggles
 USE_TEAM_VALUE_MODEL = os.getenv("USE_TEAM_VALUE_MODEL", "true").lower() == "true"
@@ -237,16 +273,6 @@ CACHE_ALIAS_EXPAND = {
 CACHE_ALIAS_SHRINK = {v: k for k, v in CACHE_ALIAS_EXPAND.items()}
 
 def cache_key_candidates(team_norm: str, hist_aliases: dict = None) -> list:
-    """
-    Candidates for cache lookups ONLY.
-    Tries:
-      - base
-      - history aliases
-      - expand/shrink
-      - space<->underscore forms
-      - utd<->united cache-only swap
-      - normalize_team_name on variants
-    """
     out = []
     seen = set()
 
@@ -269,13 +295,11 @@ def cache_key_candidates(team_norm: str, hist_aliases: dict = None) -> list:
         add(CACHE_ALIAS_EXPAND.get(x))
         add(CACHE_ALIAS_SHRINK.get(x))
 
-    # space<->underscore variants
     snapshot = list(out)
     for x in snapshot:
         add(x.replace(" ", "_"))
         add(x.replace("_", " "))
 
-    # utd/united swap
     snapshot = list(out)
     for x in snapshot:
         if " utd" in x:
@@ -283,7 +307,6 @@ def cache_key_candidates(team_norm: str, hist_aliases: dict = None) -> list:
         if " united" in x:
             add(x.replace(" united", " utd"))
 
-    # final normalized forms (using existing stable normalizer)
     snapshot = list(out)
     for x in snapshot:
         add(normalize_team_name(x.replace("_", " ")))
@@ -598,10 +621,6 @@ def load_market_values():
         return {}, {}, {}, {}, meta
 
 def load_history_cache():
-    """
-    Builds teams_norm index per country:
-      bucket["teams_norm"][ normalize_team_name(key.replace("_"," ")) ] = teams[key]
-    """
     meta = {"loaded": False, "path": HISTORY_CACHE_PATH, "as_of": None, "countries": 0}
     countries = {}
     league_to_country = {}
@@ -639,7 +658,6 @@ def load_history_cache():
         league_to_country.setdefault("Belgium First Division A", "Belgium")
         league_to_country.setdefault("Jupiler Pro League", "Belgium")
 
-        # build normalized index + medians
         for c, bucket in countries.items():
             teams = (bucket or {}).get("teams") if isinstance(bucket, dict) else None
             if not isinstance(teams, dict):
@@ -655,7 +673,7 @@ def load_history_cache():
                 if v is not None:
                     vals.append(float(v))
 
-            bucket["teams_norm"] = teams_norm  # additive
+            bucket["teams_norm"] = teams_norm
             med[c] = _median(vals)
 
         meta["loaded"] = True
@@ -664,9 +682,6 @@ def load_history_cache():
         return {}, {}, {}, {}, meta
 
 def load_style_cache():
-    """
-    Adds teams_norm index per country (like history).
-    """
     meta = {"loaded": False, "path": STYLE_CACHE_PATH, "as_of": None}
     js = None
     med_country = {}
@@ -705,7 +720,7 @@ def load_style_cache():
                     if b is not None: xs_against.append(b)
                     if t is not None: xs_tempo.append(t)
 
-                bucket["teams_norm"] = teams_norm  # additive
+                bucket["teams_norm"] = teams_norm
                 med_country[c] = {
                     "xch_for_90": _median(xs_for),
                     "xch_against_90": _median(xs_against),
@@ -1160,7 +1175,6 @@ def build_fixture_blocks():
     fixtures_out = []
     now = datetime.datetime.now(datetime.timezone.utc)
     to_dt = now + datetime.timedelta(hours=WINDOW_HOURS)
-    odds_from = now - datetime.timedelta(hours=8)
 
     if not API_FOOTBALL_KEY:
         log("❌ FOOTBALL_API_KEY is missing. Aborting.")
@@ -1185,6 +1199,9 @@ def build_fixture_blocks():
 
     log(f"Season used: {season_used} | Total fixtures collected: {len(all_fixtures)}")
     log(f"Engine leagues: {list(LEAGUES.keys())}")
+    log(f"PROJECT_ROOT: {PROJECT_ROOT}")
+    log(f"LOGS_DIR: {LOGS_DIR}")
+    log(f"DATA_DIR: {DATA_DIR}")
 
     odds_cache_by_league = {}
     if USE_ODDS_API and ODDS_API_KEY:
@@ -1607,6 +1624,14 @@ def main():
         "team_values_cache": mv_meta,
         "history_cache": hist_meta,
         "style_cache": style_meta,
+        "debug_paths": {
+            "project_root": str(PROJECT_ROOT),
+            "logs_dir": str(LOGS_DIR),
+            "data_dir": str(DATA_DIR),
+            "TEAM_VALUES_PATH": TEAM_VALUES_PATH,
+            "HISTORY_CACHE_PATH": HISTORY_CACHE_PATH,
+            "STYLE_CACHE_PATH": STYLE_CACHE_PATH,
+        }
     }
 
     if REPORT_ENGINE_CONFIG:
@@ -1637,11 +1662,12 @@ def main():
             "TEMPO_EPS": TEMPO_EPS,
         }
 
-    os.makedirs("logs", exist_ok=True)
-    with open("logs/thursday_report_v3.json", "w", encoding="utf-8") as f:
+    LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    out_path = LOGS_DIR / "thursday_report_v3.json"
+    with out_path.open("w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, indent=2)
 
-    log(f"✅ Thursday v3 written. Season={season_used} Fixtures={len(fixtures)}")
+    log(f"✅ Thursday v3 written. Season={season_used} Fixtures={len(fixtures)} -> {out_path}")
 
 if __name__ == "__main__":
     main()
