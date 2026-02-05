@@ -1,240 +1,409 @@
 # src/analysis/tuesday_recap_v3.py
-"""
-Tuesday Recap v3 — Deploy version
-
-Reads:
-- logs/friday_shortlist_v3.json  (what was played)
-- logs/tuesday_results_v3.json   (settled results you provide)
-
-Writes:
-- data/tuesday_history_v3.json   (rolling bankroll history)
-- logs/tuesday_recap_v3.json     (human-friendly recap output)
-
-Results file format (logs/tuesday_results_v3.json):
-{
-  "week_no": 3,
-  "core": [
-    {"match":"...", "market":"Over 2.5", "odds":1.97, "stake":30, "won": true},
-    ...
-  ],
-  "funbet": {
-    "stake": 35,
-    "hits": 4,
-    "payout": 0
-  },
-  "drawbet": {
-    "stake": 25,
-    "hits": 2,
-    "payout": 0
-  }
-}
-
-If results file is missing, script outputs a “pending recap skeleton” and exits OK.
-"""
-
 from __future__ import annotations
 
 import json
 import os
+import sys
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-LOGS_DIR = PROJECT_ROOT / "logs"
+import requests
 
-HISTORY_PATH = os.getenv("TUESDAY_HISTORY_PATH", "data/tuesday_history_v3.json")
-HISTORY_FILE = (PROJECT_ROOT / HISTORY_PATH) if not Path(HISTORY_PATH).is_absolute() else Path(HISTORY_PATH)
+API_FOOTBALL_KEY = os.getenv("FOOTBALL_API_KEY")
+API_FOOTBALL_BASE = "https://v3.football.api-sports.io"
+HEADERS_FOOTBALL = {"x-apisports-key": API_FOOTBALL_KEY} if API_FOOTBALL_KEY else {}
 
-FRIDAY_FILE = LOGS_DIR / "friday_shortlist_v3.json"
-RESULTS_FILE = LOGS_DIR / "tuesday_results_v3.json"
-RECAP_OUT = LOGS_DIR / "tuesday_recap_v3.json"
-
-def _read_json(p: Path) -> Any:
-    with p.open("r", encoding="utf-8") as f:
-        return json.load(f)
-
-def _write_json(p: Path, obj: Any) -> None:
-    p.parent.mkdir(parents=True, exist_ok=True)
-    with p.open("w", encoding="utf-8") as f:
-        json.dump(obj, f, ensure_ascii=False, indent=2)
+# -------------------------
+# IO / paths
+# -------------------------
 
 def _utc_now_iso() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    return datetime.now(timezone.utc).isoformat()
 
-def _roi(profit: float, stake: float) -> float:
-    if stake <= 0:
-        return 0.0
-    return round((profit / stake) * 100.0, 2)
+def _read_json(path: Path) -> Any:
+    with path.open("r", encoding="utf-8") as f:
+        return json.load(f)
 
-def _init_history() -> Dict[str, Any]:
+def _write_json(path: Path, obj: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as f:
+        json.dump(obj, f, ensure_ascii=False, indent=2)
+
+def _find_project_root(start: Path) -> Path:
+    for p in [start] + list(start.parents):
+        if (p / "logs").is_dir() and (p / "src").is_dir():
+            return p
+    return start.parents[2] if len(start.parents) >= 3 else start
+
+_THIS = Path(__file__).resolve()
+ROOT = _find_project_root(_THIS.parent)
+LOGS = ROOT / "logs"
+
+def _load_latest_friday() -> Dict[str, Any]:
+    p1 = LOGS / "friday_shortlist_v3.json"
+    if p1.exists():
+        return _read_json(p1)
+    files = sorted(LOGS.glob("friday_*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+    if not files:
+        raise FileNotFoundError("No friday_shortlist_v3.json or friday_*.json found in logs/")
+    return _read_json(files[0])
+
+# -------------------------
+# Settlement helpers
+# -------------------------
+
+def _fmt_tick(won: Optional[bool]) -> str:
+    if won is True: return "✅"
+    if won is False: return "❌"
+    return "—"
+
+def _sf(v: Any, d: Optional[float] = None) -> Optional[float]:
+    try:
+        return float(v)
+    except Exception:
+        return d
+
+@dataclass
+class FixtureFT:
+    fixture_id: int
+    home: str
+    away: str
+    hg: int
+    ag: int
+    status: str  # FT, AET, etc
+
+def fetch_fixture_ft(fixture_id: int) -> Optional[FixtureFT]:
+    if not API_FOOTBALL_KEY:
+        raise RuntimeError("Missing FOOTBALL_API_KEY for Tuesday recap.")
+    url = f"{API_FOOTBALL_BASE}/fixtures"
+    params = {"id": int(fixture_id)}
+    r = requests.get(url, headers=HEADERS_FOOTBALL, params=params, timeout=25).json()
+    resp = r.get("response") or []
+    if not resp:
+        return None
+    fx = resp[0]
+    st = (fx.get("fixture", {}).get("status", {}).get("short") or "")
+    hg = fx.get("goals", {}).get("home")
+    ag = fx.get("goals", {}).get("away")
+    if hg is None or ag is None:
+        return None
+    home = fx.get("teams", {}).get("home", {}).get("name") or ""
+    away = fx.get("teams", {}).get("away", {}).get("name") or ""
+    return FixtureFT(
+        fixture_id=int(fixture_id),
+        home=str(home),
+        away=str(away),
+        hg=int(hg),
+        ag=int(ag),
+        status=str(st),
+    )
+
+def settle_market(ft: FixtureFT, market: str) -> Optional[bool]:
+    m = (market or "").strip()
+    total = ft.hg + ft.ag
+
+    if m == "Over 2.5":
+        return total >= 3
+    if m == "Under 2.5":
+        return total <= 2
+    if m == "Home (1)":
+        return ft.hg > ft.ag
+    if m == "Away (2)":
+        return ft.ag > ft.hg
+    if m == "Draw":
+        return ft.hg == ft.ag
+
+    # unknown market type
+    return None
+
+# -------------------------
+# System payout calculators
+# -------------------------
+
+def _comb_indices(n: int, k: int) -> List[Tuple[int, ...]]:
+    # small n only (n<=7) — brute force ok
+    out: List[Tuple[int, ...]] = []
+    idx = list(range(k))
+
+    def rec(start: int, comb: List[int]):
+        if len(comb) == k:
+            out.append(tuple(comb))
+            return
+        for i in range(start, n):
+            comb.append(i)
+            rec(i + 1, comb)
+            comb.pop()
+
+    rec(0, [])
+    return out
+
+def system_payout(lines: List[Dict[str, Any]], k: int, columns: int, stake_total: float) -> Dict[str, Any]:
+    """
+    lines: each has {won(bool|None), odds(float)}
+    We assume stake_total is TOTAL spend across all columns.
+    payout = sum(product_odds * stake_per_col) for each winning combo.
+    """
+    if not lines or columns <= 0 or stake_total <= 0:
+        return {"staked": float(stake_total), "returned": 0.0, "roi": None, "winning_columns": 0}
+
+    stake_per_col = stake_total / float(columns)
+    n = len(lines)
+    combos = _comb_indices(n, k)
+
+    returned = 0.0
+    win_cols = 0
+    for c in combos:
+        ok = True
+        prod = 1.0
+        for ix in c:
+            w = lines[ix].get("won")
+            if w is not True:
+                ok = False
+                break
+            prod *= float(lines[ix].get("odds") or 0.0)
+        if ok:
+            win_cols += 1
+            returned += prod * stake_per_col
+
+    staked = float(stake_total)
+    roi = None
+    if staked > 0:
+        roi = round((returned - staked) / staked, 4)
+
     return {
-        "week_count": 0,
-        "updated_at": _utc_now_iso(),
-        "core": {"bankroll_current": float(os.getenv("CORE_BANKROLL_START", "800")), "stake": 0.0, "profit": 0.0},
-        "funbet": {"bankroll_current": float(os.getenv("FUN_BANKROLL_START", "400")), "stake": 0.0, "profit": 0.0},
-        "drawbet": {"bankroll_current": float(os.getenv("DRAW_BANKROLL_START", "300")), "stake": 0.0, "profit": 0.0},
-        "weeks": {}
+        "staked": round(staked, 2),
+        "returned": round(returned, 2),
+        "roi": roi,
+        "winning_columns": win_cols,
+        "stake_per_column": round(stake_per_col, 4),
     }
 
-def _load_history() -> Dict[str, Any]:
-    if HISTORY_FILE.exists():
-        return _read_json(HISTORY_FILE)
-    return _init_history()
+# -------------------------
+# Extract fixtures from Friday
+# -------------------------
 
-def _key_for_week(friday: Dict[str, Any]) -> str:
-    w = (friday.get("window") or {})
-    return str(w.get("from") or "") or friday.get("generated_at", "")[:10]
+def _extract_all_lines(friday: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
+    core = (friday.get("core") or {}).get("singles") or []
+    fun = (friday.get("funbet") or {}).get("system_pool") or []
+    draw = (friday.get("drawbet") or {}).get("system_pool") or []
+    return list(core), list(fun), list(draw)
 
-def _tick(won: Optional[bool]) -> str:
-    if won is True:
-        return "✅"
-    if won is False:
-        return "❌"
-    return "⏳"
+def _fixture_ids_from_lines(lines: List[Dict[str, Any]]) -> List[int]:
+    ids = []
+    for x in lines:
+        fxid = x.get("fixture_id") or x.get("id") or x.get("fixtureId")
+        if fxid is None:
+            continue
+        try:
+            ids.append(int(fxid))
+        except Exception:
+            continue
+    return ids
 
-def main() -> int:
-    if not FRIDAY_FILE.exists():
-        _write_json(RECAP_OUT, {"status": "error", "error": "missing friday_shortlist_v3.json", "at": _utc_now_iso()})
-        print("missing friday_shortlist_v3.json")
-        return 1
+def _chrono_key(x: Dict[str, Any]) -> Tuple[str, str]:
+    return (str(x.get("date") or ""), str(x.get("time_gr") or ""))
 
-    friday = _read_json(FRIDAY_FILE)
-    hist = _load_history()
+# -------------------------
+# Main recap builder
+# -------------------------
 
-    week_no = int(friday.get("week_no") or (int(hist.get("week_count") or 0) + 1))
-    week_key = _key_for_week(friday)
+def build_tuesday_recap() -> Dict[str, Any]:
+    friday = _load_latest_friday()
 
-    if not RESULTS_FILE.exists():
-        # Pending skeleton recap
-        recap = {
-            "status": "pending_results",
-            "week_no": week_no,
-            "week_key": week_key,
-            "message": "Add logs/tuesday_results_v3.json to settle bets and compute ROI.",
-            "at": _utc_now_iso(),
-            "friday_snapshot": {
-                "core_open": friday.get("core", {}).get("open"),
-                "fun_open": friday.get("funbet", {}).get("open"),
-                "draw_open": friday.get("drawbet", {}).get("open"),
-            }
-        }
-        _write_json(RECAP_OUT, recap)
-        print("pending results")
-        return 0
+    core_lines, fun_lines, draw_lines = _extract_all_lines(friday)
+    all_fxids = sorted(set(_fixture_ids_from_lines(core_lines) + _fixture_ids_from_lines(fun_lines) + _fixture_ids_from_lines(draw_lines)))
 
-    results = _read_json(RESULTS_FILE)
+    # fetch FT once per fixture_id
+    ft_map: Dict[int, FixtureFT] = {}
+    missing = []
+    for fxid in all_fxids:
+        ft = fetch_fixture_ft(fxid)
+        if ft is None:
+            missing.append(fxid)
+        else:
+            ft_map[fxid] = ft
 
-    # ---------------- Core settlement ----------------
-    core_rows = results.get("core") or []
-    core_stake = 0.0
-    core_profit = 0.0
-    core_list = []
+    # settle a line
+    def settle_line(line: Dict[str, Any]) -> Optional[bool]:
+        fxid = line.get("fixture_id") or line.get("id") or line.get("fixtureId")
+        if fxid is None:
+            return None
+        fxid = int(fxid)
+        ft = ft_map.get(fxid)
+        if not ft:
+            return None
+        return settle_market(ft, str(line.get("market") or ""))
 
-    for r in core_rows:
-        odds = float(r.get("odds") or 0)
-        stake = float(r.get("stake") or 0)
-        won = r.get("won")
-        core_stake += stake
+    # ---- CORE ROI (singles only) ----
+    core_staked = 0.0
+    core_returned = 0.0
+    core_won = 0
+    core_lost = 0
+
+    core_out_lines = []
+    for x in core_lines:
+        won = settle_line(x)
+        odds = float(_sf(x.get("odds"), 0.0) or 0.0)
+        stake = float(_sf(x.get("stake"), 0.0) or 0.0)
+
+        core_staked += stake
         if won is True:
-            # profit = stake*(odds-1)
-            core_profit += stake * (odds - 1.0)
+            core_won += 1
+            core_returned += stake * odds
         elif won is False:
-            core_profit -= stake
+            core_lost += 1
 
-        core_list.append({
-            "tick": _tick(won),
-            "match": r.get("match"),
-            "market": r.get("market"),
-            "odds": odds,
-            "stake": stake,
-            "won": won,
+        core_out_lines.append({
+            "tick": _fmt_tick(won),
+            "date": str(x.get("date") or ""),
+            "time_gr": str(x.get("time_gr") or ""),
+            "league": str(x.get("league") or ""),
+            "match": str(x.get("match") or ""),
+            "market": str(x.get("market") or ""),
+            "odds": round(odds, 2),
+            "stake": round(stake, 2),
         })
 
-    # ---------------- Fun / Draw settlement (system-level) ----------------
-    # Here we keep it simple: you provide payout (net return) or hits; if payout missing, assume 0 return.
-    fun = results.get("funbet") or {}
-    draw = results.get("drawbet") or {}
+    core_out_lines.sort(key=_chrono_key)
+    core_roi = None
+    if core_staked > 0:
+        core_roi = round((core_returned - core_staked) / core_staked, 4)
 
-    fun_stake = float(fun.get("stake") or friday.get("funbet", {}).get("open") or 0.0)
-    fun_payout = float(fun.get("payout") or 0.0)  # total return back
-    fun_profit = fun_payout - fun_stake
+    # ---- FUN system payout (4/7 columns 35) ----
+    fun_out_lines = []
+    for x in fun_lines:
+        won = settle_line(x)
+        fun_out_lines.append({
+            "tick": _fmt_tick(won),
+            "date": str(x.get("date") or ""),
+            "time_gr": str(x.get("time_gr") or ""),
+            "league": str(x.get("league") or ""),
+            "match": str(x.get("match") or ""),
+            "market": str(x.get("market") or ""),
+            "odds": float(_sf(x.get("odds"), 0.0) or 0.0),
+            "won": won,
+        })
+    fun_out_lines.sort(key=_chrono_key)
 
-    draw_stake = float(draw.get("stake") or friday.get("drawbet", {}).get("open") or 0.0)
-    draw_payout = float(draw.get("payout") or 0.0)
-    draw_profit = draw_payout - draw_stake
+    fun_stake_total = float(_sf(((friday.get("funbet") or {}).get("system") or {}).get("stake"), 0.0) or 0.0)
+    fun_payout = system_payout(fun_out_lines, k=4, columns=35, stake_total=fun_stake_total)
 
-    # ---------------- Update cumulative history ----------------
-    def bump(fund_key: str, stake: float, profit: float):
-        hist[fund_key]["stake"] = float(hist[fund_key].get("stake") or 0.0) + stake
-        hist[fund_key]["profit"] = float(hist[fund_key].get("profit") or 0.0) + profit
-        hist[fund_key]["bankroll_current"] = float(hist[fund_key].get("bankroll_current") or 0.0) + profit
+    # ---- DRAW system payout (2/5 columns 10) ----
+    draw_out_lines = []
+    for x in draw_lines:
+        won = settle_line(x)
+        draw_out_lines.append({
+            "tick": _fmt_tick(won),
+            "date": str(x.get("date") or ""),
+            "time_gr": str(x.get("time_gr") or ""),
+            "league": str(x.get("league") or ""),
+            "match": str(x.get("match") or ""),
+            "market": str(x.get("market") or ""),
+            "odds": float(_sf(x.get("odds"), 0.0) or 0.0),
+            "won": won,
+        })
+    draw_out_lines.sort(key=_chrono_key)
 
-    bump("core", core_stake, core_profit)
-    bump("funbet", fun_stake, fun_profit)
-    bump("drawbet", draw_stake, draw_profit)
+    draw_stake_total = float(_sf(((friday.get("drawbet") or {}).get("system") or {}).get("stake"), 0.0) or 0.0)
+    draw_payout = system_payout(draw_out_lines, k=2, columns=10, stake_total=draw_stake_total)
 
-    hist["week_count"] = max(int(hist.get("week_count") or 0), week_no)
-    hist["updated_at"] = _utc_now_iso()
+    # ---- Bankroll updates ----
+    core_start = float(_sf((friday.get("core") or {}).get("bankroll_start"), 0.0) or 0.0)
+    core_open  = float(_sf((friday.get("core") or {}).get("open"), 0.0) or 0.0)
+    core_after_open = core_start - core_open
+    core_end = core_after_open + core_returned
 
-    hist["weeks"][week_key] = {
-        "week_no": week_no,
-        "window": friday.get("window"),
-        "updated_at": _utc_now_iso(),
-        "core": {"stake": round(core_stake, 2), "profit": round(core_profit, 2), "pending": 0, "roi_pct": _roi(core_profit, core_stake)},
-        "funbet": {"stake": round(fun_stake, 2), "profit": round(fun_profit, 2), "pending": 0, "roi_pct": _roi(fun_profit, fun_stake), "hits": fun.get("hits")},
-        "drawbet": {"stake": round(draw_stake, 2), "profit": round(draw_profit, 2), "pending": 0, "roi_pct": _roi(draw_profit, draw_stake), "hits": draw.get("hits")},
-        "core_bets": core_list,
-    }
+    fun_start = float(_sf((friday.get("funbet") or {}).get("bankroll_start"), 0.0) or 0.0)
+    fun_open  = float(_sf((friday.get("funbet") or {}).get("open"), 0.0) or 0.0)
+    fun_after_open = fun_start - fun_open
+    fun_end = fun_after_open + float(fun_payout["returned"] or 0.0)
 
-    _write_json(HISTORY_FILE, hist)
+    draw_start = float(_sf((friday.get("drawbet") or {}).get("bankroll_start"), 0.0) or 0.0)
+    draw_open  = float(_sf((friday.get("drawbet") or {}).get("open"), 0.0) or 0.0)
+    draw_after_open = draw_start - draw_open
+    draw_end = draw_after_open + float(draw_payout["returned"] or 0.0)
 
-    recap = {
-        "status": "ok",
-        "week_no": week_no,
-        "week_key": week_key,
-        "at": _utc_now_iso(),
-        "core": {
-            "stake": round(core_stake, 2),
-            "profit": round(core_profit, 2),
-            "roi_pct": _roi(core_profit, core_stake),
-            "score": f"{sum(1 for x in core_rows if x.get('won') is True)}/{len(core_rows)}",
-            "bets": core_list,
+    # Weekly ROI per bankroll (real)
+    def _roi(staked: float, returned: float) -> Optional[float]:
+        if staked <= 0:
+            return None
+        return round((returned - staked) / staked, 4)
+
+    out = {
+        "title": "Bombay Tuesday Recap — v3 (API-Football settlement)",
+        "generated_at": _utc_now_iso(),
+        "window": friday.get("window") or {},
+
+        "corebet": {
+            "bankroll_start": round(core_start, 2),
+            "open": round(core_open, 2),
+            "after_open": round(core_after_open, 2),
+            "staked": round(core_staked, 2),
+            "returned": round(core_returned, 2),
+            "won": core_won,
+            "lost": core_lost,
+            "roi_week": _roi(core_staked, core_returned),
+            "bankroll_end": round(core_end, 2),
+            "lines": core_out_lines,
         },
+
         "funbet": {
-            "stake": round(fun_stake, 2),
-            "profit": round(fun_profit, 2),
-            "roi_pct": _roi(fun_profit, fun_stake),
-            "hits": fun.get("hits"),
+            "bankroll_start": round(fun_start, 2),
+            "open": round(fun_open, 2),
+            "after_open": round(fun_after_open, 2),
+            "system": {"n": 7, "k": 4, "columns": 35, "stake": round(fun_stake_total, 2)},
+            "payout": fun_payout,
+            "roi_week": fun_payout.get("roi"),
+            "bankroll_end": round(fun_end, 2),
+            "lines": [
+                {k: v for k, v in x.items() if k != "won"} for x in fun_out_lines
+            ],
         },
+
         "drawbet": {
-            "stake": round(draw_stake, 2),
-            "profit": round(draw_profit, 2),
-            "roi_pct": _roi(draw_profit, draw_stake),
-            "hits": draw.get("hits"),
+            "bankroll_start": round(draw_start, 2),
+            "open": round(draw_open, 2),
+            "after_open": round(draw_after_open, 2),
+            "system": {"n": 5, "k": 2, "columns": 10, "stake": round(draw_stake_total, 2)},
+            "payout": draw_payout,
+            "roi_week": draw_payout.get("roi"),
+            "bankroll_end": round(draw_end, 2),
+            "lines": [
+                {k: v for k, v in x.items() if k != "won"} for x in draw_out_lines
+            ],
         },
-        "bankrolls": {
-            "core_current": round(hist["core"]["bankroll_current"], 2),
-            "fun_current": round(hist["funbet"]["bankroll_current"], 2),
-            "draw_current": round(hist["drawbet"]["bankroll_current"], 2),
+
+        "summary": {
+            "missing_fixtures": missing,
+            "bankrolls_end": {
+                "corebet": round(core_end, 2),
+                "funbet": round(fun_end, 2),
+                "drawbet": round(draw_end, 2),
+            },
         },
-        "cumulative": {
-            "core_roi_pct": _roi(float(hist["core"]["profit"]), float(hist["core"]["stake"])),
-            "fun_roi_pct": _roi(float(hist["funbet"]["profit"]), float(hist["funbet"]["stake"])),
-            "draw_roi_pct": _roi(float(hist["drawbet"]["profit"]), float(hist["drawbet"]["stake"])),
-        }
     }
-    _write_json(RECAP_OUT, recap)
-        # ---------------- Export for next week (download/upload) ----------------
-    export_name = f"tuesday_history_export_week_{week_no}.json"
-    export_path = LOGS_DIR / export_name
-    _write_json(export_path, hist)
 
-    # Print a stable marker so you can grep it from logs
-    print(f"HISTORY_EXPORT: {export_path}")
+    # Next-week portable history
+    out_hist = {
+        "as_of": out["generated_at"][:10],
+        "bankrolls": out["summary"]["bankrolls_end"],
+        "last_window": out.get("window") or {},
+    }
 
-    print("ok")
-    return 0
+    _write_json(LOGS / "tuesday_recap_v3.json", out)
+    _write_json(LOGS / "tuesday_history_v3_next.json", out_hist)
+    return out
+
+def main() -> int:
+    try:
+        out = build_tuesday_recap()
+        print(json.dumps({"status": "ok", "saved": str(LOGS / "tuesday_recap_v3.json"), "generated_at": out["generated_at"]}))
+        return 0
+    except Exception as e:
+        print(json.dumps({"status": "error", "error": str(e)}))
+        return 1
 
 if __name__ == "__main__":
     raise SystemExit(main())
