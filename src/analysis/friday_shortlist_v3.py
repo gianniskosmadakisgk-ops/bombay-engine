@@ -1,24 +1,18 @@
 # src/analysis/friday_shortlist_v3.py
 """
-Friday shortlist v3 (Quality Gate + your constraints) — FIXED for your Thursday schema.
+Friday shortlist v3 — Quality Gate + your constraints — FIXED for Thursday schema
++ FIXED to use Tuesday History for bankroll continuity (no more "Week 1" by default)
++ NO stake scaling (no exposure-cap scaling)
++ FIXED stake rules: stake is decided ONLY by ODDS band (your rule)
 
-Fixes included:
-- Robust project root detection (Render /src/src/... confusion).
-- Reads Thursday logs from <project_root>/logs
-- Loads quality_gate_v1.py by FILE PATH (no need for __init__.py packages).
-- ✅ Critical fix for Python 3.13: registers module in sys.modules before exec_module
-  (prevents dataclasses/typing introspection crash).
+Thursday schema expected (your engine):
+- probs: home_prob/draw_prob/away_prob/over_2_5_prob/under_2_5_prob
+- odds:  offered_1/offered_x/offered_2/offered_over_2_5/offered_under_2_5
+- value: value_pct_1/value_pct_x/value_pct_2/value_pct_over/value_pct_under
 
 Outputs:
 - logs/friday_shortlist_v3.json
 - logs/friday_YYYY-MM-DD_HH-MM-SS.json
-
-Business rules (locked):
-- Core singles: max 7 total.
-- Core doubles: only if there are at least 2 Core singles with odds <= 1.60.
-  Then the double is ONLY those two small odds. Otherwise: no double.
-- FunBet: as system 4/7 style pool logic (only from singles pool, no draw).
-- DrawBet: strict. If no good draws, open=0 and pool empty (but system definition stays).
 """
 
 from __future__ import annotations
@@ -52,8 +46,9 @@ def _find_project_root(start: Path) -> Path:
 _THIS_FILE = Path(__file__).resolve()
 PROJECT_ROOT = _find_project_root(_THIS_FILE.parent)
 LOGS_DIR = PROJECT_ROOT / "logs"
+DATA_DIR = PROJECT_ROOT / "data"
 
-# Add useful paths for imports (if you still want to import packages elsewhere)
+# Add useful paths for imports
 for candidate in [PROJECT_ROOT, PROJECT_ROOT / "src", PROJECT_ROOT / "src" / "src"]:
     if candidate.is_dir():
         s = str(candidate)
@@ -74,23 +69,16 @@ class _QualityResult:
 def _load_quality_gate() -> Any:
     """
     Load src/analysis/quality_gate_v1.py by path (works even without packages/__init__.py).
-
-    ✅ Python 3.13 safe: must register in sys.modules before exec_module
-    or dataclasses/typing may crash with NoneType.__dict__ errors.
     """
     q_path = Path(__file__).resolve().parent / "quality_gate_v1.py"
     if not q_path.exists():
         return None
 
     import importlib.util
-
-    name = "quality_gate_v1"
-    spec = importlib.util.spec_from_file_location(name, str(q_path))
+    spec = importlib.util.spec_from_file_location("quality_gate_v1", str(q_path))
     if spec is None or spec.loader is None:
         return None
-
     mod = importlib.util.module_from_spec(spec)
-    sys.modules[name] = mod  # ✅ CRITICAL FIX
     spec.loader.exec_module(mod)  # type: ignore
     return mod
 
@@ -107,6 +95,7 @@ def fixture_quality_score(fixture: Dict[str, Any]) -> _QualityResult:
             return _QualityResult(score=score, reasons=reasons)
         except Exception:
             return _QualityResult(score=0.0, reasons=("quality_gate_error",))
+    # If missing, do NOT kill Friday; treat as pass-through.
     return _QualityResult(score=1.0, reasons=("quality_gate_missing",))
 
 
@@ -137,13 +126,88 @@ def _fmt_date(date_str: str) -> str:
 def _fmt_time(time_str: str) -> str:
     return str(time_str or "")
 
+
+# -------------------------
+# Tuesday history loading (bankroll continuity)
+# -------------------------
+
+def _load_latest_tuesday_history() -> Optional[Dict[str, Any]]:
+    """
+    We try to locate Tuesday history in common places.
+    Priority:
+      1) logs/tuesday_history_v3.json
+      2) logs/tuesday_history_v3week*.json (latest)
+      3) data/tuesday_history_v3.json
+      4) data/tuesday_history_v3week*.json (latest)
+    """
+    candidates: List[Path] = []
+
+    p1 = LOGS_DIR / "tuesday_history_v3.json"
+    if p1.exists():
+        candidates.append(p1)
+
+    candidates.extend(sorted(LOGS_DIR.glob("tuesday_history_v3week*.json"), key=lambda p: p.stat().st_mtime, reverse=True))
+
+    p2 = DATA_DIR / "tuesday_history_v3.json"
+    if p2.exists():
+        candidates.append(p2)
+
+    candidates.extend(sorted(DATA_DIR.glob("tuesday_history_v3week*.json"), key=lambda p: p.stat().st_mtime, reverse=True))
+
+    if not candidates:
+        return None
+
+    try:
+        js = _read_json(candidates[0])
+        if isinstance(js, dict):
+            js["_source_path"] = str(candidates[0])
+            return js
+        return None
+    except Exception:
+        return None
+
+
+def _bankrolls_from_history(history: Optional[Dict[str, Any]]) -> Tuple[float, float, float, int, Optional[str]]:
+    """
+    Returns (core_bankroll, fun_bankroll, draw_bankroll, week_no, source_path)
+    week_no = (history.week_count + 1) if present, else 1
+    """
+    core_default = float(os.getenv("CORE_BANKROLL_START", "800"))
+    fun_default = float(os.getenv("FUN_BANKROLL_START", "400"))
+    draw_default = float(os.getenv("DRAW_BANKROLL_START", "300"))
+
+    week_no = 1
+    source_path = None
+
+    if not history:
+        return core_default, fun_default, draw_default, week_no, source_path
+
+    source_path = str(history.get("_source_path") or "") or None
+
+    wc = history.get("week_count")
+    if isinstance(wc, int) and wc >= 1:
+        week_no = wc + 1
+
+    def grab(section: str, fallback: float) -> float:
+        block = history.get(section)
+        if isinstance(block, dict):
+            bc = block.get("bankroll_current")
+            if isinstance(bc, (int, float)):
+                return float(bc)
+        return fallback
+
+    core_b = grab("core", core_default)
+    fun_b = grab("funbet", fun_default)
+    draw_b = grab("drawbet", draw_default)
+
+    return core_b, fun_b, draw_b, week_no, source_path
+
+
+# -------------------------
+# Markets mapping (Thursday schema)
+# -------------------------
+
 def _market_defs() -> List[Dict[str, str]]:
-    """
-    Matches YOUR Thursday schema:
-    probs: home_prob/draw_prob/away_prob/over_2_5_prob/under_2_5_prob
-    odds:  offered_1/offered_x/offered_2/offered_over_2_5/offered_under_2_5
-    value: value_pct_1/value_pct_x/value_pct_2/value_pct_over/value_pct_under
-    """
     return [
         {"label": "Home (1)", "odds": "offered_1", "prob": "home_prob", "value": "value_pct_1"},
         {"label": "Draw",     "odds": "offered_x", "prob": "draw_prob", "value": "value_pct_x"},
@@ -157,7 +221,6 @@ def _candidate_from_fixture(fx: Dict[str, Any], md: Dict[str, str]) -> Optional[
     prob = _safe_float(fx.get(md["prob"]))
     value_pct = _safe_float(fx.get(md["value"])) or 0.0
 
-    # If odds/prob missing -> no candidate
     if odds is None or prob is None:
         return None
 
@@ -169,7 +232,7 @@ def _candidate_from_fixture(fx: Dict[str, Any], md: Dict[str, str]) -> Optional[
     date = _fmt_date(str(fx.get("date") or ""))
     time_gr = _fmt_time(str(fx.get("time") or ""))
 
-    # ranking: value + prob edge (simple and stable)
+    # ranking (simple and stable)
     rank_score = (value_pct * 1.0) + ((prob - 0.50) * 100.0 * 0.7)
 
     qr = fixture_quality_score(fx)
@@ -192,12 +255,10 @@ def _candidate_from_fixture(fx: Dict[str, Any], md: Dict[str, str]) -> Optional[
 
 
 def _load_latest_thursday_report() -> Dict[str, Any]:
-    # Prefer canonical file
     p1 = LOGS_DIR / "thursday_report_v3.json"
     if p1.exists():
         return _read_json(p1)
 
-    # Otherwise last thursday_*.json
     th_files = sorted(LOGS_DIR.glob("thursday_*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
     if th_files:
         return _read_json(th_files[0])
@@ -206,31 +267,45 @@ def _load_latest_thursday_report() -> Dict[str, Any]:
 
 
 # -------------------------
+# Stake rules (NO scaling) — YOUR rule
+# -------------------------
+
+def _stake_from_odds(odds: float) -> int:
+    """
+    Your rule (as you wrote it, cleaned):
+      - < 1.70  -> 25
+      - 1.70 .. < 1.90 -> 40
+      - 1.90 .. < 2.05 -> 30
+      - >= 2.05 -> 20
+    """
+    o = float(odds)
+    if o < 1.70:
+        return 25
+    if o < 1.90:
+        return 40
+    if o < 2.05:
+        return 30
+    return 20
+
+
+# -------------------------
 # Selection logic
 # -------------------------
 
-def _select_core(cands: List[Dict[str, Any]], bankroll_start: float) -> Tuple[List[Dict[str, Any]], Optional[Dict[str, Any]], float]:
-    # Core: avoid Draw markets by default
+def _select_core(cands: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], Optional[Dict[str, Any]], float]:
+    # Core: avoid Draw
     core = [c for c in cands if c["market"] != "Draw"]
 
-    # Core filters (tweak later)
+    # Filters (keep as-is)
     core = [c for c in core if 1.55 <= c["odds"] <= 2.20 and c["prob"] >= 0.50 and c["value_pct"] >= 1.0]
     core.sort(key=lambda x: x["rank_score"], reverse=True)
-    core = core[:7]  # hard cap
+    core = core[:7]
 
     singles: List[Dict[str, Any]] = []
     open_total = 0.0
 
     for c in core:
-        strength = (c["prob"] - 0.5) * 100.0 + c["value_pct"]
-
-        if strength >= 20:
-            stake = 40
-        elif strength >= 12:
-            stake = 30
-        else:
-            stake = 20
-
+        stake = _stake_from_odds(c["odds"])
         singles.append({
             "date": c["date"],
             "time_gr": c["time_gr"],
@@ -243,7 +318,7 @@ def _select_core(cands: List[Dict[str, Any]], bankroll_start: float) -> Tuple[Li
         })
         open_total += stake
 
-    # Doubles rule: ONLY two <= 1.60 between themselves
+    # Doubles rule: ONLY if 2 singles odds <= 1.60
     eligible = [s for s in singles if s["odds"] <= 1.60]
     eligible.sort(key=lambda s: s["odds"])
 
@@ -251,29 +326,19 @@ def _select_core(cands: List[Dict[str, Any]], bankroll_start: float) -> Tuple[Li
     if len(eligible) >= 2:
         a, b = eligible[0], eligible[1]
         combined_odds = round(a["odds"] * b["odds"], 2)
+        dbl_stake = float(os.getenv("CORE_DOUBLE_STAKE", "25"))  # you hinted "25" — default 25
         core_double = {
             "legs": [
                 {k: a[k] for k in ["date", "time_gr", "league", "match", "market", "odds"]},
                 {k: b[k] for k in ["date", "time_gr", "league", "match", "market", "odds"]},
             ],
             "odds": combined_odds,
-            "stake": 20,
+            "stake": dbl_stake,
             "label": "Double (Core small-odds only)",
         }
-        open_total += 20
+        open_total += dbl_stake
 
-    # Exposure cap
-    exposure_cap_pct = float(os.getenv("CORE_EXPOSURE_CAP_PCT", "0.30"))
-    cap = bankroll_start * exposure_cap_pct
-
-    if open_total > cap and singles:
-        factor = cap / open_total
-        new_total = 0.0
-        for s in singles:
-            s["stake"] = max(5, int(round(s["stake"] * factor / 5) * 5))
-            new_total += s["stake"]
-        open_total = new_total + (core_double["stake"] if core_double else 0.0)
-
+    # IMPORTANT: NO scaling / NO exposure-cap cutting
     return singles, core_double, float(round(open_total, 2))
 
 
@@ -296,7 +361,6 @@ def _select_system(
     pool.sort(key=lambda x: x["rank_score"], reverse=True)
     pool = pool[:n]
 
-    # Predefined system metadata
     if n == 7:
         system = {"k": 4, "n": 7, "columns": 35, "min_hits": 4, "stake": stake_total}
     elif n == 5:
@@ -329,6 +393,10 @@ def build_friday_shortlist() -> Dict[str, Any]:
     if not isinstance(fixtures, list):
         raise ValueError("Thursday report has no fixtures list.")
 
+    # Load Tuesday history (optional)
+    hist = _load_latest_tuesday_history()
+    core_bankroll, fun_bankroll, draw_bankroll, week_no, hist_src = _bankrolls_from_history(hist)
+
     # Quality thresholds
     core_min_q = float(os.getenv("FRIDAY_CORE_MIN_QUALITY", "0.70"))
     fun_min_q = float(os.getenv("FRIDAY_FUN_MIN_QUALITY", "0.60"))
@@ -339,7 +407,7 @@ def build_friday_shortlist() -> Dict[str, Any]:
     all_cands: List[Dict[str, Any]] = []
     q_by_id: Dict[Any, float] = {}
 
-    # Precompute fixture quality per fixture_id (one score per match)
+    # Precompute fixture quality per fixture_id
     for fx in fixtures:
         qr = fixture_quality_score(fx)
         q_by_id[fx.get("fixture_id")] = float(qr.score)
@@ -355,13 +423,8 @@ def build_friday_shortlist() -> Dict[str, Any]:
     fun_cands  = [c for c in all_cands if (q_by_id.get(c["fixture_id"], 0.0) >= fun_min_q)]
     draw_cands = [c for c in all_cands if (q_by_id.get(c["fixture_id"], 0.0) >= draw_min_q)]
 
-    # Bankrolls
-    core_bankroll = float(os.getenv("CORE_BANKROLL_START", "800"))
-    fun_bankroll  = float(os.getenv("FUN_BANKROLL_START", "400"))
-    draw_bankroll = float(os.getenv("DRAW_BANKROLL_START", "300"))
-
     # Build portfolios
-    core_singles, core_double, core_open = _select_core(core_cands, core_bankroll)
+    core_singles, core_double, core_open = _select_core(core_cands)
 
     fun_stake_total = float(os.getenv("FUN_SYSTEM_STAKE", "35"))
     fun_pool, fun_system, fun_open = _select_system(
@@ -376,11 +439,11 @@ def build_friday_shortlist() -> Dict[str, Any]:
         n=5, min_odds=3.00, max_odds=4.50, min_prob=0.24, min_value=2.0,
         stake_total=draw_stake_total, allow_draw=True,
     )
-    # DrawBet must be strictly Draw market only
     draw_pool = [x for x in draw_pool if x["market"] == "Draw"]
     if not draw_pool:
         draw_open = 0.0
 
+    # Window
     window = th.get("window") or {}
     if not window:
         window = {
@@ -390,20 +453,28 @@ def build_friday_shortlist() -> Dict[str, Any]:
         }
 
     out = {
-        "title": "Bombay Friday — Week",
+        "title": f"Bombay Friday — Week {week_no}",
         "generated_at": _utc_now_iso(),
+        "week_no": week_no,
         "window": window,
 
         "core": {
             "label": "CoreBet",
             "bankroll_start": core_bankroll,
             "max_singles": 7,
-            "exposure_cap_pct": float(os.getenv("CORE_EXPOSURE_CAP_PCT", "0.30")),
             "singles": core_singles,
             "double": core_double,
             "doubles": ([core_double] if core_double else []),
             "open": round(core_open, 2),
             "after_open": round(core_bankroll - core_open, 2),
+            "stake_rule": {
+                "<1.70": 25,
+                "1.70-1.89": 40,
+                "1.90-2.04": 30,
+                ">=2.05": 20,
+                "double_stake": float(os.getenv("CORE_DOUBLE_STAKE", "25")),
+                "scaling": "OFF",
+            },
         },
 
         "funbet": {
@@ -427,6 +498,7 @@ def build_friday_shortlist() -> Dict[str, Any]:
         "debug": {
             "project_root": str(PROJECT_ROOT),
             "logs_dir": str(LOGS_DIR),
+            "history_source": hist_src,
             "thresholds": {"core": core_min_q, "fun": fun_min_q, "draw": draw_min_q},
             "counts": {
                 "fixtures": len(fixtures),
@@ -452,8 +524,10 @@ def main() -> int:
             "status": "ok",
             "saved": str(LOGS_DIR / "friday_shortlist_v3.json"),
             "generated_at": friday["generated_at"],
+            "week_no": friday.get("week_no"),
             "counts": friday["debug"]["counts"],
             "logs_dir": str(LOGS_DIR),
+            "history_source": friday["debug"].get("history_source"),
         }))
         return 0
 
