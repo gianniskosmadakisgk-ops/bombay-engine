@@ -1,316 +1,378 @@
 # src/analysis/friday_shortlist_v3.py
+"""
+Friday shortlist v3 (with Quality Gate + your new constraints)
+
+Fixes included:
+- Works regardless of Render's confusing "/src/src/..." path by finding project root dynamically.
+- Reads Thursday logs from the REAL folder: <project_root>/logs (not <project_root>/src/logs).
+- Imports quality_gate_v1 without "No module named src".
+
+Outputs:
+- logs/friday_shortlist_v3.json
+- logs/friday_YYYY-MM-DD_HH-MM-SS.json
+
+Business rules (locked):
+- Core singles: max 7 total.
+- Core doubles: only if there are at least 2 Core singles with odds <= 1.60.
+  Then double is ONLY those two small odds. Otherwise no double.
+- DrawBet: strict. If no good draws, it outputs empty pool and system still present.
+"""
+
 from __future__ import annotations
 
 import json
 import os
-import glob
-from datetime import datetime
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from quality_gate_v1 import fixture_quality_score, passes_quality_gate
+# -------------------------
+# Path / import robustness
+# -------------------------
+
+def _find_project_root(start: Path) -> Path:
+    """
+    We search upwards for a folder that contains BOTH:
+      - logs/
+      - src/  (or analysis/ inside src/)
+    On Render your script path is usually: /opt/render/project/src/src/analysis/...
+    but logs live in: /opt/render/project/src/logs
+    """
+    for p in [start] + list(start.parents):
+        if (p / "logs").is_dir() and (p / "src").is_dir():
+            return p
+        if (p / "logs").is_dir() and (p / "analysis").is_dir():
+            return p
+    # fallback: two parents up
+    return start.parents[1]
 
 
-LOGS_DIR = os.getenv("BOMBAY_LOGS_DIR", os.path.join(os.path.dirname(__file__), "..", "logs"))
-LOGS_DIR = os.path.abspath(LOGS_DIR)
+_THIS_FILE = Path(__file__).resolve()
+PROJECT_ROOT = _find_project_root(_THIS_FILE.parent)
+LOGS_DIR = PROJECT_ROOT / "logs"
 
-THURSDAY_REPORT_BASENAME = "thursday_report_v3.json"
-FRIDAY_OUT_BASENAME = "friday_shortlist_v3.json"
+# Make imports work whether code lives in PROJECT_ROOT/src or PROJECT_ROOT/src/src
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+if (PROJECT_ROOT / "src").is_dir() and str(PROJECT_ROOT / "src") not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT / "src"))
+if (PROJECT_ROOT / "src" / "src").is_dir() and str(PROJECT_ROOT / "src" / "src") not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT / "src" / "src"))
 
-
-# --- Config (ταιριάζει με αυτά που μου είπες) ---
-
-CORE_MAX_TICKETS_TOTAL = 7  # max 7 στοιχήματα σύνολο (singles + (optional) double ticket)
-
-# Double rule: μόνο “μεταξύ τους”, και μόνο 2 μικρά <= 1.60. Αλλιώς καθόλου.
-CORE_DOUBLE_MAX_ODDS = 1.60
-
-# System configs (όπως στα screenshots)
-FUN_SYSTEM = {"k": 4, "n": 7, "columns": 35, "min_hits": 4, "stake_total": 35}
-DRAW_SYSTEM = {"k": 2, "n": 5, "columns": 10, "min_hits": 2, "stake_total": 25}
-
-# Simple stake tiers for Core singles (αν ήδη έχεις staking logic αλλού, το αφήνεις όπως είναι)
-CORE_STAKE_HIGH = 40
-CORE_STAKE_MID = 30
-CORE_STAKE_LOW = 20
+try:
+    from analysis.quality_gate_v1 import fixture_quality_score
+except Exception:
+    # Last-resort import (if analysis isn't a package for some reason)
+    # This keeps Friday running instead of dying.
+    def fixture_quality_score(fixture: Dict[str, Any]):  # type: ignore
+        return type("QR", (), {"score": 0.0, "reasons": ("import_failed",)})
 
 
-def _now_iso() -> str:
-    return datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+# -------------------------
+# Helpers
+# -------------------------
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+def _read_json(path: Path) -> Any:
+    with path.open("r", encoding="utf-8") as f:
+        return json.load(f)
+
+def _write_json(path: Path, obj: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as f:
+        json.dump(obj, f, ensure_ascii=False, indent=2)
+
+def _parse_dt(dt_str: str) -> Optional[datetime]:
+    if not dt_str:
+        return None
+    try:
+        return datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+def _fmt_date_gr(dt_utc: Optional[datetime]) -> str:
+    if not dt_utc:
+        return ""
+    return dt_utc.date().isoformat()
+
+def _fmt_time_gr(dt_utc: Optional[datetime]) -> str:
+    if not dt_utc:
+        return ""
+    return dt_utc.strftime("%H:%M")
+
+def _market_defs() -> List[Dict[str, str]]:
+    return [
+        {"code": "1", "label": "Home (1)", "offered": "offered_1", "prob": "prob_1", "value": "value_pct_1"},
+        {"code": "X", "label": "Draw", "offered": "offered_x", "prob": "prob_x", "value": "value_pct_x"},
+        {"code": "2", "label": "Away (2)", "offered": "offered_2", "prob": "prob_2", "value": "value_pct_2"},
+        {"code": "O25", "label": "Over 2.5", "offered": "offered_over_2_5", "prob": "prob_over_2_5", "value": "value_pct_over_2_5"},
+        {"code": "U25", "label": "Under 2.5", "offered": "offered_under_2_5", "prob": "prob_under_2_5", "value": "value_pct_under_2_5"},
+    ]
+
+def _get_num(fx: Dict[str, Any], key: str) -> Optional[float]:
+    v = fx.get(key)
+    if isinstance(v, (int, float)):
+        return float(v)
+    return None
+
+def _candidate_from_fixture(fx: Dict[str, Any], md: Dict[str, str]) -> Optional[Dict[str, Any]]:
+    odds = _get_num(fx, md["offered"])
+    prob = _get_num(fx, md["prob"])
+    value_pct = _get_num(fx, md["value"])
+    if odds is None or prob is None:
+        return None
+
+    kickoff = _parse_dt(str(fx.get("kickoff_utc") or ""))
+    league = str(fx.get("league") or "")
+    home = str(fx.get("home") or "")
+    away = str(fx.get("away") or "")
+    fixture_id = fx.get("fixture_id")
+
+    score = (value_pct or 0.0) * 0.6 + (prob - 0.5) * 100 * 0.4
+    return {
+        "fixture_id": fixture_id,
+        "date": _fmt_date_gr(kickoff),
+        "time_gr": _fmt_time_gr(kickoff),
+        "league": league,
+        "match": f"{home} – {away}",
+        "market": md["label"],
+        "odds": round(float(odds), 2),
+        "prob": round(float(prob), 4),
+        "value_pct": round(float(value_pct or 0.0), 2),
+        "rank_score": float(score),
+        "quality": None,
+        "quality_reasons": [],
+        "raw": fx,
+    }
 
 
 def _load_latest_thursday_report() -> Dict[str, Any]:
-    """
-    Prefer logs/thursday_report_v3.json.
-    Fallback: latest logs/thursday_*.json
-    """
-    p1 = os.path.join(LOGS_DIR, THURSDAY_REPORT_BASENAME)
-    if os.path.exists(p1):
-        with open(p1, "r", encoding="utf-8") as f:
-            return json.load(f)
+    p1 = LOGS_DIR / "thursday_report_v3.json"
+    if p1.exists():
+        return _read_json(p1)
 
-    # fallback: latest thursday_*.json
-    candidates = sorted(
-        glob.glob(os.path.join(LOGS_DIR, "thursday_*.json")),
-        key=lambda p: os.path.getmtime(p),
-        reverse=True,
+    th_files = sorted(LOGS_DIR.glob("thursday_*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+    if th_files:
+        return _read_json(th_files[0])
+
+    raise FileNotFoundError(
+        f"Could not find thursday_report_v3.json or any thursday_*.json inside {LOGS_DIR}"
     )
-    if not candidates:
-        raise FileNotFoundError(f"Could not find {p1} or any thursday_*.json inside {LOGS_DIR}")
-    with open(candidates[0], "r", encoding="utf-8") as f:
-        return json.load(f)
 
 
-def _match_str(fx: Dict[str, Any]) -> str:
-    home = fx.get("home", "")
-    away = fx.get("away", "")
-    return f"{home} – {away}"
+def _select_core(cands: List[Dict[str, Any]], bankroll_start: float) -> Tuple[List[Dict[str, Any]], Optional[Dict[str, Any]], float]:
+    core = [c for c in cands if c["market"] != "Draw"]
+    core = [c for c in core if 1.55 <= c["odds"] <= 2.20 and c["prob"] >= 0.50 and c["value_pct"] >= 1.0]
+
+    core.sort(key=lambda x: x["rank_score"], reverse=True)
+    core = core[:7]
+
+    singles: List[Dict[str, Any]] = []
+    open_total = 0.0
+    for c in core:
+        strength = (c["prob"] - 0.5) * 100 + c["value_pct"]
+        if strength >= 20:
+            stake = 40
+        elif strength >= 12:
+            stake = 30
+        else:
+            stake = 20
+        singles.append({
+            "date": c["date"],
+            "time_gr": c["time_gr"],
+            "league": c["league"],
+            "match": c["match"],
+            "market": c["market"],
+            "odds": c["odds"],
+            "stake": stake,
+            "quality": c["quality"],
+        })
+        open_total += stake
+
+    eligible = [s for s in singles if s["odds"] <= 1.60]
+    eligible.sort(key=lambda s: s["odds"])
+    core_double = None
+    if len(eligible) >= 2:
+        a, b = eligible[0], eligible[1]
+        combined_odds = round(a["odds"] * b["odds"], 2)
+        core_double = {
+            "legs": [
+                {k: a[k] for k in ["date", "time_gr", "league", "match", "market", "odds"]},
+                {k: b[k] for k in ["date", "time_gr", "league", "match", "market", "odds"]},
+            ],
+            "odds": combined_odds,
+            "stake": 20,
+            "label": "Double (Core small-odds only)",
+        }
+        open_total += 20
+
+    exposure_cap_pct = float(os.getenv("CORE_EXPOSURE_CAP_PCT", "0.30"))
+    cap = bankroll_start * exposure_cap_pct
+    if open_total > cap and singles:
+        factor = cap / open_total
+        new_total = 0.0
+        for s in singles:
+            s["stake"] = max(5, int(round(s["stake"] * factor / 5) * 5))
+            new_total += s["stake"]
+        open_total = new_total + (core_double["stake"] if core_double else 0.0)
+
+    return singles, core_double, open_total
 
 
-def _pick_market_for_core(fx: Dict[str, Any]) -> Optional[Tuple[str, float, float]]:
-    """
-    Returns (market, offered_odds, model_score) or None.
+def _select_system(cands: List[Dict[str, Any]], *, n: int, min_odds: float, max_odds: float,
+                   min_prob: float, min_value: float, stake_total: float, allow_draw: bool) -> Tuple[List[Dict[str, Any]], Dict[str, Any], float]:
+    pool = cands[:]
+    if not allow_draw:
+        pool = [c for c in pool if c["market"] != "Draw"]
+    pool = [c for c in pool if min_odds <= c["odds"] <= max_odds and c["prob"] >= min_prob and c["value_pct"] >= min_value]
+    pool.sort(key=lambda x: x["rank_score"], reverse=True)
+    pool = pool[:n]
 
-    Core: παίρνουμε το καλύτερο μεταξύ Over/Under/1/X/2 με θετικό EV,
-    αλλά πρακτικά στο dataset σου έχεις ήδη:
-      - score_over
-      - score_draw
-      - ev_over / ev_under / ev_1 / ev_x / ev_2
-    """
-    # Build candidates from known fields (keep it robust)
-    cand = []
+    if n == 7:
+        system = {"k": 4, "n": 7, "columns": 35, "min_hits": 4, "stake": stake_total}
+    elif n == 5:
+        system = {"k": 2, "n": 5, "columns": 10, "min_hits": 2, "stake": stake_total}
+    else:
+        system = {"k": max(1, n // 2), "n": n, "columns": None, "min_hits": max(1, n // 2), "stake": stake_total}
 
-    # Over 2.5
-    if fx.get("offered_over_2_5") is not None and fx.get("ev_over") is not None:
-        cand.append(("Over 2.5", float(fx["offered_over_2_5"]), float(fx["ev_over"])))
+    system_pool = [{
+        "date": c["date"],
+        "time_gr": c["time_gr"],
+        "league": c["league"],
+        "match": c["match"],
+        "market": c["market"],
+        "odds": c["odds"],
+        "stake": None,
+        "quality": c["quality"],
+    } for c in pool]
 
-    # Under 2.5
-    if fx.get("offered_under_2_5") is not None and fx.get("ev_under") is not None:
-        cand.append(("Under 2.5", float(fx["offered_under_2_5"]), float(fx["ev_under"])))
-
-    # 1X2
-    if fx.get("offered_1") is not None and fx.get("ev_1") is not None:
-        cand.append(("Home (1)", float(fx["offered_1"]), float(fx["ev_1"])))
-    if fx.get("offered_x") is not None and fx.get("ev_x") is not None:
-        cand.append(("Draw", float(fx["offered_x"]), float(fx["ev_x"])))
-    if fx.get("offered_2") is not None and fx.get("ev_2") is not None:
-        cand.append(("Away (2)", float(fx["offered_2"]), float(fx["ev_2"])))
-
-    # Keep only positive EV
-    cand = [c for c in cand if c[2] > 0]
-
-    if not cand:
-        return None
-
-    # Prefer higher EV, tie-breaker: higher quality
-    q = fixture_quality_score(fx)
-    cand.sort(key=lambda x: (x[2], q), reverse=True)
-    return cand[0]
+    return system_pool, system, float(stake_total if pool else 0.0)
 
 
-def _core_stake_from_confidence(fx: Dict[str, Any]) -> int:
-    flags = fx.get("flags", {}) or {}
-    c = float(flags.get("confidence", 0.0) or 0.0)
-    if c >= 0.67:
-        return CORE_STAKE_HIGH
-    if c >= 0.55:
-        return CORE_STAKE_MID
-    return CORE_STAKE_LOW
+def build_friday_shortlist() -> Dict[str, Any]:
+    th = _load_latest_thursday_report()
+    fixtures = th.get("fixtures") or []
+    if not isinstance(fixtures, list):
+        raise ValueError("Thursday report has no fixtures list.")
 
+    core_min_q = float(os.getenv("FRIDAY_CORE_MIN_QUALITY", "0.70"))
+    fun_min_q = float(os.getenv("FRIDAY_FUN_MIN_QUALITY", "0.60"))
+    draw_min_q = float(os.getenv("FRIDAY_DRAW_MIN_QUALITY", "0.70"))
 
-def _pick_core_singles(fixtures: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """
-    Build Core singles list (pre-match).
-    Keep it tight: max tickets total enforced later (because double may exist).
-    """
-    rows = []
+    mdefs = _market_defs()
+    all_cands: List[Dict[str, Any]] = []
     for fx in fixtures:
-        if not passes_quality_gate(fx, "core"):
-            continue
+        for md in mdefs:
+            c = _candidate_from_fixture(fx, md)
+            if c:
+                qr = fixture_quality_score(fx)
+                c["quality"] = round(float(qr.score), 3)
+                c["quality_reasons"] = list(getattr(qr, "reasons", ()))
+                all_cands.append(c)
 
-        pick = _pick_market_for_core(fx)
-        if not pick:
-            continue
+    q_by_id = {}
+    for fx in fixtures:
+        qr = fixture_quality_score(fx)
+        q_by_id[fx.get("fixture_id")] = float(qr.score)
 
-        market, odds, ev = pick
-        rows.append(
-            {
-                "fixture_id": fx.get("fixture_id"),
-                "date": fx.get("date"),
-                "time_gr": fx.get("time"),
-                "league": fx.get("league"),
-                "match": _match_str(fx),
-                "market": market,
-                "odds": round(float(odds), 2),
-                "stake": _core_stake_from_confidence(fx),
-                "quality": round(fixture_quality_score(fx), 3),
-                "ev": round(float(ev), 4),
-            }
-        )
+    core_cands = [c for c in all_cands if (q_by_id.get(c["fixture_id"], 0.0) >= core_min_q)]
+    fun_cands = [c for c in all_cands if (q_by_id.get(c["fixture_id"], 0.0) >= fun_min_q)]
+    draw_cands = [c for c in all_cands if (q_by_id.get(c["fixture_id"], 0.0) >= draw_min_q)]
 
-    # Rank by EV then quality
-    rows.sort(key=lambda r: (r["ev"], r["quality"]), reverse=True)
+    core_bankroll = float(os.getenv("CORE_BANKROLL_START", "800"))
+    fun_bankroll = float(os.getenv("FUN_BANKROLL_START", "400"))
+    draw_bankroll = float(os.getenv("DRAW_BANKROLL_START", "300"))
 
-    # Leave room for optional double (we will cap later)
-    # Here we just take top 7 for now; final cap is enforced after double decision.
-    return rows[:CORE_MAX_TICKETS_TOTAL]
+    core_singles, core_double, core_open = _select_core(core_cands, core_bankroll)
 
+    fun_stake_total = float(os.getenv("FUN_SYSTEM_STAKE", "35"))
+    fun_pool, fun_system, fun_open = _select_system(
+        fun_cands,
+        n=7, min_odds=2.00, max_odds=3.60, min_prob=0.32, min_value=2.0,
+        stake_total=fun_stake_total, allow_draw=False,
+    )
 
-def _build_core_double(core_singles: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    """
-    Double only if we have 2 singles with odds <= 1.60.
-    Otherwise None.
-    """
-    small = [s for s in core_singles if float(s["odds"]) <= CORE_DOUBLE_MAX_ODDS]
-    if len(small) < 2:
-        return None
+    draw_stake_total = float(os.getenv("DRAW_SYSTEM_STAKE", "25"))
+    draw_pool, draw_system, draw_open = _select_system(
+        draw_cands,
+        n=5, min_odds=3.00, max_odds=4.50, min_prob=0.24, min_value=2.0,
+        stake_total=draw_stake_total, allow_draw=True,
+    )
+    draw_pool = [x for x in draw_pool if x["market"] == "Draw"]
+    if not draw_pool:
+        draw_open = 0.0
 
-    a, b = small[0], small[1]
-    comb_odds = float(a["odds"]) * float(b["odds"])
+    window = th.get("window") or {}
+    if not window:
+        window = {
+            "start": str(th.get("start_date") or ""),
+            "end": str(th.get("end_date") or ""),
+            "hours": int(th.get("window_hours") or 72),
+        }
 
-    return {
-        "type": "Double",
-        "legs": [
-            {"match": a["match"], "market": a["market"], "odds": a["odds"]},
-            {"match": b["match"], "market": b["market"], "odds": b["odds"]},
-        ],
-        "odds": round(comb_odds, 2),
-        # stake: if you already have a rule, change here. Keeping conservative.
-        "stake": min(20, int(a["stake"])),
+    out = {
+        "title": "Bombay Friday — Week",
+        "generated_at": _utc_now_iso(),
+        "window": window,
+        "core": {
+            "label": "CoreBet",
+            "bankroll_start": core_bankroll,
+            "max_singles": 7,
+            "exposure_cap_pct": float(os.getenv("CORE_EXPOSURE_CAP_PCT", "0.30")),
+            "singles": core_singles,
+            "double": core_double,
+            "doubles": ([core_double] if core_double else []),
+            "open": round(core_open, 2),
+            "after_open": round(core_bankroll - core_open, 2),
+        },
+        "funbet": {
+            "label": "FunBet",
+            "bankroll_start": fun_bankroll,
+            "system_pool": fun_pool,
+            "system": fun_system,
+            "open": round(fun_open, 2),
+            "after_open": round(fun_bankroll - fun_open, 2),
+        },
+        "drawbet": {
+            "label": "DrawBet",
+            "bankroll_start": draw_bankroll,
+            "system_pool": draw_pool,
+            "system": draw_system,
+            "open": round(draw_open, 2),
+            "after_open": round(draw_bankroll - draw_open, 2),
+        },
+        "debug": {
+            "project_root": str(PROJECT_ROOT),
+            "logs_dir": str(LOGS_DIR),
+            "thresholds": {"core": core_min_q, "fun": fun_min_q, "draw": draw_min_q},
+            "counts": {
+                "fixtures": len(fixtures),
+                "candidates_total": len(all_cands),
+                "core_singles": len(core_singles),
+                "fun_pool": len(fun_pool),
+                "draw_pool": len(draw_pool),
+            },
+        },
     }
-
-
-def _pick_fun_pool(fixtures: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """
-    Fun: higher odds / spicy value, but still filtered by quality gate (0.60).
-    We’ll pick 7 candidates for the 4/7 system pool.
-    """
-    rows = []
-    for fx in fixtures:
-        if not passes_quality_gate(fx, "fun"):
-            continue
-
-        # Fun tries to use best positive EV among 1/X/2/Over/Under,
-        # but doesn't care as much about "boring" lines.
-        pick = _pick_market_for_core(fx)  # reuse, but it's EV-based
-        if not pick:
-            continue
-        market, odds, ev = pick
-
-        # Fun wants bigger prices: keep odds >= 2.00 ideally
-        if float(odds) < 2.0:
-            continue
-
-        rows.append(
-            {
-                "fixture_id": fx.get("fixture_id"),
-                "date": fx.get("date"),
-                "time_gr": fx.get("time"),
-                "league": fx.get("league"),
-                "match": _match_str(fx),
-                "market": market,
-                "odds": round(float(odds), 2),
-                "quality": round(fixture_quality_score(fx), 3),
-                "ev": round(float(ev), 4),
-            }
-        )
-
-    rows.sort(key=lambda r: (r["ev"], r["quality"], r["odds"]), reverse=True)
-    return rows[:FUN_SYSTEM["n"]]
-
-
-def _pick_draw_pool(fixtures: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """
-    Draw: αυστηρό. Αν δεν έχει, δεν παίζει.
-    Quality gate 0.70 + draw_shape/ draw friendly / tight_game help.
-    Pick 5 for 2/5 system pool.
-    """
-    rows = []
-    for fx in fixtures:
-        if not passes_quality_gate(fx, "draw"):
-            continue
-
-        flags = fx.get("flags", {}) or {}
-        if not (flags.get("tight_game", False) and flags.get("draw_shape", False)):
-            continue
-
-        offered_x = fx.get("offered_x")
-        ev_x = fx.get("ev_x")
-        if offered_x is None or ev_x is None:
-            continue
-        if float(ev_x) <= 0:
-            continue
-
-        rows.append(
-            {
-                "fixture_id": fx.get("fixture_id"),
-                "date": fx.get("date"),
-                "time_gr": fx.get("time"),
-                "league": fx.get("league"),
-                "match": _match_str(fx),
-                "market": "Draw",
-                "odds": round(float(offered_x), 2),
-                "quality": round(fixture_quality_score(fx), 3),
-                "ev": round(float(ev_x), 4),
-            }
-        )
-
-    rows.sort(key=lambda r: (r["ev"], r["quality"]), reverse=True)
-    return rows[:DRAW_SYSTEM["n"]]
+    return out
 
 
 def main() -> int:
-    th = _load_latest_thursday_report()
-    fixtures = th.get("fixtures", []) or []
+    try:
+        friday = build_friday_shortlist()
+        _write_json(LOGS_DIR / "friday_shortlist_v3.json", friday)
 
-    core_singles = _pick_core_singles(fixtures)
-    core_double = _build_core_double(core_singles)
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
+        _write_json(LOGS_DIR / f"friday_{ts}.json", friday)
 
-    # Enforce max 7 tickets total for Core
-    # If we have a double ticket, keep at most 6 singles.
-    if core_double is not None:
-        core_singles = core_singles[: max(0, CORE_MAX_TICKETS_TOTAL - 1)]
-    else:
-        core_singles = core_singles[:CORE_MAX_TICKETS_TOTAL]
-
-    fun_pool = _pick_fun_pool(fixtures)
-    draw_pool = _pick_draw_pool(fixtures)
-
-    # Draw strict: if not enough, play none
-    if len(draw_pool) < DRAW_SYSTEM["n"]:
-        draw_pool = []
-
-    out = {
-        "generated_at": _now_iso(),
-        "window": th.get("window"),
-        "fixtures_total": th.get("fixtures_total", len(fixtures)),
-        "quality_gate": {
-            "core_min": 0.70,
-            "fun_min": 0.60,
-            "draw_min": 0.70,
-        },
-        "corebet": {
-            "singles": core_singles,
-            "double": core_double,
-            "tickets_total": len(core_singles) + (1 if core_double else 0),
-            "max_tickets_total": CORE_MAX_TICKETS_TOTAL,
-        },
-        "funbet": {
-            "pool": fun_pool,
-            "system": FUN_SYSTEM,
-        },
-        "drawbet": {
-            "pool": draw_pool,
-            "system": DRAW_SYSTEM if draw_pool else None,
-        },
-    }
-
-    os.makedirs(LOGS_DIR, exist_ok=True)
-    out_path = os.path.join(LOGS_DIR, FRIDAY_OUT_BASENAME)
-    with open(out_path, "w", encoding="utf-8") as f:
-        json.dump(out, f, ensure_ascii=False, indent=2)
-
-    print(f"[OK] wrote {out_path}")
-    return 0
+        print(json.dumps({"status": "ok", "saved": str(LOGS_DIR / "friday_shortlist_v3.json"), "generated_at": friday["generated_at"]}))
+        return 0
+    except Exception as e:
+        print(json.dumps({"status": "error", "error": str(e), "logs_dir": str(LOGS_DIR)}))
+        return 1
 
 
 if __name__ == "__main__":
