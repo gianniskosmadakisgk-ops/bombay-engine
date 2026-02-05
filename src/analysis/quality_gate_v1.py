@@ -1,70 +1,88 @@
 # src/analysis/quality_gate_v1.py
+"""
+Quality gate for Friday shortlist.
+
+Purpose:
+- Give every Thursday fixture a 0..1 quality score based on flags and odds matching.
+- Allow Friday to filter out "garbage" fixtures before making picks.
+
+This file is intentionally dependency-free (stdlib only).
+"""
+
 from __future__ import annotations
 
-from typing import Any, Dict
+from dataclasses import dataclass
+from typing import Any, Dict, Tuple
 
 
-def fixture_quality_score(fx: Dict[str, Any]) -> float:
+@dataclass(frozen=True)
+class QualityResult:
+    score: float
+    reasons: Tuple[str, ...]
+
+
+def _clamp(x: float, lo: float = 0.0, hi: float = 1.0) -> float:
+    return hi if x > hi else lo if x < lo else x
+
+
+def fixture_quality_score(fixture: Dict[str, Any]) -> QualityResult:
     """
-    Returns quality score in [0, 1].
-    Uses flags + odds_match.score + confidence + missing-data penalties.
+    Returns:
+        QualityResult(score=0..1, reasons=(...))
+
+    Expected fixture shape (from Thursday v3):
+        fixture["flags"] : dict with booleans:
+            odds_matched, value_missing, history_missing, style_missing, confidence_low, etc.
+        fixture["odds_match"] : dict with:
+            matched: bool, score: float (0..1), strict_ok: bool (optional)
     """
-    flags = fx.get("flags", {}) or {}
-    odds_match = fx.get("odds_match", {}) or {}
+    flags = fixture.get("flags") or {}
+    odds_match = fixture.get("odds_match") or {}
 
-    odds_matched = bool(flags.get("odds_matched", False))
-    odds_score = float(odds_match.get("score", 0.0) or 0.0)  # 0..1 (if present)
+    reasons = []
 
-    confidence = float(flags.get("confidence", 0.0) or 0.0)  # 0..1
-    prob_instability = float(flags.get("prob_instability", 0.0) or 0.0)  # 0..?
+    # Start from "odds match" score if present, else from flags.odds_matched
+    om_score = odds_match.get("score")
+    if isinstance(om_score, (int, float)):
+        base = float(om_score)
+    else:
+        base = 1.0 if flags.get("odds_matched") is True else 0.0
 
-    # Missing penalties
-    missing_pen = 0.0
-    if flags.get("value_missing", False):
-        missing_pen += 0.20
-    if flags.get("history_missing", False):
-        missing_pen += 0.15
-    if flags.get("style_missing", False):
-        missing_pen += 0.15
+    score = base
 
-    # Instability penalty (soft)
-    # 0.00 -> 0 penalty, 0.05 -> ~0.10 penalty, 0.10 -> ~0.20 penalty
-    instab_pen = min(0.20, prob_instability * 2.0)
+    # Hard-ish penalties: missing critical data
+    if flags.get("value_missing"):
+        score -= 0.22
+        reasons.append("value_missing")
+    if flags.get("history_missing"):
+        score -= 0.18
+        reasons.append("history_missing")
+    if flags.get("style_missing"):
+        score -= 0.18
+        reasons.append("style_missing")
 
-    # If odds are not matched, quality is basically trash for Friday selection
-    if not odds_matched:
-        return 0.0
+    # Odds strictness / mismatch
+    if odds_match.get("matched") is False:
+        score -= 0.30
+        reasons.append("odds_not_matched")
+    if odds_match.get("strict_ok") is False:
+        score -= 0.10
+        reasons.append("odds_strict_fail")
 
-    # Base blend: odds quality + confidence
-    # odds_score is heavy because mismatches/nulls were killing you
-    base = 0.65 * odds_score + 0.35 * confidence
+    # Confidence (if Thursday flagged it)
+    if flags.get("confidence_low"):
+        score -= 0.12
+        reasons.append("confidence_low")
 
-    score = base - missing_pen - instab_pen
+    # If Thursday says it's unstable, we don't trust it.
+    if flags.get("prob_instability"):
+        score -= 0.10
+        reasons.append("prob_instability")
 
-    # Clamp
-    if score < 0.0:
-        return 0.0
-    if score > 1.0:
-        return 1.0
-    return score
+    # Gentle nudge: if we have a confidence scalar use it.
+    conf = fixture.get("confidence")
+    if isinstance(conf, (int, float)):
+        # center around 0.5; boost good confidence slightly
+        score += (float(conf) - 0.5) * 0.10
 
-
-def passes_quality_gate(fx: Dict[str, Any], portfolio: str) -> bool:
-    """
-    Default thresholds for the "8.5" target.
-    Core: 0.70
-    Fun:  0.60
-    Draw: 0.70
-    """
-    q = fixture_quality_score(fx)
-
-    portfolio = (portfolio or "").lower().strip()
-    if portfolio in ("core", "corebet"):
-        return q >= 0.70
-    if portfolio in ("fun", "funbet"):
-        return q >= 0.60
-    if portfolio in ("draw", "drawbet"):
-        return q >= 0.70
-
-    # safe default
-    return q >= 0.70
+    return QualityResult(score=_clamp(score), reasons=tuple(reasons))
