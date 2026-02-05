@@ -6,8 +6,6 @@ import requests
 import datetime
 import unicodedata
 import re
-import sys
-from pathlib import Path
 from dateutil import parser
 
 # ============================================================
@@ -18,46 +16,8 @@ from dateutil import parser
 # - Adds cache_key_candidates(): tries short/long variants + underscores/spaces
 # - load_history_cache(): builds teams_norm index per country
 # - load_style_cache(): builds teams_norm index per country
-#
-# PATCH (Render-safe):
-# - Finds project root reliably (handles /opt/render/project/src/src/... runs)
-# - Forces TEAM_VALUES_PATH / HISTORY_CACHE_PATH / STYLE_CACHE_PATH to absolute paths
-# - Writes logs to the real <project_root>/logs (not relative cwd)
 # ============================================================
 
-# -------------------------
-# Path / root robustness
-# -------------------------
-def _find_project_root(start: Path) -> Path:
-    """
-    Render can run scripts from /opt/render/project/src/src/analysis/...
-    but data/ and logs/ are at /opt/render/project/src/data and /opt/render/project/src/logs.
-    We climb upwards to find the real project root.
-    """
-    for p in [start] + list(start.parents):
-        if (p / "logs").is_dir() and (p / "src").is_dir():
-            return p
-        if (p / "logs").is_dir() and (p / "analysis").is_dir():
-            return p
-    return start.parents[1]
-
-_THIS_FILE = Path(__file__).resolve()
-PROJECT_ROOT = _find_project_root(_THIS_FILE.parent)
-LOGS_DIR = PROJECT_ROOT / "logs"
-
-def _abs_path(p: str) -> str:
-    if not p:
-        return p
-    p = str(p).strip()
-    if not p:
-        return p
-    if os.path.isabs(p):
-        return p
-    return str(PROJECT_ROOT / p)
-
-# -------------------------
-# ENV / constants
-# -------------------------
 API_FOOTBALL_KEY = os.getenv("FOOTBALL_API_KEY")
 API_FOOTBALL_BASE = "https://v3.football.api-sports.io"
 HEADERS_FOOTBALL = {"x-apisports-key": API_FOOTBALL_KEY} if API_FOOTBALL_KEY else {}
@@ -137,10 +97,10 @@ UNDER_ELITE_ABSGAP_MAX = float(os.getenv("UNDER_ELITE_ABSGAP_MAX", "0.35"))
 OVER_SHAPE_PROB_MIN = float(os.getenv("OVER_SHAPE_PROB_MIN", "0.55"))
 OVER_SHAPE_TL_MIN = float(os.getenv("OVER_SHAPE_TL_MIN", "2.70"))
 
-# Cache paths (ABSOLUTE via _abs_path)
-TEAM_VALUES_PATH = _abs_path(os.getenv("TEAM_VALUES_PATH", "data/team_market_values.json"))
-HISTORY_CACHE_PATH = _abs_path(os.getenv("HISTORY_CACHE_PATH", "data/team_domestic_history_last5.json"))
-STYLE_CACHE_PATH = _abs_path(os.getenv("STYLE_CACHE_PATH", "data/team_style_metrics.json"))
+# Cache paths
+TEAM_VALUES_PATH = os.getenv("TEAM_VALUES_PATH", "data/team_market_values.json")
+HISTORY_CACHE_PATH = os.getenv("HISTORY_CACHE_PATH", "data/team_domestic_history_last5.json")
+STYLE_CACHE_PATH = os.getenv("STYLE_CACHE_PATH", "data/team_style_metrics.json")
 
 # Toggles
 USE_TEAM_VALUE_MODEL = os.getenv("USE_TEAM_VALUE_MODEL", "true").lower() == "true"
@@ -1200,6 +1160,7 @@ def build_fixture_blocks():
     fixtures_out = []
     now = datetime.datetime.now(datetime.timezone.utc)
     to_dt = now + datetime.timedelta(hours=WINDOW_HOURS)
+    odds_from = now - datetime.timedelta(hours=8)
 
     if not API_FOOTBALL_KEY:
         log("❌ FOOTBALL_API_KEY is missing. Aborting.")
@@ -1646,13 +1607,6 @@ def main():
         "team_values_cache": mv_meta,
         "history_cache": hist_meta,
         "style_cache": style_meta,
-        "debug_paths": {
-            "project_root": str(PROJECT_ROOT),
-            "logs_dir": str(LOGS_DIR),
-            "TEAM_VALUES_PATH": TEAM_VALUES_PATH,
-            "HISTORY_CACHE_PATH": HISTORY_CACHE_PATH,
-            "STYLE_CACHE_PATH": STYLE_CACHE_PATH,
-        },
     }
 
     if REPORT_ENGINE_CONFIG:
@@ -1683,12 +1637,11 @@ def main():
             "TEMPO_EPS": TEMPO_EPS,
         }
 
-    LOGS_DIR.mkdir(parents=True, exist_ok=True)
-    with open(LOGS_DIR / "thursday_report_v3.json", "w", encoding="utf-8") as f:
+    os.makedirs("logs", exist_ok=True)
+    with open("logs/thursday_report_v3.json", "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, indent=2)
 
     log(f"✅ Thursday v3 written. Season={season_used} Fixtures={len(fixtures)}")
-    log(f"✅ Saved to: {str(LOGS_DIR / 'thursday_report_v3.json')}")
 
 if __name__ == "__main__":
     main()
