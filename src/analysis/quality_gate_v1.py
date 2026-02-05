@@ -1,111 +1,70 @@
-# filename: src/analysis/quality_gate_v1.py
-# ============================================================
-# QUALITY GATE v1.0 — Friday Pre-filter
-#
-# Goal:
-#   Cut "garbage fixtures" before Friday pickers touch them.
-#   Uses existing Thursday fields: odds_match, flags.confidence,
-#   flags.*_missing, flags.odds_strict_ok, flags.prob_instability.
-#
-# Output:
-#   - fixture_quality_score(fx) -> 0..1
-#   - fixture_passes_quality(fx, threshold) -> bool
-#
-# Notes:
-#   - Missing fields are handled safely (never crash).
-#   - Score is conservative: missing data penalizes.
-# ============================================================
-
+# src/analysis/quality_gate_v1.py
 from __future__ import annotations
-from typing import Dict, Any, Optional
 
-def _safe_float(v, default: float = 0.0) -> float:
-    try:
-        if v is None:
-            return default
-        return float(v)
-    except Exception:
-        return default
+from typing import Any, Dict
 
-def _safe_bool(v, default: bool = False) -> bool:
-    if v is None:
-        return default
-    if isinstance(v, bool):
-        return v
-    if isinstance(v, (int, float)):
-        return bool(v)
-    s = str(v).strip().lower()
-    if s in ("true", "1", "yes", "y", "ok"):
-        return True
-    if s in ("false", "0", "no", "n"):
-        return False
-    return default
 
-def fixture_quality_score(
-    fx: Dict[str, Any],
-    *,
-    use_strict_bonus: bool = True,
-    use_instability_penalty: bool = True,
-) -> float:
+def fixture_quality_score(fx: Dict[str, Any]) -> float:
     """
-    Compute 0..1 quality score from fixture's meta fields.
+    Returns quality score in [0, 1].
+    Uses flags + odds_match.score + confidence + missing-data penalties.
     """
-    flags = (fx or {}).get("flags") or {}
-    odds_match = (fx or {}).get("odds_match") or {}
+    flags = fx.get("flags", {}) or {}
+    odds_match = fx.get("odds_match", {}) or {}
 
-    # --- odds match (biggest signal)
-    matched = _safe_bool(odds_match.get("matched"), False)
-    om_score = _safe_float(odds_match.get("score"), 0.0)
-    om_score = max(0.0, min(1.0, om_score))
-    odds_part = (om_score if matched else 0.0)
+    odds_matched = bool(flags.get("odds_matched", False))
+    odds_score = float(odds_match.get("score", 0.0) or 0.0)  # 0..1 (if present)
 
-    # --- confidence (if missing, we don't kill it, but we don't reward it either)
-    conf = flags.get("confidence")
-    conf = _safe_float(conf, 0.0) if conf is not None else 0.0
-    conf = max(0.0, min(1.0, conf))
+    confidence = float(flags.get("confidence", 0.0) or 0.0)  # 0..1
+    prob_instability = float(flags.get("prob_instability", 0.0) or 0.0)  # 0..?
 
-    # --- missing data penalties
-    style_missing = _safe_bool(flags.get("style_missing"), False)
-    history_missing = _safe_bool(flags.get("history_missing"), False)
-    value_missing = _safe_bool(flags.get("value_missing"), False)
+    # Missing penalties
+    missing_pen = 0.0
+    if flags.get("value_missing", False):
+        missing_pen += 0.20
+    if flags.get("history_missing", False):
+        missing_pen += 0.15
+    if flags.get("style_missing", False):
+        missing_pen += 0.15
 
-    missing_cnt = int(style_missing) + int(history_missing) + int(value_missing)
-    # 0 missing => 1.00 ; 1 => 0.75 ; 2 => 0.45 ; 3 => 0.15
-    missing_factor = {0: 1.00, 1: 0.75, 2: 0.45, 3: 0.15}.get(missing_cnt, 0.15)
+    # Instability penalty (soft)
+    # 0.00 -> 0 penalty, 0.05 -> ~0.10 penalty, 0.10 -> ~0.20 penalty
+    instab_pen = min(0.20, prob_instability * 2.0)
 
-    # --- strict odds bonus (small)
-    strict_ok = _safe_bool(flags.get("odds_strict_ok"), False)
-    strict_bonus = 0.03 if (use_strict_bonus and strict_ok) else 0.0
+    # If odds are not matched, quality is basically trash for Friday selection
+    if not odds_matched:
+        return 0.0
 
-    # --- instability penalty (small but real)
-    # prob_instability ~ 0..1 ; bigger = worse
-    inst = flags.get("prob_instability")
-    inst = _safe_float(inst, 0.0) if inst is not None else 0.0
-    inst = max(0.0, min(1.0, inst))
-    inst_penalty = (0.10 * inst) if use_instability_penalty else 0.0
+    # Base blend: odds quality + confidence
+    # odds_score is heavy because mismatches/nulls were killing you
+    base = 0.65 * odds_score + 0.35 * confidence
 
-    # Weighted score
-    # odds=0.50, confidence=0.25, completeness=0.25
-    score = (
-        0.50 * odds_part +
-        0.25 * conf +
-        0.25 * missing_factor
-    )
-    score = score + strict_bonus - inst_penalty
+    score = base - missing_pen - instab_pen
 
-    # Clamp 0..1
-    score = max(0.0, min(1.0, score))
-    return round(score, 4)
+    # Clamp
+    if score < 0.0:
+        return 0.0
+    if score > 1.0:
+        return 1.0
+    return score
 
-def fixture_passes_quality(
-    fx: Dict[str, Any],
-    threshold: float,
-) -> bool:
-    if threshold is None:
-        return True
-    try:
-        th = float(threshold)
-    except Exception:
-        return True
-    sc = fixture_quality_score(fx)
-    return sc >= th
+
+def passes_quality_gate(fx: Dict[str, Any], portfolio: str) -> bool:
+    """
+    Default thresholds for the "8.5" target.
+    Core: 0.70
+    Fun:  0.60
+    Draw: 0.70
+    """
+    q = fixture_quality_score(fx)
+
+    portfolio = (portfolio or "").lower().strip()
+    if portfolio in ("core", "corebet"):
+        return q >= 0.70
+    if portfolio in ("fun", "funbet"):
+        return q >= 0.60
+    if portfolio in ("draw", "drawbet"):
+        return q >= 0.70
+
+    # safe default
+    return q >= 0.70
