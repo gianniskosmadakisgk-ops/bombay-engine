@@ -2,12 +2,12 @@
 """
 Friday shortlist v3 (Quality Gate + your constraints) — FIXED for your Thursday schema.
 
-What this fixes (real issues you had):
-- Candidates were ZERO because the script looked for wrong field names (prob_1 etc).
-  Your Thursday report uses home_prob/draw_prob/away_prob and value_pct_over/value_pct_under.
-- Robust project root detection (Render's /src/src/... confusion).
+Fixes included:
+- Robust project root detection (Render /src/src/... confusion).
 - Reads Thursday logs from <project_root>/logs
 - Loads quality_gate_v1.py by FILE PATH (no need for __init__.py packages).
+- ✅ Critical fix for Python 3.13: registers module in sys.modules before exec_module
+  (prevents dataclasses/typing introspection crash).
 
 Outputs:
 - logs/friday_shortlist_v3.json
@@ -19,9 +19,6 @@ Business rules (locked):
   Then the double is ONLY those two small odds. Otherwise: no double.
 - FunBet: as system 4/7 style pool logic (only from singles pool, no draw).
 - DrawBet: strict. If no good draws, open=0 and pool empty (but system definition stays).
-
-Notes:
-- “Week” label is handled on Tuesday history, not here. Friday just produces picks.
 """
 
 from __future__ import annotations
@@ -77,16 +74,23 @@ class _QualityResult:
 def _load_quality_gate() -> Any:
     """
     Load src/analysis/quality_gate_v1.py by path (works even without packages/__init__.py).
+
+    ✅ Python 3.13 safe: must register in sys.modules before exec_module
+    or dataclasses/typing may crash with NoneType.__dict__ errors.
     """
     q_path = Path(__file__).resolve().parent / "quality_gate_v1.py"
     if not q_path.exists():
         return None
 
     import importlib.util
-    spec = importlib.util.spec_from_file_location("quality_gate_v1", str(q_path))
+
+    name = "quality_gate_v1"
+    spec = importlib.util.spec_from_file_location(name, str(q_path))
     if spec is None or spec.loader is None:
         return None
+
     mod = importlib.util.module_from_spec(spec)
+    sys.modules[name] = mod  # ✅ CRITICAL FIX
     spec.loader.exec_module(mod)  # type: ignore
     return mod
 
@@ -128,16 +132,14 @@ def _safe_float(v: Any) -> Optional[float]:
     return None
 
 def _fmt_date(date_str: str) -> str:
-    # Your Thursday uses "date": "2026-02-01" format already
     return str(date_str or "")
 
 def _fmt_time(time_str: str) -> str:
-    # Your Thursday uses "time": "15:00" already
     return str(time_str or "")
 
 def _market_defs() -> List[Dict[str, str]]:
     """
-    IMPORTANT: This matches YOUR Thursday schema:
+    Matches YOUR Thursday schema:
     probs: home_prob/draw_prob/away_prob/over_2_5_prob/under_2_5_prob
     odds:  offered_1/offered_x/offered_2/offered_over_2_5/offered_under_2_5
     value: value_pct_1/value_pct_x/value_pct_2/value_pct_over/value_pct_under
@@ -164,7 +166,6 @@ def _candidate_from_fixture(fx: Dict[str, Any], md: Dict[str, str]) -> Optional[
     away = str(fx.get("away") or "")
     fixture_id = fx.get("fixture_id")
 
-    # Your Thursday has date+time (GR). We keep them as-is.
     date = _fmt_date(str(fx.get("date") or ""))
     time_gr = _fmt_time(str(fx.get("time") or ""))
 
@@ -212,7 +213,7 @@ def _select_core(cands: List[Dict[str, Any]], bankroll_start: float) -> Tuple[Li
     # Core: avoid Draw markets by default
     core = [c for c in cands if c["market"] != "Draw"]
 
-    # Core filters (you can tweak later)
+    # Core filters (tweak later)
     core = [c for c in core if 1.55 <= c["odds"] <= 2.20 and c["prob"] >= 0.50 and c["value_pct"] >= 1.0]
     core.sort(key=lambda x: x["rank_score"], reverse=True)
     core = core[:7]  # hard cap
@@ -295,7 +296,7 @@ def _select_system(
     pool.sort(key=lambda x: x["rank_score"], reverse=True)
     pool = pool[:n]
 
-    # Predefined “Greek-friendly” system metadata (matches your screenshots style)
+    # Predefined system metadata
     if n == 7:
         system = {"k": 4, "n": 7, "columns": 35, "min_hits": 4, "stake": stake_total}
     elif n == 5:
@@ -328,7 +329,7 @@ def build_friday_shortlist() -> Dict[str, Any]:
     if not isinstance(fixtures, list):
         raise ValueError("Thursday report has no fixtures list.")
 
-    # Quality thresholds (your “8.5” defaults)
+    # Quality thresholds
     core_min_q = float(os.getenv("FRIDAY_CORE_MIN_QUALITY", "0.70"))
     fun_min_q = float(os.getenv("FRIDAY_FUN_MIN_QUALITY", "0.60"))
     draw_min_q = float(os.getenv("FRIDAY_DRAW_MIN_QUALITY", "0.70"))
@@ -380,7 +381,6 @@ def build_friday_shortlist() -> Dict[str, Any]:
     if not draw_pool:
         draw_open = 0.0
 
-    # Window: try from Thursday report
     window = th.get("window") or {}
     if not window:
         window = {
