@@ -1,11 +1,14 @@
 # src/analysis/friday_shortlist_v3.py
 """
-Friday shortlist v3 (with Quality Gate + your new constraints)
+Friday shortlist v3 (with Quality Gate + locked constraints)
 
-Fixes included:
-- Works regardless of Render's confusing "/src/src/..." path by finding project root dynamically.
-- Reads Thursday logs from the REAL folder: <project_root>/logs (not <project_root>/src/logs).
-- Imports quality_gate_v1 without "No module named src".
+Fixes:
+- Reads Thursday logs from <project_root>/logs (Render: /opt/render/project/src/logs)
+- Robust import of quality_gate_v1 without requiring __init__.py
+- FIXED field mapping to match Thursday report schema:
+  - home_prob/draw_prob/away_prob
+  - over_2_5_prob/under_2_5_prob
+  - value_pct_over/value_pct_under
 
 Outputs:
 - logs/friday_shortlist_v3.json
@@ -13,9 +16,9 @@ Outputs:
 
 Business rules (locked):
 - Core singles: max 7 total.
-- Core doubles: only if there are at least 2 Core singles with odds <= 1.60.
-  Then double is ONLY those two small odds. Otherwise no double.
-- DrawBet: strict. If no good draws, it outputs empty pool and system still present.
+- Core doubles: only if at least 2 Core singles with odds <= 1.60.
+  Double is ONLY those two small odds. Otherwise no double.
+- DrawBet: strict. If no good draws, outputs empty pool and open=0.
 """
 
 from __future__ import annotations
@@ -26,25 +29,24 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+import importlib.util
+
 
 # -------------------------
-# Path / import robustness
+# Path / project root
 # -------------------------
 
 def _find_project_root(start: Path) -> Path:
     """
-    We search upwards for a folder that contains BOTH:
+    Search upwards for a folder that contains BOTH:
       - logs/
-      - src/  (or analysis/ inside src/)
-    On Render your script path is usually: /opt/render/project/src/src/analysis/...
-    but logs live in: /opt/render/project/src/logs
+      - src/
+    On Render script path can be /opt/render/project/src/src/analysis/...
+    but logs live in /opt/render/project/src/logs
     """
     for p in [start] + list(start.parents):
         if (p / "logs").is_dir() and (p / "src").is_dir():
             return p
-        if (p / "logs").is_dir() and (p / "analysis").is_dir():
-            return p
-    # fallback: two parents up
     return start.parents[1]
 
 
@@ -52,21 +54,31 @@ _THIS_FILE = Path(__file__).resolve()
 PROJECT_ROOT = _find_project_root(_THIS_FILE.parent)
 LOGS_DIR = PROJECT_ROOT / "logs"
 
-# Make imports work whether code lives in PROJECT_ROOT/src or PROJECT_ROOT/src/src
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
-if (PROJECT_ROOT / "src").is_dir() and str(PROJECT_ROOT / "src") not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT / "src"))
-if (PROJECT_ROOT / "src" / "src").is_dir() and str(PROJECT_ROOT / "src" / "src") not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT / "src" / "src"))
 
-try:
-    from analysis.quality_gate_v1 import fixture_quality_score
-except Exception:
-    # Last-resort import (if analysis isn't a package for some reason)
-    # This keeps Friday running instead of dying.
-    def fixture_quality_score(fixture: Dict[str, Any]):  # type: ignore
-        return type("QR", (), {"score": 0.0, "reasons": ("import_failed",)})
+# -------------------------
+# Robust local import (no __init__.py needed)
+# -------------------------
+
+def _load_quality_gate():
+    qpath = _THIS_FILE.parent / "quality_gate_v1.py"
+    if not qpath.exists():
+        # fallback stub
+        def fixture_quality_score(_fx: Dict[str, Any]):
+            return type("QR", (), {"score": 0.0, "reasons": ("quality_gate_missing",)})
+        return fixture_quality_score
+
+    spec = importlib.util.spec_from_file_location("quality_gate_v1", str(qpath))
+    if spec is None or spec.loader is None:
+        def fixture_quality_score(_fx: Dict[str, Any]):
+            return type("QR", (), {"score": 0.0, "reasons": ("quality_gate_load_failed",)})
+        return fixture_quality_score
+
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)  # type: ignore
+    return getattr(mod, "fixture_quality_score")
+
+
+fixture_quality_score = _load_quality_gate()
 
 
 # -------------------------
@@ -85,38 +97,21 @@ def _write_json(path: Path, obj: Any) -> None:
     with path.open("w", encoding="utf-8") as f:
         json.dump(obj, f, ensure_ascii=False, indent=2)
 
-def _parse_dt(dt_str: str) -> Optional[datetime]:
-    if not dt_str:
-        return None
-    try:
-        return datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
-    except Exception:
-        return None
-
-def _fmt_date_gr(dt_utc: Optional[datetime]) -> str:
-    if not dt_utc:
-        return ""
-    return dt_utc.date().isoformat()
-
-def _fmt_time_gr(dt_utc: Optional[datetime]) -> str:
-    if not dt_utc:
-        return ""
-    return dt_utc.strftime("%H:%M")
-
-def _market_defs() -> List[Dict[str, str]]:
-    return [
-        {"code": "1", "label": "Home (1)", "offered": "offered_1", "prob": "prob_1", "value": "value_pct_1"},
-        {"code": "X", "label": "Draw", "offered": "offered_x", "prob": "prob_x", "value": "value_pct_x"},
-        {"code": "2", "label": "Away (2)", "offered": "offered_2", "prob": "prob_2", "value": "value_pct_2"},
-        {"code": "O25", "label": "Over 2.5", "offered": "offered_over_2_5", "prob": "prob_over_2_5", "value": "value_pct_over_2_5"},
-        {"code": "U25", "label": "Under 2.5", "offered": "offered_under_2_5", "prob": "prob_under_2_5", "value": "value_pct_under_2_5"},
-    ]
-
 def _get_num(fx: Dict[str, Any], key: str) -> Optional[float]:
     v = fx.get(key)
     if isinstance(v, (int, float)):
         return float(v)
     return None
+
+def _market_defs() -> List[Dict[str, str]]:
+    # MATCHES your Thursday schema
+    return [
+        {"code": "1",   "label": "Home (1)",  "offered": "offered_1",          "prob": "home_prob",       "value": "value_pct_1"},
+        {"code": "X",   "label": "Draw",      "offered": "offered_x",          "prob": "draw_prob",       "value": "value_pct_x"},
+        {"code": "2",   "label": "Away (2)",  "offered": "offered_2",          "prob": "away_prob",       "value": "value_pct_2"},
+        {"code": "O25", "label": "Over 2.5",  "offered": "offered_over_2_5",   "prob": "over_2_5_prob",   "value": "value_pct_over"},
+        {"code": "U25", "label": "Under 2.5", "offered": "offered_under_2_5",  "prob": "under_2_5_prob",  "value": "value_pct_under"},
+    ]
 
 def _candidate_from_fixture(fx: Dict[str, Any], md: Dict[str, str]) -> Optional[Dict[str, Any]]:
     odds = _get_num(fx, md["offered"])
@@ -125,17 +120,21 @@ def _candidate_from_fixture(fx: Dict[str, Any], md: Dict[str, str]) -> Optional[
     if odds is None or prob is None:
         return None
 
-    kickoff = _parse_dt(str(fx.get("kickoff_utc") or ""))
+    # Thursday already provides date/time fields
+    date = str(fx.get("date") or "")
+    time_gr = str(fx.get("time") or "")
     league = str(fx.get("league") or "")
     home = str(fx.get("home") or "")
     away = str(fx.get("away") or "")
     fixture_id = fx.get("fixture_id")
 
-    score = (value_pct or 0.0) * 0.6 + (prob - 0.5) * 100 * 0.4
+    # Simple rank score (keeps your existing intent)
+    score = (float(value_pct or 0.0) * 0.6) + ((float(prob) - 0.5) * 100.0 * 0.4)
+
     return {
         "fixture_id": fixture_id,
-        "date": _fmt_date_gr(kickoff),
-        "time_gr": _fmt_time_gr(kickoff),
+        "date": date,
+        "time_gr": time_gr,
         "league": league,
         "match": f"{home} – {away}",
         "market": md["label"],
@@ -148,7 +147,6 @@ def _candidate_from_fixture(fx: Dict[str, Any], md: Dict[str, str]) -> Optional[
         "raw": fx,
     }
 
-
 def _load_latest_thursday_report() -> Dict[str, Any]:
     p1 = LOGS_DIR / "thursday_report_v3.json"
     if p1.exists():
@@ -158,20 +156,21 @@ def _load_latest_thursday_report() -> Dict[str, Any]:
     if th_files:
         return _read_json(th_files[0])
 
-    raise FileNotFoundError(
-        f"Could not find thursday_report_v3.json or any thursday_*.json inside {LOGS_DIR}"
-    )
+    raise FileNotFoundError(f"Could not find thursday_report_v3.json or any thursday_*.json inside {LOGS_DIR}")
 
+# -------------------------
+# Selection logic
+# -------------------------
 
 def _select_core(cands: List[Dict[str, Any]], bankroll_start: float) -> Tuple[List[Dict[str, Any]], Optional[Dict[str, Any]], float]:
     core = [c for c in cands if c["market"] != "Draw"]
     core = [c for c in core if 1.55 <= c["odds"] <= 2.20 and c["prob"] >= 0.50 and c["value_pct"] >= 1.0]
-
     core.sort(key=lambda x: x["rank_score"], reverse=True)
-    core = core[:7]
+    core = core[:7]  # max 7 singles
 
     singles: List[Dict[str, Any]] = []
     open_total = 0.0
+
     for c in core:
         strength = (c["prob"] - 0.5) * 100 + c["value_pct"]
         if strength >= 20:
@@ -180,6 +179,7 @@ def _select_core(cands: List[Dict[str, Any]], bankroll_start: float) -> Tuple[Li
             stake = 30
         else:
             stake = 20
+
         singles.append({
             "date": c["date"],
             "time_gr": c["time_gr"],
@@ -192,6 +192,7 @@ def _select_core(cands: List[Dict[str, Any]], bankroll_start: float) -> Tuple[Li
         })
         open_total += stake
 
+    # Double: ONLY two small odds <= 1.60, and ONLY between them
     eligible = [s for s in singles if s["odds"] <= 1.60]
     eligible.sort(key=lambda s: s["odds"])
     core_double = None
@@ -209,6 +210,7 @@ def _select_core(cands: List[Dict[str, Any]], bankroll_start: float) -> Tuple[Li
         }
         open_total += 20
 
+    # Exposure cap
     exposure_cap_pct = float(os.getenv("CORE_EXPOSURE_CAP_PCT", "0.30"))
     cap = bankroll_start * exposure_cap_pct
     if open_total > cap and singles:
@@ -222,11 +224,22 @@ def _select_core(cands: List[Dict[str, Any]], bankroll_start: float) -> Tuple[Li
     return singles, core_double, open_total
 
 
-def _select_system(cands: List[Dict[str, Any]], *, n: int, min_odds: float, max_odds: float,
-                   min_prob: float, min_value: float, stake_total: float, allow_draw: bool) -> Tuple[List[Dict[str, Any]], Dict[str, Any], float]:
+def _select_system(
+    cands: List[Dict[str, Any]],
+    *,
+    n: int,
+    min_odds: float,
+    max_odds: float,
+    min_prob: float,
+    min_value: float,
+    stake_total: float,
+    allow_draw: bool,
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any], float]:
+
     pool = cands[:]
     if not allow_draw:
         pool = [c for c in pool if c["market"] != "Draw"]
+
     pool = [c for c in pool if min_odds <= c["odds"] <= max_odds and c["prob"] >= min_prob and c["value_pct"] >= min_value]
     pool.sort(key=lambda x: x["rank_score"], reverse=True)
     pool = pool[:n]
@@ -264,6 +277,12 @@ def build_friday_shortlist() -> Dict[str, Any]:
 
     mdefs = _market_defs()
     all_cands: List[Dict[str, Any]] = []
+
+    q_by_id: Dict[Any, float] = {}
+    for fx in fixtures:
+        qr = fixture_quality_score(fx)
+        q_by_id[fx.get("fixture_id")] = float(qr.score)
+
     for fx in fixtures:
         for md in mdefs:
             c = _candidate_from_fixture(fx, md)
@@ -273,17 +292,12 @@ def build_friday_shortlist() -> Dict[str, Any]:
                 c["quality_reasons"] = list(getattr(qr, "reasons", ()))
                 all_cands.append(c)
 
-    q_by_id = {}
-    for fx in fixtures:
-        qr = fixture_quality_score(fx)
-        q_by_id[fx.get("fixture_id")] = float(qr.score)
-
-    core_cands = [c for c in all_cands if (q_by_id.get(c["fixture_id"], 0.0) >= core_min_q)]
-    fun_cands = [c for c in all_cands if (q_by_id.get(c["fixture_id"], 0.0) >= fun_min_q)]
-    draw_cands = [c for c in all_cands if (q_by_id.get(c["fixture_id"], 0.0) >= draw_min_q)]
+    core_cands = [c for c in all_cands if q_by_id.get(c["fixture_id"], 0.0) >= core_min_q]
+    fun_cands  = [c for c in all_cands if q_by_id.get(c["fixture_id"], 0.0) >= fun_min_q]
+    draw_cands = [c for c in all_cands if q_by_id.get(c["fixture_id"], 0.0) >= draw_min_q]
 
     core_bankroll = float(os.getenv("CORE_BANKROLL_START", "800"))
-    fun_bankroll = float(os.getenv("FUN_BANKROLL_START", "400"))
+    fun_bankroll  = float(os.getenv("FUN_BANKROLL_START", "400"))
     draw_bankroll = float(os.getenv("DRAW_BANKROLL_START", "300"))
 
     core_singles, core_double, core_open = _select_core(core_cands, core_bankroll)
@@ -292,28 +306,26 @@ def build_friday_shortlist() -> Dict[str, Any]:
     fun_pool, fun_system, fun_open = _select_system(
         fun_cands,
         n=7, min_odds=2.00, max_odds=3.60, min_prob=0.32, min_value=2.0,
-        stake_total=fun_stake_total, allow_draw=False,
+        stake_total=fun_stake_total, allow_draw=False
     )
 
     draw_stake_total = float(os.getenv("DRAW_SYSTEM_STAKE", "25"))
     draw_pool, draw_system, draw_open = _select_system(
         draw_cands,
         n=5, min_odds=3.00, max_odds=4.50, min_prob=0.24, min_value=2.0,
-        stake_total=draw_stake_total, allow_draw=True,
+        stake_total=draw_stake_total, allow_draw=True
     )
     draw_pool = [x for x in draw_pool if x["market"] == "Draw"]
     if not draw_pool:
         draw_open = 0.0
 
-    window = th.get("window") or {}
-    if not window:
-        window = {
-            "start": str(th.get("start_date") or ""),
-            "end": str(th.get("end_date") or ""),
-            "hours": int(th.get("window_hours") or 72),
-        }
+    window = th.get("window") or {
+        "start": str(th.get("start_date") or ""),
+        "end": str(th.get("end_date") or ""),
+        "hours": int(th.get("window_hours") or 72),
+    }
 
-    out = {
+    return {
         "title": "Bombay Friday — Week",
         "generated_at": _utc_now_iso(),
         "window": window,
@@ -357,7 +369,6 @@ def build_friday_shortlist() -> Dict[str, Any]:
             },
         },
     }
-    return out
 
 
 def main() -> int:
@@ -368,7 +379,12 @@ def main() -> int:
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
         _write_json(LOGS_DIR / f"friday_{ts}.json", friday)
 
-        print(json.dumps({"status": "ok", "saved": str(LOGS_DIR / "friday_shortlist_v3.json"), "generated_at": friday["generated_at"]}))
+        print(json.dumps({
+            "status": "ok",
+            "saved": str(LOGS_DIR / "friday_shortlist_v3.json"),
+            "generated_at": friday["generated_at"],
+            "counts": friday["debug"]["counts"],
+        }))
         return 0
     except Exception as e:
         print(json.dumps({"status": "error", "error": str(e), "logs_dir": str(LOGS_DIR)}))
