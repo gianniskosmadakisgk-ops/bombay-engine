@@ -3,12 +3,13 @@ from __future__ import annotations
 
 import json
 import os
-import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+import re
+import unicodedata
 import requests
 
 API_FOOTBALL_KEY = os.getenv("FOOTBALL_API_KEY")
@@ -49,6 +50,41 @@ def _load_latest_friday() -> Dict[str, Any]:
     if not files:
         raise FileNotFoundError("No friday_shortlist_v3.json or friday_*.json found in logs/")
     return _read_json(files[0])
+
+# -------------------------
+# Tiny name normalizer (for ID resolve)
+# -------------------------
+
+def _strip_accents(s: str) -> str:
+    if not s:
+        return ""
+    s = unicodedata.normalize("NFKD", s)
+    return "".join(ch for ch in s if not unicodedata.combining(ch))
+
+def normalize_team_name(raw: str) -> str:
+    if not raw:
+        return ""
+    s = _strip_accents(raw).lower().strip()
+    s = s.replace("&", "and")
+    s = re.sub(r"[^a-z0-9\s]+", " ", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    kill = {"fc", "afc", "cf", "sc", "sv", "ssc", "ac", "cd", "ud", "bk", "fk", "if"}
+    parts = [p for p in s.split() if p not in kill]
+    s = " ".join(parts).strip()
+    aliases = {
+        "wolverhampton wanderers": "wolves",
+        "wolverhampton": "wolves",
+        "brighton and hove albion": "brighton",
+        "west bromwich albion": "west brom",
+        "manchester united": "man utd",
+        "manchester city": "man city",
+        "newcastle united": "newcastle",
+        "tottenham hotspur": "tottenham",
+        "bayern munchen": "bayern munich",
+        "paris saint germain": "psg",
+        "internazionale": "inter",
+    }
+    return aliases.get(s, s)
 
 # -------------------------
 # Settlement helpers
@@ -114,8 +150,66 @@ def settle_market(ft: FixtureFT, market: str) -> Optional[bool]:
         return ft.ag > ft.hg
     if m == "Draw":
         return ft.hg == ft.ag
+    return None
 
-    # unknown market type
+# -------------------------
+# Legacy Friday support: resolve fixture_id by date + team names
+# -------------------------
+
+def _api_fixtures_by_date(date_yyyy_mm_dd: str) -> List[Dict[str, Any]]:
+    """
+    Fetch fixtures for a given date (UTC) and keep only finished ones.
+    This is used ONLY when Friday lines don't include fixture_id.
+    """
+    if not API_FOOTBALL_KEY:
+        raise RuntimeError("Missing FOOTBALL_API_KEY for Tuesday recap.")
+    url = f"{API_FOOTBALL_BASE}/fixtures"
+    # API-Football supports date=YYYY-MM-DD; status filter can be applied but is optional.
+    params = {"date": date_yyyy_mm_dd}
+    r = requests.get(url, headers=HEADERS_FOOTBALL, params=params, timeout=25).json()
+    resp = r.get("response") or []
+    out = []
+    for fx in resp:
+        st = (fx.get("fixture", {}).get("status", {}).get("short") or "")
+        if st not in ("FT", "AET", "PEN"):  # finished
+            continue
+        fid = fx.get("fixture", {}).get("id")
+        h = fx.get("teams", {}).get("home", {}).get("name") or ""
+        a = fx.get("teams", {}).get("away", {}).get("name") or ""
+        if fid is None or not h or not a:
+            continue
+        out.append({
+            "fixture_id": int(fid),
+            "home_norm": normalize_team_name(h),
+            "away_norm": normalize_team_name(a),
+        })
+    return out
+
+def _resolve_fixture_id_legacy(line: Dict[str, Any], date_cache: Dict[str, List[Dict[str, Any]]]) -> Optional[int]:
+    """
+    Resolve fixture_id for old Friday JSONs that don't include it.
+    Uses: line.date + line.match (Home – Away)
+    """
+    date = str(line.get("date") or "").strip()
+    match = str(line.get("match") or "")
+    if not date or "–" not in match:
+        return None
+
+    parts = [p.strip() for p in match.split("–", 1)]
+    if len(parts) != 2:
+        return None
+    home_norm = normalize_team_name(parts[0])
+    away_norm = normalize_team_name(parts[1])
+    if not home_norm or not away_norm:
+        return None
+
+    if date not in date_cache:
+        date_cache[date] = _api_fixtures_by_date(date)
+
+    for fx in date_cache[date]:
+        if fx["home_norm"] == home_norm and fx["away_norm"] == away_norm:
+            return int(fx["fixture_id"])
+
     return None
 
 # -------------------------
@@ -123,10 +217,7 @@ def settle_market(ft: FixtureFT, market: str) -> Optional[bool]:
 # -------------------------
 
 def _comb_indices(n: int, k: int) -> List[Tuple[int, ...]]:
-    # small n only (n<=7) — brute force ok
     out: List[Tuple[int, ...]] = []
-    idx = list(range(k))
-
     def rec(start: int, comb: List[int]):
         if len(comb) == k:
             out.append(tuple(comb))
@@ -135,22 +226,15 @@ def _comb_indices(n: int, k: int) -> List[Tuple[int, ...]]:
             comb.append(i)
             rec(i + 1, comb)
             comb.pop()
-
     rec(0, [])
     return out
 
 def system_payout(lines: List[Dict[str, Any]], k: int, columns: int, stake_total: float) -> Dict[str, Any]:
-    """
-    lines: each has {won(bool|None), odds(float)}
-    We assume stake_total is TOTAL spend across all columns.
-    payout = sum(product_odds * stake_per_col) for each winning combo.
-    """
     if not lines or columns <= 0 or stake_total <= 0:
         return {"staked": float(stake_total), "returned": 0.0, "roi": None, "winning_columns": 0}
 
     stake_per_col = stake_total / float(columns)
-    n = len(lines)
-    combos = _comb_indices(n, k)
+    combos = _comb_indices(len(lines), k)
 
     returned = 0.0
     win_cols = 0
@@ -158,8 +242,7 @@ def system_payout(lines: List[Dict[str, Any]], k: int, columns: int, stake_total
         ok = True
         prod = 1.0
         for ix in c:
-            w = lines[ix].get("won")
-            if w is not True:
+            if lines[ix].get("won") is not True:
                 ok = False
                 break
             prod *= float(lines[ix].get("odds") or 0.0)
@@ -190,18 +273,6 @@ def _extract_all_lines(friday: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], Li
     draw = (friday.get("drawbet") or {}).get("system_pool") or []
     return list(core), list(fun), list(draw)
 
-def _fixture_ids_from_lines(lines: List[Dict[str, Any]]) -> List[int]:
-    ids = []
-    for x in lines:
-        fxid = x.get("fixture_id") or x.get("id") or x.get("fixtureId")
-        if fxid is None:
-            continue
-        try:
-            ids.append(int(fxid))
-        except Exception:
-            continue
-    return ids
-
 def _chrono_key(x: Dict[str, Any]) -> Tuple[str, str]:
     return (str(x.get("date") or ""), str(x.get("time_gr") or ""))
 
@@ -211,27 +282,45 @@ def _chrono_key(x: Dict[str, Any]) -> Tuple[str, str]:
 
 def build_tuesday_recap() -> Dict[str, Any]:
     friday = _load_latest_friday()
-
     core_lines, fun_lines, draw_lines = _extract_all_lines(friday)
-    all_fxids = sorted(set(_fixture_ids_from_lines(core_lines) + _fixture_ids_from_lines(fun_lines) + _fixture_ids_from_lines(draw_lines)))
+
+    # Legacy resolver cache (date -> fixtures list)
+    date_cache: Dict[str, List[Dict[str, Any]]] = {}
+
+    def get_fixture_id(line: Dict[str, Any]) -> Optional[int]:
+        fxid = line.get("fixture_id") or line.get("id") or line.get("fixtureId")
+        if fxid is not None:
+            try:
+                return int(fxid)
+            except Exception:
+                pass
+        # legacy fallback
+        return _resolve_fixture_id_legacy(line, date_cache)
+
+    # Collect unique fixture ids
+    all_fxids: List[int] = []
+    for group in (core_lines, fun_lines, draw_lines):
+        for ln in group:
+            fid = get_fixture_id(ln)
+            if fid is not None:
+                all_fxids.append(fid)
+    all_fxids = sorted(set(all_fxids))
 
     # fetch FT once per fixture_id
     ft_map: Dict[int, FixtureFT] = {}
-    missing = []
+    missing_fxids: List[int] = []
     for fxid in all_fxids:
         ft = fetch_fixture_ft(fxid)
         if ft is None:
-            missing.append(fxid)
+            missing_fxids.append(fxid)
         else:
             ft_map[fxid] = ft
 
-    # settle a line
     def settle_line(line: Dict[str, Any]) -> Optional[bool]:
-        fxid = line.get("fixture_id") or line.get("id") or line.get("fixtureId")
-        if fxid is None:
+        fid = get_fixture_id(line)
+        if fid is None:
             return None
-        fxid = int(fxid)
-        ft = ft_map.get(fxid)
+        ft = ft_map.get(fid)
         if not ft:
             return None
         return settle_market(ft, str(line.get("market") or ""))
@@ -241,8 +330,8 @@ def build_tuesday_recap() -> Dict[str, Any]:
     core_returned = 0.0
     core_won = 0
     core_lost = 0
-
     core_out_lines = []
+
     for x in core_lines:
         won = settle_line(x)
         odds = float(_sf(x.get("odds"), 0.0) or 0.0)
@@ -267,9 +356,7 @@ def build_tuesday_recap() -> Dict[str, Any]:
         })
 
     core_out_lines.sort(key=_chrono_key)
-    core_roi = None
-    if core_staked > 0:
-        core_roi = round((core_returned - core_staked) / core_staked, 4)
+    core_roi = round((core_returned - core_staked) / core_staked, 4) if core_staked > 0 else None
 
     # ---- FUN system payout (4/7 columns 35) ----
     fun_out_lines = []
@@ -325,14 +412,8 @@ def build_tuesday_recap() -> Dict[str, Any]:
     draw_after_open = draw_start - draw_open
     draw_end = draw_after_open + float(draw_payout["returned"] or 0.0)
 
-    # Weekly ROI per bankroll (real)
-    def _roi(staked: float, returned: float) -> Optional[float]:
-        if staked <= 0:
-            return None
-        return round((returned - staked) / staked, 4)
-
     out = {
-        "title": "Bombay Tuesday Recap — v3 (API-Football settlement)",
+        "title": "Bombay Tuesday Recap — v3 (API-Football settlement + legacy fixture_id resolver)",
         "generated_at": _utc_now_iso(),
         "window": friday.get("window") or {},
 
@@ -344,7 +425,7 @@ def build_tuesday_recap() -> Dict[str, Any]:
             "returned": round(core_returned, 2),
             "won": core_won,
             "lost": core_lost,
-            "roi_week": _roi(core_staked, core_returned),
+            "roi_week": core_roi,
             "bankroll_end": round(core_end, 2),
             "lines": core_out_lines,
         },
@@ -357,9 +438,7 @@ def build_tuesday_recap() -> Dict[str, Any]:
             "payout": fun_payout,
             "roi_week": fun_payout.get("roi"),
             "bankroll_end": round(fun_end, 2),
-            "lines": [
-                {k: v for k, v in x.items() if k != "won"} for x in fun_out_lines
-            ],
+            "lines": [{k: v for k, v in x.items() if k != "won"} for x in fun_out_lines],
         },
 
         "drawbet": {
@@ -370,13 +449,11 @@ def build_tuesday_recap() -> Dict[str, Any]:
             "payout": draw_payout,
             "roi_week": draw_payout.get("roi"),
             "bankroll_end": round(draw_end, 2),
-            "lines": [
-                {k: v for k, v in x.items() if k != "won"} for x in draw_out_lines
-            ],
+            "lines": [{k: v for k, v in x.items() if k != "won"} for x in draw_out_lines],
         },
 
         "summary": {
-            "missing_fixtures": missing,
+            "missing_fixtures": missing_fxids,
             "bankrolls_end": {
                 "corebet": round(core_end, 2),
                 "funbet": round(fun_end, 2),
@@ -385,7 +462,7 @@ def build_tuesday_recap() -> Dict[str, Any]:
         },
     }
 
-    # Next-week portable history
+    # Next-week portable history (bankroll carry)
     out_hist = {
         "as_of": out["generated_at"][:10],
         "bankrolls": out["summary"]["bankrolls_end"],
