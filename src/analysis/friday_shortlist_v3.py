@@ -131,6 +131,14 @@ def _market_defs() -> List[Dict[str, str]]:
         {"label": "Under 2.5","odds": "offered_under_2_5", "prob": "under_2_5_prob", "value": "value_pct_under"},
     ]
 
+def _prob_points(prob: float) -> float:
+    # convert prob in [0..1] into centered points scale
+    return (float(prob) - 0.50) * 100.0
+
+def _rank_score(value_pct: float, prob: float) -> float:
+    # EV-first, with stability from prob
+    return 0.60 * float(value_pct) + 0.40 * _prob_points(float(prob))
+
 def _candidate_from_fixture(fx: Dict[str, Any], md: Dict[str, str]) -> Optional[Dict[str, Any]]:
     odds = _safe_float(fx.get(md["odds"]))
     prob = _safe_float(fx.get(md["prob"]))
@@ -147,7 +155,6 @@ def _candidate_from_fixture(fx: Dict[str, Any], md: Dict[str, str]) -> Optional[
     date = _fmt_date(str(fx.get("date") or ""))
     time_gr = _fmt_time(str(fx.get("time") or ""))
 
-    rank_score = (value_pct * 1.0) + ((prob - 0.50) * 100.0 * 0.7)
     qr = fixture_quality_score(fx)
 
     return {
@@ -160,7 +167,7 @@ def _candidate_from_fixture(fx: Dict[str, Any], md: Dict[str, str]) -> Optional[
         "odds": round(float(odds), 2),
         "prob": round(float(prob), 4),
         "value_pct": round(float(value_pct), 2),
-        "rank_score": float(rank_score),
+        "rank_score": float(_rank_score(float(value_pct), float(prob))),
         "quality": round(float(qr.score), 3),
         "quality_reasons": list(qr.reasons),
     }
@@ -184,27 +191,67 @@ def _load_latest_thursday_report() -> Dict[str, Any]:
 def core_stake_from_odds(odds: float) -> int:
     """
     Deterministic stake rule (NO scaling).
-    Rule you asked:
       - odds <= 2.00 -> 40
       - odds >  2.00 -> 30
     """
-    return 40 if odds <= 2.00 else 30
+    return 40 if float(odds) <= 2.00 else 30
+
+
+# -------------------------
+# Selection logic helpers
+# -------------------------
+
+def _is_total_market(market: str) -> bool:
+    return market in ("Over 2.5", "Under 2.5")
+
+def _is_under(market: str) -> bool:
+    return market == "Under 2.5"
 
 
 # -------------------------
 # Selection logic
 # -------------------------
 
-def _select_core(cands: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], Optional[Dict[str, Any]], float]:
+def _select_core(
+    cands: List[Dict[str, Any]],
+    strict_ok_by_id: Dict[Any, bool],
+) -> Tuple[List[Dict[str, Any]], Optional[Dict[str, Any]], float]:
+    """
+    Core rules:
+    - No Draw by default
+    - Basic filters: odds window / min prob / min value_pct
+    - STRICT odds gate (default ON via env)
+    - Correlation caps:
+        * totals (over/under) max = 4
+        * under max = 1
+        * prefer over vs under
+    """
+    require_strict = os.getenv("FRIDAY_CORE_REQUIRE_STRICT_OK", "true").lower() == "true"
+    max_totals = int(os.getenv("FRIDAY_CORE_MAX_TOTALS", "4"))
+    max_unders = int(os.getenv("FRIDAY_CORE_MAX_UNDERS", "1"))
+
     core = [c for c in cands if c["market"] != "Draw"]
     core = [c for c in core if 1.55 <= float(c["odds"]) <= 2.20 and float(c["prob"]) >= 0.50 and float(c["value_pct"]) >= 1.0]
-    core.sort(key=lambda x: x["rank_score"], reverse=True)
-    core = core[:7]
+
+    if require_strict:
+        core = [c for c in core if bool(strict_ok_by_id.get(c.get("fixture_id"), False))]
+
+    # Rank EV-first
+    core.sort(key=lambda x: float(x["rank_score"]), reverse=True)
 
     singles: List[Dict[str, Any]] = []
     open_total = 0.0
+    totals_cnt = 0
+    unders_cnt = 0
 
     for c in core:
+        # caps
+        if _is_total_market(c["market"]):
+            if totals_cnt >= max_totals:
+                continue
+            if _is_under(c["market"]) and unders_cnt >= max_unders:
+                continue
+
         stake = core_stake_from_odds(float(c["odds"]))
         singles.append({
             "fixture_id": c.get("fixture_id"),
@@ -220,6 +267,15 @@ def _select_core(cands: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], Opt
         })
         open_total += stake
 
+        if _is_total_market(c["market"]):
+            totals_cnt += 1
+            if _is_under(c["market"]):
+                unders_cnt += 1
+
+        if len(singles) == 7:
+            break
+
+    # Optional: Core double small-odds rule (kept as-is)
     eligible = [s for s in singles if float(s["odds"]) <= 1.60]
     eligible.sort(key=lambda s: float(s["odds"]))
 
@@ -244,7 +300,7 @@ def _select_core(cands: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], Opt
 def _select_fun_system(cands: List[Dict[str, Any]], stake_total: float) -> Tuple[List[Dict[str, Any]], Dict[str, Any], float]:
     pool = [c for c in cands if c["market"] != "Draw"]
     pool = [c for c in pool if 1.90 <= float(c["odds"]) <= 3.60 and float(c["prob"]) >= 0.30 and float(c["value_pct"]) >= 1.0]
-    pool.sort(key=lambda x: x["rank_score"], reverse=True)
+    pool.sort(key=lambda x: float(x["rank_score"]), reverse=True)
     pool = pool[:7]
 
     system = {"k": 4, "n": 7, "columns": 35, "min_hits": 4, "stake": float(stake_total)}
@@ -291,6 +347,45 @@ def _select_draw_top5(all_cands: List[Dict[str, Any]], stake_total: float) -> Tu
 
 
 # -------------------------
+# Sanity checks (fail fast)
+# -------------------------
+
+def _assert_friday_sanity(friday: Dict[str, Any]) -> None:
+    def _all_lines() -> List[Dict[str, Any]]:
+        return (
+            (friday.get("core", {}) or {}).get("singles", []) +
+            (friday.get("funbet", {}) or {}).get("system_pool", []) +
+            (friday.get("drawbet", {}) or {}).get("system_pool", [])
+        )
+
+    # fixture_id everywhere
+    for ln in _all_lines():
+        fid = ln.get("fixture_id")
+        if not isinstance(fid, int):
+            raise ValueError(f"Missing/invalid fixture_id in line: {ln}")
+
+    # chronological ordering inside each list
+    for path in [("core", "singles"), ("funbet", "system_pool"), ("drawbet", "system_pool")]:
+        lst = (friday.get(path[0], {}) or {}).get(path[1], [])
+        if lst != sorted(lst, key=_chrono_key):
+            raise ValueError(f"List not chronological: {path}")
+
+    # stake rule check (Core)
+    for ln in (friday.get("core", {}) or {}).get("singles", []):
+        odds = float(ln["odds"])
+        expected = 40 if odds <= 2.00 else 30
+        if int(ln["stake"]) != expected:
+            raise ValueError(f"Stake rule broken: odds={odds} stake={ln['stake']} expected={expected}")
+
+    # draw pool not empty if draw candidates exist (best effort)
+    dbg = friday.get("debug", {}) or {}
+    draw_possible = bool((dbg.get("counts", {}) or {}).get("draw_candidates_possible", 0))
+    draw_pool_n = len((friday.get("drawbet", {}) or {}).get("system_pool", []) or [])
+    if draw_possible and draw_pool_n == 0:
+        raise ValueError("DrawBet is empty but draw candidates exist.")
+
+
+# -------------------------
 # Main builder
 # -------------------------
 
@@ -312,23 +407,42 @@ def build_friday_shortlist() -> Dict[str, Any]:
 
     all_cands: List[Dict[str, Any]] = []
     q_by_id: Dict[Any, float] = {}
+    strict_ok_by_id: Dict[Any, bool] = {}
 
+    # per-fixture signals
     for fx in fixtures:
+        fid = fx.get("fixture_id")
         qr = fixture_quality_score(fx)
-        q_by_id[fx.get("fixture_id")] = float(qr.score)
+        q_by_id[fid] = float(qr.score)
 
+        flags = (fx.get("flags") or {})
+        strict_ok_by_id[fid] = bool(flags.get("odds_strict_ok") is True)
+
+    # build candidates
     for fx in fixtures:
         for md in _market_defs():
             c = _candidate_from_fixture(fx, md)
             if c:
                 all_cands.append(c)
 
+    # if any fixture_id missing in Thursday -> fail fast (should never happen)
+    if any((c.get("fixture_id") is None) for c in all_cands):
+        bad = [c for c in all_cands if c.get("fixture_id") is None][:3]
+        raise ValueError(f"Some candidates have missing fixture_id. Examples: {bad}")
+
     core_cands = [c for c in all_cands if (q_by_id.get(c["fixture_id"], 0.0) >= core_min_q)]
     fun_cands  = [c for c in all_cands if (q_by_id.get(c["fixture_id"], 0.0) >= fun_min_q)]
 
-    core_singles, core_double, core_open = _select_core(core_cands)
+    core_singles, core_double, core_open = _select_core(core_cands, strict_ok_by_id)
     fun_pool, fun_system, fun_open = _select_fun_system(fun_cands, fun_stake_total)
     draw_pool, draw_system, draw_open = _select_draw_top5(all_cands, draw_stake_total)
+
+    # draw candidates possible (for sanity)
+    draw_candidates_possible = 0
+    for c in all_cands:
+        if c["market"] == "Draw":
+            if c.get("odds") is not None and 3.00 <= float(c["odds"]) <= 5.50 and c.get("prob") is not None:
+                draw_candidates_possible += 1
 
     window = th.get("window") or {
         "from": str(th.get("start_date") or ""),
@@ -346,6 +460,12 @@ def build_friday_shortlist() -> Dict[str, Any]:
             "bankroll_start": core_bankroll,
             "max_singles": 7,
             "stake_rule": "odds<=2.00 -> 40, else -> 30 (NO scaling)",
+            "rules": {
+                "require_strict_ok": (os.getenv("FRIDAY_CORE_REQUIRE_STRICT_OK", "true").lower() == "true"),
+                "max_totals": int(os.getenv("FRIDAY_CORE_MAX_TOTALS", "4")),
+                "max_unders": int(os.getenv("FRIDAY_CORE_MAX_UNDERS", "1")),
+                "totals_bias": "Over preferred, Under capped",
+            },
             "singles": core_singles,
             "double": core_double,
             "doubles": ([core_double] if core_double else []),
@@ -381,9 +501,13 @@ def build_friday_shortlist() -> Dict[str, Any]:
                 "core_singles": len(core_singles),
                 "fun_pool": len(fun_pool),
                 "draw_pool": len(draw_pool),
+                "draw_candidates_possible": draw_candidates_possible,
             },
         },
     }
+
+    # fail fast sanity
+    _assert_friday_sanity(out)
     return out
 
 
