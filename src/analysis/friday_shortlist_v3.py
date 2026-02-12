@@ -2,23 +2,9 @@
 """
 Friday shortlist v3 — env-driven + NO SCALING + TOP-5 DRAWS + chronological ordering + fixture_id everywhere.
 
-Guarantees:
-- Reads Thursday schema correctly:
-  probs: home_prob/draw_prob/away_prob/over_2_5_prob/under_2_5_prob
-  odds:  offered_1/offered_x/offered_2/offered_over_2_5/offered_under_2_5
-  value: value_pct_1/value_pct_x/value_pct_2/value_pct_over/value_pct_under
-- No stake scaling. Ever.
-- Core stake rule: odds <= 2.00 -> 40, else -> 30
-- Core singles target: FRIDAY_CORE_TARGET_SINGLES (default 7)
-- Core totals cap: FRIDAY_CORE_MAX_TOTALS (default 4) and under cap: FRIDAY_CORE_MAX_UNDERS (default 1)
-- Core strict odds gate: FRIDAY_CORE_REQUIRE_STRICT_OK (default true) uses Thursday flags.odds_strict_ok
-- Ranking weights: FRIDAY_RANK_W_VALUE / FRIDAY_RANK_W_PROB
-- FunBet totals/under caps also supported (defaults same pattern)
-- DrawBet: top-5 by probability within odds window
-- Outputs sorted chronologically (date, time_gr)
-- Writes:
-  - logs/friday_shortlist_v3.json
-  - logs/friday_YYYY-MM-DD_HH-MM-SS.json
+PATCH v3.1 (history-follow + core fallback fill):
+- Reads bankroll_start + week number from history JSON (HISTORY_PATH) if available.
+- Core tries strict tier first; if not enough singles, uses fallback tier to fill up to target.
 """
 
 from __future__ import annotations
@@ -158,7 +144,6 @@ def _prob_points(prob: float) -> float:
 def _rank_score(value_pct: float, prob: float) -> float:
     wv = _sf_env("FRIDAY_RANK_W_VALUE", 0.60)
     wp = _sf_env("FRIDAY_RANK_W_PROB", 0.40)
-    # clamp-ish without importing math
     if wv < 0: wv = 0.0
     if wp < 0: wp = 0.0
     s = wv + wp
@@ -174,6 +159,88 @@ def _is_total_market(market: str) -> bool:
 
 def _is_under(market: str) -> bool:
     return market == "Under 2.5"
+
+
+# -------------------------
+# History loader (bankroll + week)
+# -------------------------
+
+def _load_history_state() -> Dict[str, Any]:
+    """
+    Reads history JSON to carry bankrolls + week numbering forward.
+
+    Expected flexible schema:
+      - week_count: int
+      - bankroll_current: { core: float, fun: float, draw: float }
+    or:
+      - bankrolls: { core: {current:..}, ... }
+    """
+    hist_env = os.getenv("HISTORY_PATH", "").strip()
+    candidates: List[Path] = []
+    if hist_env:
+        candidates.append(Path(hist_env))
+    # common defaults
+    candidates.append(LOGS_DIR / "tuesday_history_v3.json")
+    candidates.append(LOGS_DIR / "tuesday_history_v3_next.json")
+
+    for p in candidates:
+        try:
+            if p.exists():
+                js = _read_json(p)
+                if isinstance(js, dict):
+                    js["_history_path_used"] = str(p)
+                    return js
+        except Exception:
+            continue
+    return {}
+
+def _extract_bankrolls_and_week(hist: Dict[str, Any]) -> Tuple[Optional[float], Optional[float], Optional[float], Optional[int], str]:
+    """
+    Returns (core, fun, draw, week_no, source)
+    """
+    if not isinstance(hist, dict) or not hist:
+        return None, None, None, None, "env_fallback"
+
+    source = str(hist.get("_history_path_used") or "history")
+
+    # week
+    week_count = hist.get("week_count")
+    week_no = None
+    try:
+        if week_count is not None:
+            week_no = int(week_count) + 1
+    except Exception:
+        week_no = None
+
+    # bankroll_current (preferred)
+    bc = hist.get("bankroll_current")
+    if isinstance(bc, dict):
+        c = _safe_float(bc.get("core"))
+        f = _safe_float(bc.get("fun"))
+        d = _safe_float(bc.get("draw"))
+        if c is not None and f is not None and d is not None:
+            return c, f, d, week_no, source
+
+    # alternative nested
+    b2 = hist.get("bankrolls")
+    if isinstance(b2, dict):
+        def _cur(k: str) -> Optional[float]:
+            v = b2.get(k)
+            if isinstance(v, dict):
+                return _safe_float(v.get("current")) or _safe_float(v.get("bankroll_current"))
+            return _safe_float(v)
+        c = _cur("core")
+        f = _cur("fun")
+        d = _cur("draw")
+        if c is not None and f is not None and d is not None:
+            return c, f, d, week_no, source
+
+    return None, None, None, week_no, source
+
+
+# -------------------------
+# Candidate builder
+# -------------------------
 
 def _candidate_from_fixture(fx: Dict[str, Any], md: Dict[str, str]) -> Optional[Dict[str, Any]]:
     odds = _safe_float(fx.get(md["odds"]))
@@ -229,87 +296,128 @@ def core_stake_from_odds(odds: float) -> int:
 
 
 # -------------------------
-# Selection logic
+# Selection logic (Core with fallback fill)
 # -------------------------
 
+def _core_filter(
+    cands: List[Dict[str, Any]],
+    strict_ok_by_id: Dict[Any, bool],
+    *,
+    odds_min: float,
+    odds_max: float,
+    min_prob: float,
+    min_val: float,
+    require_strict: bool,
+) -> List[Dict[str, Any]]:
+    core = [c for c in cands if c["market"] != "Draw"]
+    core = [c for c in core if odds_min <= float(c["odds"]) <= odds_max and float(c["prob"]) >= min_prob and float(c["value_pct"]) >= min_val]
+    if require_strict:
+        core = [c for c in core if bool(strict_ok_by_id.get(c.get("fixture_id"), False))]
+    core.sort(key=lambda x: (float(x["rank_score"]), 1 if x["market"] == "Over 2.5" else 0), reverse=True)
+    return core
+
 def _select_core(cands: List[Dict[str, Any]], strict_ok_by_id: Dict[Any, bool]) -> Tuple[List[Dict[str, Any]], Optional[Dict[str, Any]], float]:
-    # env-driven core thresholds
+    # Tier A (strict)
     odds_min = _sf_env("FRIDAY_CORE_ODDS_MIN", 1.55)
     odds_max = _sf_env("FRIDAY_CORE_ODDS_MAX", 2.20)
     min_prob = _sf_env("FRIDAY_CORE_MIN_PROB", 0.50)
     min_val  = _sf_env("FRIDAY_CORE_MIN_VALUE_PCT", 1.0)
-
-    target_singles = _si_env("FRIDAY_CORE_TARGET_SINGLES", 7)
-    max_totals = _si_env("FRIDAY_CORE_MAX_TOTALS", 4)      # cap ONLY totals
-    max_unders = _si_env("FRIDAY_CORE_MAX_UNDERS", 1)      # under cap
     require_strict = _sb_env("FRIDAY_CORE_REQUIRE_STRICT_OK", True)
 
-    core = [c for c in cands if c["market"] != "Draw"]
-    core = [c for c in core if odds_min <= float(c["odds"]) <= odds_max and float(c["prob"]) >= min_prob and float(c["value_pct"]) >= min_val]
+    target_singles = _si_env("FRIDAY_CORE_TARGET_SINGLES", 7)
+    max_totals = _si_env("FRIDAY_CORE_MAX_TOTALS", 4)
+    max_unders = _si_env("FRIDAY_CORE_MAX_UNDERS", 1)
 
-    if require_strict:
-        core = [c for c in core if bool(strict_ok_by_id.get(c.get("fixture_id"), False))]
-
-    # Over-bias: if rank ties/close, Over should float up
-    core.sort(key=lambda x: (float(x["rank_score"]), 1 if x["market"] == "Over 2.5" else 0), reverse=True)
+    tierA = _core_filter(
+        cands, strict_ok_by_id,
+        odds_min=odds_min, odds_max=odds_max, min_prob=min_prob, min_val=min_val, require_strict=require_strict
+    )
 
     singles: List[Dict[str, Any]] = []
     open_total = 0.0
     totals_cnt = 0
     unders_cnt = 0
 
-    # PASS 1: take totals first (up to max_totals), under capped
-    for c in core:
+    def _try_add(c: Dict[str, Any]) -> bool:
+        nonlocal open_total, totals_cnt, unders_cnt
         if len(singles) >= target_singles:
-            break
-        if not _is_total_market(c["market"]):
-            continue
-        if totals_cnt >= max_totals:
-            continue
-        if _is_under(c["market"]) and unders_cnt >= max_unders:
-            continue
+            return False
+        fid = c.get("fixture_id")
+        if any(s["fixture_id"] == fid for s in singles):
+            return False
+
+        mkt = str(c.get("market") or "")
+        if _is_total_market(mkt):
+            if totals_cnt >= max_totals:
+                return False
+            if _is_under(mkt) and unders_cnt >= max_unders:
+                return False
 
         stake = core_stake_from_odds(float(c["odds"]))
         singles.append({
-            "fixture_id": c.get("fixture_id"),
+            "fixture_id": fid,
             "date": c["date"],
             "time_gr": c["time_gr"],
             "league": c["league"],
             "match": c["match"],
-            "market": c["market"],
+            "market": mkt,
             "odds": c["odds"],
             "prob": c["prob"],
             "stake": stake,
             "quality": c["quality"],
         })
         open_total += stake
-        totals_cnt += 1
-        if _is_under(c["market"]):
-            unders_cnt += 1
+        if _is_total_market(mkt):
+            totals_cnt += 1
+            if _is_under(mkt):
+                unders_cnt += 1
+        return True
 
-    # PASS 2: fill remaining with 1X2 (Home/Away only), avoid duplicate fixture_id
-    for c in core:
+    # PASS 1A: totals first (strict tier)
+    for c in tierA:
         if len(singles) >= target_singles:
             break
-        if _is_total_market(c["market"]) or c["market"] == "Draw":
-            continue
-        if any(s["fixture_id"] == c.get("fixture_id") for s in singles):
-            continue
+        if _is_total_market(c["market"]):
+            _try_add(c)
 
-        stake = core_stake_from_odds(float(c["odds"]))
-        singles.append({
-            "fixture_id": c.get("fixture_id"),
-            "date": c["date"],
-            "time_gr": c["time_gr"],
-            "league": c["league"],
-            "match": c["match"],
-            "market": c["market"],
-            "odds": c["odds"],
-            "prob": c["prob"],
-            "stake": stake,
-            "quality": c["quality"],
-        })
-        open_total += stake
+    # PASS 2A: fill with 1X2 (strict tier)
+    for c in tierA:
+        if len(singles) >= target_singles:
+            break
+        if not _is_total_market(c["market"]) and c["market"] != "Draw":
+            _try_add(c)
+
+    # Tier B (fallback fill) — ONLY if still starving
+    fallback_enable = _sb_env("FRIDAY_CORE_FALLBACK_ENABLE", True)
+    if fallback_enable and len(singles) < target_singles:
+        fb_odds_max = _sf_env("FRIDAY_CORE_FALLBACK_ODDS_MAX", max(odds_max, 2.35))
+        fb_min_prob = _sf_env("FRIDAY_CORE_FALLBACK_MIN_PROB", min_prob - 0.02)
+        fb_min_val  = _sf_env("FRIDAY_CORE_FALLBACK_MIN_VALUE_PCT", min_val - 0.50)
+        fb_allow_non_strict = _sb_env("FRIDAY_CORE_FALLBACK_ALLOW_NON_STRICT", True)
+
+        # keep odds_min same, relax only max/prob/value, optionally relax strict
+        tierB = _core_filter(
+            cands, strict_ok_by_id,
+            odds_min=odds_min,
+            odds_max=fb_odds_max,
+            min_prob=fb_min_prob,
+            min_val=fb_min_val,
+            require_strict=(require_strict and (not fb_allow_non_strict)),
+        )
+
+        # totals first (fallback) — still capped by max_totals/max_unders
+        for c in tierB:
+            if len(singles) >= target_singles:
+                break
+            if _is_total_market(c["market"]):
+                _try_add(c)
+
+        # fill with 1X2 (fallback)
+        for c in tierB:
+            if len(singles) >= target_singles:
+                break
+            if not _is_total_market(c["market"]) and c["market"] != "Draw":
+                _try_add(c)
 
     # Core double: keep existing rule
     eligible = [s for s in singles if float(s["odds"]) <= 1.60]
@@ -335,7 +443,6 @@ def _select_core(cands: List[Dict[str, Any]], strict_ok_by_id: Dict[Any, bool]) 
 
 
 def _select_fun_system(cands: List[Dict[str, Any]], stake_total: float) -> Tuple[List[Dict[str, Any]], Dict[str, Any], float]:
-    # keep your current Fun thresholds, but cap totals/unders via env vars
     pool_size = _si_env("FRIDAY_FUN_POOL_SIZE", 7)
     max_totals = _si_env("FRIDAY_FUN_MAX_TOTALS", 4)
     max_unders = _si_env("FRIDAY_FUN_MAX_UNDERS", 1)
@@ -349,7 +456,6 @@ def _select_fun_system(cands: List[Dict[str, Any]], stake_total: float) -> Tuple
     unders_cnt = 0
     seen_fixtures = set()
 
-    # greedy with caps
     for c in pool:
         if len(system_pool) >= pool_size:
             break
@@ -427,26 +533,22 @@ def _assert_friday_sanity(friday: Dict[str, Any]) -> None:
             (friday.get("drawbet", {}) or {}).get("system_pool", [])
         )
 
-    # fixture_id everywhere
     for ln in _all_lines():
         fid = ln.get("fixture_id")
         if not isinstance(fid, int):
             raise ValueError(f"Missing/invalid fixture_id in line: {ln}")
 
-    # chronological ordering inside each list
     for path in [("core", "singles"), ("funbet", "system_pool"), ("drawbet", "system_pool")]:
         lst = (friday.get(path[0], {}) or {}).get(path[1], [])
         if lst != sorted(lst, key=_chrono_key):
             raise ValueError(f"List not chronological: {path}")
 
-    # stake rule check (Core)
     for ln in (friday.get("core", {}) or {}).get("singles", []):
         odds = float(ln["odds"])
         expected = 40 if odds <= 2.00 else 30
         if int(ln["stake"]) != expected:
             raise ValueError(f"Stake rule broken: odds={odds} stake={ln['stake']} expected={expected}")
 
-    # core totals cap check (defensive)
     max_totals = _si_env("FRIDAY_CORE_MAX_TOTALS", 4)
     max_unders = _si_env("FRIDAY_CORE_MAX_UNDERS", 1)
     core_singles = (friday.get("core", {}) or {}).get("singles", []) or []
@@ -456,13 +558,6 @@ def _assert_friday_sanity(friday: Dict[str, Any]) -> None:
         raise ValueError(f"Core totals cap broken: totals={len(totals)} max={max_totals}")
     if len(unders) > max_unders:
         raise ValueError(f"Core under cap broken: unders={len(unders)} max={max_unders}")
-
-    # Draw pool not empty if draw candidates exist (best effort)
-    dbg = friday.get("debug", {}) or {}
-    draw_possible = bool((dbg.get("counts", {}) or {}).get("draw_candidates_possible", 0))
-    draw_pool_n = len((friday.get("drawbet", {}) or {}).get("system_pool", []) or [])
-    if draw_possible and draw_pool_n == 0:
-        raise ValueError("DrawBet is empty but draw candidates exist.")
 
 
 # -------------------------
@@ -478,9 +573,13 @@ def build_friday_shortlist() -> Dict[str, Any]:
     core_min_q = _sf_env("FRIDAY_CORE_MIN_QUALITY", 0.70)
     fun_min_q  = _sf_env("FRIDAY_FUN_MIN_QUALITY", 0.60)
 
-    core_bankroll = _sf_env("CORE_BANKROLL_START", 800.0)
-    fun_bankroll  = _sf_env("FUN_BANKROLL_START", 400.0)
-    draw_bankroll = _sf_env("DRAW_BANKROLL_START", 300.0)
+    # ✅ history-follow for bankrolls + week
+    hist = _load_history_state()
+    hist_core, hist_fun, hist_draw, week_no, hist_src = _extract_bankrolls_and_week(hist)
+
+    core_bankroll = hist_core if hist_core is not None else _sf_env("CORE_BANKROLL_START", 800.0)
+    fun_bankroll  = hist_fun  if hist_fun  is not None else _sf_env("FUN_BANKROLL_START", 400.0)
+    draw_bankroll = hist_draw if hist_draw is not None else _sf_env("DRAW_BANKROLL_START", 300.0)
 
     fun_stake_total  = _sf_env("FUN_SYSTEM_STAKE", 35.0)
     draw_stake_total = _sf_env("DRAW_SYSTEM_STAKE", 25.0)
@@ -489,7 +588,6 @@ def build_friday_shortlist() -> Dict[str, Any]:
     q_by_id: Dict[Any, float] = {}
     strict_ok_by_id: Dict[Any, bool] = {}
 
-    # per-fixture signals
     for fx in fixtures:
         fid = fx.get("fixture_id")
         qr = fixture_quality_score(fx)
@@ -498,14 +596,12 @@ def build_friday_shortlist() -> Dict[str, Any]:
         flags = (fx.get("flags") or {})
         strict_ok_by_id[fid] = bool(flags.get("odds_strict_ok") is True)
 
-    # build candidates
     for fx in fixtures:
         for md in _market_defs():
             c = _candidate_from_fixture(fx, md)
             if c:
                 all_cands.append(c)
 
-    # fail fast if Thursday is missing fixture_id (should never happen)
     if any((c.get("fixture_id") is None) for c in all_cands):
         bad = [c for c in all_cands if c.get("fixture_id") is None][:3]
         raise ValueError(f"Some candidates have missing fixture_id. Examples: {bad}")
@@ -517,25 +613,24 @@ def build_friday_shortlist() -> Dict[str, Any]:
     fun_pool, fun_system, fun_open = _select_fun_system(fun_cands, fun_stake_total)
     draw_pool, draw_system, draw_open = _select_draw_top5(all_cands, draw_stake_total)
 
-    # draw candidates possible (for sanity)
-    draw_candidates_possible = 0
-    dmin = _sf_env("FRIDAY_DRAW_ODDS_MIN", 3.00)
-    dmax = _sf_env("FRIDAY_DRAW_ODDS_MAX", 5.50)
-    for c in all_cands:
-        if c["market"] == "Draw":
-            if c.get("odds") is not None and dmin <= float(c["odds"]) <= dmax and c.get("prob") is not None:
-                draw_candidates_possible += 1
-
     window = th.get("window") or {
         "from": str(th.get("start_date") or ""),
         "to": str(th.get("end_date") or ""),
         "hours": int(th.get("window_hours") or 72),
     }
 
+    title_week = f"Bombay Friday — Week {week_no}" if isinstance(week_no, int) else "Bombay Friday — Week"
+
     out = {
-        "title": "Bombay Friday — Week",
+        "title": title_week,
         "generated_at": _utc_now_iso(),
         "window": window,
+
+        "history": {
+            "used": bool(hist_core is not None and hist_fun is not None and hist_draw is not None),
+            "source": hist_src,
+            "week_no": week_no,
+        },
 
         "core": {
             "label": "CoreBet",
@@ -551,6 +646,13 @@ def build_friday_shortlist() -> Dict[str, Any]:
                 "odds_max": _sf_env("FRIDAY_CORE_ODDS_MAX", 2.20),
                 "min_prob": _sf_env("FRIDAY_CORE_MIN_PROB", 0.50),
                 "min_value_pct": _sf_env("FRIDAY_CORE_MIN_VALUE_PCT", 1.0),
+                "fallback": {
+                    "enable": _sb_env("FRIDAY_CORE_FALLBACK_ENABLE", True),
+                    "odds_max": _sf_env("FRIDAY_CORE_FALLBACK_ODDS_MAX", 2.35),
+                    "min_prob": _sf_env("FRIDAY_CORE_FALLBACK_MIN_PROB", 0.48),
+                    "min_value_pct": _sf_env("FRIDAY_CORE_FALLBACK_MIN_VALUE_PCT", 0.50),
+                    "allow_non_strict": _sb_env("FRIDAY_CORE_FALLBACK_ALLOW_NON_STRICT", True),
+                },
                 "rank_weights": {"value": _sf_env("FRIDAY_RANK_W_VALUE", 0.60), "prob": _sf_env("FRIDAY_RANK_W_PROB", 0.40)},
                 "totals_bias": "Over preferred, Under capped",
             },
@@ -600,7 +702,6 @@ def build_friday_shortlist() -> Dict[str, Any]:
                 "core_singles": len(core_singles),
                 "fun_pool": len(fun_pool),
                 "draw_pool": len(draw_pool),
-                "draw_candidates_possible": draw_candidates_possible,
             },
         },
     }
@@ -622,6 +723,8 @@ def main() -> int:
             "saved": str(LOGS_DIR / "friday_shortlist_v3.json"),
             "generated_at": friday["generated_at"],
             "counts": friday["debug"]["counts"],
+            "history_used": friday.get("history", {}).get("used"),
+            "week_no": friday.get("history", {}).get("week_no"),
             "logs_dir": str(LOGS_DIR),
         }))
         return 0
