@@ -1,24 +1,6 @@
 # src/analysis/quality_gate_v1.py
 # ============================================================
 # QUALITY GATE v1 — Production (safe for dynamic import)
-#
-# Goal:
-#   Give each Thursday fixture a quality score 0..1 using existing flags.
-#   Friday can then drop low-quality fixtures BEFORE building candidates.
-#
-# Inputs expected in fixture:
-#   - odds_match: { matched: bool, score: float }
-#   - flags: {
-#       confidence: float|None,
-#       odds_strict_ok: bool|None,
-#       value_missing: bool|None,
-#       history_missing: bool|None,
-#       style_missing: bool|None,
-#       prob_instability: float|None
-#     }
-#
-# NOTE:
-#   Avoids @dataclass to be resilient when loaded via importlib without sys.modules registration.
 # ============================================================
 
 from typing import Any, Dict, Tuple, NamedTuple
@@ -52,7 +34,18 @@ def fixture_quality_score(fx: Dict[str, Any]) -> QualityResult:
 
     if not matched:
         reasons.append("odds_not_matched")
-        # if odds don't match, quality is near-zero
+        return QualityResult(score=0.0, reasons=tuple(reasons))
+
+    # Optional hard floor for odds-match score
+    # (default OFF to avoid surprises; turn ON via env)
+    try:
+        import os
+        hard_min = float(os.getenv("QUALITY_HARD_MIN_ODDS_SCORE", "0.0"))
+    except Exception:
+        hard_min = 0.0
+
+    if hard_min > 0.0 and om_score < hard_min:
+        reasons.append(f"odds_score_below_hard_min({om_score:.3f}<{hard_min:.3f})")
         return QualityResult(score=0.0, reasons=tuple(reasons))
 
     # base from odds_match.score (already 0..1)
