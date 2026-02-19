@@ -1,18 +1,21 @@
 # src/analysis/friday_shortlist_v3.py
 """
-Friday shortlist v3 — env-driven + NO SCALING + TOP-5 DRAWS + chronological ordering + fixture_id everywhere
-+ history-driven bankrolls + history-driven week numbering.
+Friday shortlist v3 — HISTORY-FIRST + env-driven + NO SCALING + TOP-5 DRAWS + chronological ordering + fixture_id everywhere.
 
-Week numbering rule (A):
-- Tuesday settlement is the "completed week".
-- History contains meta.week_index = last completed week (e.g. 3).
-- Friday output is current week = meta.week_index + 1 (e.g. 4).
+Key change vs your old Friday:
+- Reads bankroll continuity from logs/tuesday_history_v3.json (known path).
+  Expected schema:
+    {
+      "week_count": 3,
+      "bankroll_current": {"core": 634.8, "fun": 295.0, "draw": 252.2},
+      ...
+    }
+- Sets:
+    week_no = week_count + 1
+    bankroll_start = bankroll_current.*
+- By default FAILS if history is missing/wrong (FRIDAY_REQUIRE_HISTORY=true).
 
-Guarantees:
-- Reads Thursday schema correctly:
-  probs: home_prob/draw_prob/away_prob/over_2_5_prob/under_2_5_prob
-  odds:  offered_1/offered_x/offered_2/offered_over_2_5/offered_under_2_5
-  value: value_pct_1/value_pct_x/value_pct_2/value_pct_over/value_pct_under
+Other guarantees kept:
 - No stake scaling. Ever.
 - Core stake rule: odds <= 2.00 -> 40, else -> 30
 - Core singles target: FRIDAY_CORE_TARGET_SINGLES (default 7)
@@ -22,9 +25,7 @@ Guarantees:
 - FunBet totals/under caps also supported
 - DrawBet: top-5 by probability within odds window
 - Outputs sorted chronologically (date, time_gr)
-- Writes:
-  - logs/friday_shortlist_v3.json
-  - logs/friday_YYYY-MM-DD_HH-MM-SS.json
+- Adds: copy_play field (string)
 """
 
 from __future__ import annotations
@@ -226,77 +227,56 @@ def _load_latest_thursday_report() -> Dict[str, Any]:
 
 
 # -------------------------
-# History loader (bankrolls + week index)
+# HISTORY (known path)
 # -------------------------
 
-def _load_history() -> Tuple[Dict[str, float], int, str]:
+def _load_history_known_path() -> Dict[str, Any]:
     """
-    Returns (bankrolls, history_week_index, history_path_used).
+    Reads logs/tuesday_history_v3.json (known path).
+    Expected minimal fields:
+      - week_count: int
+      - bankroll_current: { core: float, fun: float, draw: float }
+    """
+    require = _sb_env("FRIDAY_REQUIRE_HISTORY", True)
+    hp = LOGS_DIR / "tuesday_history_v3.json"
 
-    Expected preferred schema:
-    {
-      "meta": { "week_index": 3, ... },
-      "bankrolls": { "core": 634.8, "fun": 295.0, "draw": 252.2 }
+    if not hp.exists():
+        if require:
+            raise FileNotFoundError(f"Missing history file at known path: {hp}")
+        return {"loaded": False, "path": str(hp), "reason": "missing"}
+
+    js = _read_json(hp)
+    if not isinstance(js, dict):
+        if require:
+            raise ValueError(f"History file is not an object: {hp}")
+        return {"loaded": False, "path": str(hp), "reason": "bad_type"}
+
+    wc = js.get("week_count")
+    bc = js.get("bankroll_current")
+
+    if not isinstance(wc, int) or not isinstance(bc, dict):
+        if require:
+            raise ValueError(f"History schema invalid at {hp}. Need week_count:int and bankroll_current:dict.")
+        return {"loaded": False, "path": str(hp), "reason": "bad_schema", "raw": js}
+
+    core = _safe_float(bc.get("core"))
+    fun  = _safe_float(bc.get("fun"))
+    draw = _safe_float(bc.get("draw"))
+
+    if core is None or fun is None or draw is None:
+        if require:
+            raise ValueError(f"History bankroll_current missing core/fun/draw numbers at {hp}")
+        return {"loaded": False, "path": str(hp), "reason": "missing_bankrolls", "raw": js}
+
+    return {
+        "loaded": True,
+        "path": str(hp),
+        "week_count": wc,
+        "week_no": wc + 1,
+        "bankroll_start": {"core": float(core), "fun": float(fun), "draw": float(draw)},
+        "as_of": js.get("as_of"),
+        "note": js.get("note"),
     }
-
-    Backwards compatibility:
-    - if file has direct keys core/fun/draw, we read them.
-    - if file has bankroll_end_* style, we try those.
-    """
-    # env path (default logs/tuesday_history_v3.json)
-    hp = os.getenv("TUESDAY_HISTORY_PATH", str(LOGS_DIR / "tuesday_history_v3.json"))
-    path = Path(hp)
-
-    if not path.exists():
-        # fallback: allow repo-relative logs path even if env is wrong
-        alt = LOGS_DIR / "tuesday_history_v3.json"
-        if alt.exists():
-            path = alt
-        else:
-            # no history → fallback to env bankroll starts (last resort)
-            core = _sf_env("CORE_BANKROLL_START", 800.0)
-            fun  = _sf_env("FUN_BANKROLL_START", 400.0)
-            draw = _sf_env("DRAW_BANKROLL_START", 300.0)
-            return ({"core": core, "fun": fun, "draw": draw}, 0, "missing_history_fallback_env")
-
-    js = _read_json(path)
-    history_path_used = str(path)
-
-    # week index
-    wk = 0
-    try:
-        wk = int(((js or {}).get("meta") or {}).get("week_index") or 0)
-    except Exception:
-        wk = 0
-
-    # bankrolls
-    br = (js or {}).get("bankrolls")
-    if isinstance(br, dict):
-        core = _safe_float(br.get("core"))
-        fun  = _safe_float(br.get("fun"))
-        draw = _safe_float(br.get("draw"))
-        if core is not None and fun is not None and draw is not None:
-            return ({"core": float(core), "fun": float(fun), "draw": float(draw)}, wk, history_path_used)
-
-    # backwards compat: direct keys
-    core = _safe_float((js or {}).get("core"))
-    fun  = _safe_float((js or {}).get("fun"))
-    draw = _safe_float((js or {}).get("draw"))
-    if core is not None and fun is not None and draw is not None:
-        return ({"core": float(core), "fun": float(fun), "draw": float(draw)}, wk, history_path_used)
-
-    # backwards compat: bankroll_end_* keys
-    core = _safe_float((js or {}).get("bankroll_end_core"))
-    fun  = _safe_float((js or {}).get("bankroll_end_fun"))
-    draw = _safe_float((js or {}).get("bankroll_end_draw"))
-    if core is not None and fun is not None and draw is not None:
-        return ({"core": float(core), "fun": float(fun), "draw": float(draw)}, wk, history_path_used)
-
-    # last resort
-    core = _sf_env("CORE_BANKROLL_START", 800.0)
-    fun  = _sf_env("FUN_BANKROLL_START", 400.0)
-    draw = _sf_env("DRAW_BANKROLL_START", 300.0)
-    return ({"core": core, "fun": fun, "draw": draw}, wk, history_path_used)
 
 
 # -------------------------
@@ -328,6 +308,7 @@ def _select_core(cands: List[Dict[str, Any]], strict_ok_by_id: Dict[Any, bool]) 
     if require_strict:
         core = [c for c in core if bool(strict_ok_by_id.get(c.get("fixture_id"), False))]
 
+    # Over bias (tie-break)
     core.sort(key=lambda x: (float(x["rank_score"]), 1 if x["market"] == "Over 2.5" else 0), reverse=True)
 
     singles: List[Dict[str, Any]] = []
@@ -335,7 +316,7 @@ def _select_core(cands: List[Dict[str, Any]], strict_ok_by_id: Dict[Any, bool]) 
     totals_cnt = 0
     unders_cnt = 0
 
-    # PASS 1: totals first, with caps
+    # PASS 1 totals first (up to cap)
     for c in core:
         if len(singles) >= target_singles:
             break
@@ -364,7 +345,7 @@ def _select_core(cands: List[Dict[str, Any]], strict_ok_by_id: Dict[Any, bool]) 
         if _is_under(c["market"]):
             unders_cnt += 1
 
-    # PASS 2: fill with 1X2, avoid duplicate fixture_id
+    # PASS 2 fill with 1X2 (Home/Away), avoid duplicate fixture_id
     for c in core:
         if len(singles) >= target_singles:
             break
@@ -388,7 +369,7 @@ def _select_core(cands: List[Dict[str, Any]], strict_ok_by_id: Dict[Any, bool]) 
         })
         open_total += stake
 
-    # Core double rule unchanged
+    # Core double: keep existing rule
     eligible = [s for s in singles if float(s["odds"]) <= 1.60]
     eligible.sort(key=lambda s: float(s["odds"]))
 
@@ -456,7 +437,7 @@ def _select_fun_system(cands: List[Dict[str, Any]], stake_total: float) -> Tuple
             if _is_under(c["market"]):
                 unders_cnt += 1
 
-    system = {"k": 4, "n": pool_size, "columns": 35, "min_hits": 4, "stake": float(stake_total)}
+    system = {"k": 4, "n": 7, "columns": 35, "min_hits": 4, "stake": float(stake_total)}
     system_pool.sort(key=_chrono_key)
     open_amt = float(stake_total) if system_pool else 0.0
     return system_pool, system, float(round(open_amt, 2))
@@ -502,22 +483,26 @@ def _assert_friday_sanity(friday: Dict[str, Any]) -> None:
             (friday.get("drawbet", {}) or {}).get("system_pool", [])
         )
 
+    # fixture_id everywhere
     for ln in _all_lines():
         fid = ln.get("fixture_id")
         if not isinstance(fid, int):
             raise ValueError(f"Missing/invalid fixture_id in line: {ln}")
 
+    # chronological ordering inside each list
     for path in [("core", "singles"), ("funbet", "system_pool"), ("drawbet", "system_pool")]:
         lst = (friday.get(path[0], {}) or {}).get(path[1], [])
         if lst != sorted(lst, key=_chrono_key):
             raise ValueError(f"List not chronological: {path}")
 
+    # stake rule check (Core)
     for ln in (friday.get("core", {}) or {}).get("singles", []):
         odds = float(ln["odds"])
         expected = 40 if odds <= 2.00 else 30
         if int(ln["stake"]) != expected:
             raise ValueError(f"Stake rule broken: odds={odds} stake={ln['stake']} expected={expected}")
 
+    # core totals cap check
     max_totals = _si_env("FRIDAY_CORE_MAX_TOTALS", 4)
     max_unders = _si_env("FRIDAY_CORE_MAX_UNDERS", 1)
     core_singles = (friday.get("core", {}) or {}).get("singles", []) or []
@@ -530,6 +515,41 @@ def _assert_friday_sanity(friday: Dict[str, Any]) -> None:
 
 
 # -------------------------
+# Copy-play builder
+# -------------------------
+
+def _build_copy_play(friday: Dict[str, Any]) -> str:
+    lines: List[str] = []
+
+    for s in (friday.get("core", {}) or {}).get("singles", []) or []:
+        lines.append(
+            f"CORE {int(s['stake'])}€ | {s['date']} {s['time_gr']} | {s['league']} | {s['match']} | {s['market']} @ {s['odds']}"
+        )
+
+    fun = (friday.get("funbet", {}) or {})
+    sysinfo = (fun.get("system") or {})
+    if (fun.get("system_pool") or []):
+        lines.append("")
+        lines.append(f"FUN SYSTEM {sysinfo.get('k')}/{sysinfo.get('n')} | STAKE {float(sysinfo.get('stake', 0.0))}€")
+        for s in fun.get("system_pool") or []:
+            lines.append(
+                f"FUN | {s['date']} {s['time_gr']} | {s['league']} | {s['match']} | {s['market']} @ {s['odds']}"
+            )
+
+    dr = (friday.get("drawbet", {}) or {})
+    drsys = (dr.get("system") or {})
+    if (dr.get("system_pool") or []):
+        lines.append("")
+        lines.append(f"DRAW SYSTEM {drsys.get('k')}/{drsys.get('n')} | STAKE {float(drsys.get('stake', 0.0))}€")
+        for s in dr.get("system_pool") or []:
+            lines.append(
+                f"DRAW | {s['date']} {s['time_gr']} | {s['league']} | {s['match']} | Draw @ {s['odds']}"
+            )
+
+    return "\n".join(lines).strip() + "\n"
+
+
+# -------------------------
 # Main builder
 # -------------------------
 
@@ -539,19 +559,20 @@ def build_friday_shortlist() -> Dict[str, Any]:
     if not isinstance(fixtures, list):
         raise ValueError("Thursday report has no fixtures list.")
 
+    # ---- HISTORY FIRST (known path) ----
+    hist = _load_history_known_path()
+    # These are now the bankroll starts.
+    core_bankroll = float(hist["bankroll_start"]["core"])
+    fun_bankroll  = float(hist["bankroll_start"]["fun"])
+    draw_bankroll = float(hist["bankroll_start"]["draw"])
+    week_no = int(hist["week_no"])
+
+    # thresholds
     core_min_q = _sf_env("FRIDAY_CORE_MIN_QUALITY", 0.70)
     fun_min_q  = _sf_env("FRIDAY_FUN_MIN_QUALITY", 0.60)
 
     fun_stake_total  = _sf_env("FUN_SYSTEM_STAKE", 35.0)
     draw_stake_total = _sf_env("DRAW_SYSTEM_STAKE", 25.0)
-
-    # History-driven bankrolls + week
-    bankrolls, history_week_index, history_path_used = _load_history()
-    week_current = int(history_week_index) + 1
-
-    core_bankroll = float(bankrolls["core"])
-    fun_bankroll  = float(bankrolls["fun"])
-    draw_bankroll = float(bankrolls["draw"])
 
     all_cands: List[Dict[str, Any]] = []
     q_by_id: Dict[Any, float] = {}
@@ -587,34 +608,21 @@ def build_friday_shortlist() -> Dict[str, Any]:
         "hours": int(th.get("window_hours") or 72),
     }
 
-    # copy-play lines (deterministic)
-    copy_lines: List[str] = []
-    for ln in core_singles:
-        copy_lines.append(
-            f"CORE {int(ln['stake'])}€ | {ln['date']} {ln['time_gr']} | {ln['league']} | {ln['match']} | {ln['market']} @ {ln['odds']}"
-        )
-    if fun_pool:
-        copy_lines.append(f"FUN SYSTEM 4/7 | STAKE {float(fun_stake_total)}€")
-        for ln in fun_pool:
-            copy_lines.append(
-                f"FUN | {ln['date']} {ln['time_gr']} | {ln['league']} | {ln['match']} | {ln['market']} @ {ln['odds']}"
-            )
-    if draw_pool:
-        copy_lines.append(f"DRAW SYSTEM 2/5 | STAKE {float(draw_stake_total)}€")
-        for ln in draw_pool:
-            copy_lines.append(
-                f"DRAW | {ln['date']} {ln['time_gr']} | {ln['league']} | {ln['match']} | Draw @ {ln['odds']}"
-            )
-
     out = {
-        "title": f"Bombay Friday — Week {week_current}",
+        "title": f"Bombay Friday — Week {week_no}",
+        "week_no": week_no,
         "generated_at": _utc_now_iso(),
-        "week": {
-            "current": week_current,
-            "history_week_index": int(history_week_index),
-            "mode": "derived_from_tuesday_history",
-        },
         "window": window,
+
+        "history": {
+            "loaded": True,
+            "path": hist.get("path"),
+            "week_count": hist.get("week_count"),
+            "week_no": week_no,
+            "bankroll_start": hist.get("bankroll_start"),
+            "as_of": hist.get("as_of"),
+            "note": hist.get("note"),
+        },
 
         "core": {
             "label": "CoreBet",
@@ -669,13 +677,9 @@ def build_friday_shortlist() -> Dict[str, Any]:
             },
         },
 
-        "copy_play": "\n".join(copy_lines),
-
         "debug": {
             "project_root": str(PROJECT_ROOT),
             "logs_dir": str(LOGS_DIR),
-            "history_path_used": history_path_used,
-            "bankroll_source": "history_file" if "missing_history_fallback_env" not in history_path_used else "env_fallback",
             "thresholds": {"core": core_min_q, "fun": fun_min_q},
             "counts": {
                 "fixtures": len(fixtures),
@@ -687,6 +691,7 @@ def build_friday_shortlist() -> Dict[str, Any]:
         },
     }
 
+    out["copy_play"] = _build_copy_play(out)
     _assert_friday_sanity(out)
     return out
 
@@ -703,9 +708,10 @@ def main() -> int:
             "status": "ok",
             "saved": str(LOGS_DIR / "friday_shortlist_v3.json"),
             "generated_at": friday["generated_at"],
-            "week": friday.get("week", {}),
-            "counts": friday["debug"]["counts"],
-            "history_path_used": friday["debug"]["history_path_used"],
+            "week_no": friday.get("week_no"),
+            "history_path": (friday.get("history", {}) or {}).get("path"),
+            "counts": (friday.get("debug", {}) or {}).get("counts"),
+            "logs_dir": str(LOGS_DIR),
         }))
         return 0
 
