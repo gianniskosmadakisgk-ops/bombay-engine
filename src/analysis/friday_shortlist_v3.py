@@ -12,6 +12,15 @@ History:
 - HISTORY_PATH (preferred) or TUESDAY_HISTORY_PATH (fallback)
 - Default path: logs/tuesday_history_v3.json
 - If FRIDAY_REQUIRE_HISTORY=true and file missing -> hard error
+
+NEW (CoreBet only):
+- Optional "stake boost" when Core open is too low (e.g. only 4 picks).
+  It DOES NOT add picks; it only increases stake on existing Core singles.
+  Controlled via env vars:
+    FRIDAY_CORE_BOOST_ENABLED=true/false (default false)
+    FRIDAY_CORE_MIN_OPEN=200 (default 0)
+    FRIDAY_CORE_BOOST_MAX_STAKE=50 (default 50)
+    FRIDAY_CORE_BOOST_STEP=5 (default 5)
 """
 
 from __future__ import annotations
@@ -284,6 +293,91 @@ def core_stake_from_odds(odds: float) -> int:
 
 
 # -------------------------
+# Core stake boost (ONLY if open is too low)
+# -------------------------
+
+def _apply_core_stake_boost(singles: List[Dict[str, Any]], open_total: float) -> Tuple[List[Dict[str, Any]], float, Dict[str, Any]]:
+    """
+    Boost stakes on existing Core singles to reach a minimum open (e.g. 200),
+    WITHOUT adding any new picks.
+
+    Env:
+      FRIDAY_CORE_BOOST_ENABLED (default false)
+      FRIDAY_CORE_MIN_OPEN (default 0)
+      FRIDAY_CORE_BOOST_MAX_STAKE (default 50)
+      FRIDAY_CORE_BOOST_STEP (default 5)
+
+    Notes:
+      - This does not affect selection logic at all.
+      - It preserves the base stake rule as the starting point.
+    """
+    enabled = _sb_env("FRIDAY_CORE_BOOST_ENABLED", False)
+    min_open = _sf_env("FRIDAY_CORE_MIN_OPEN", 0.0)
+    max_stake = _si_env("FRIDAY_CORE_BOOST_MAX_STAKE", 50)
+    step = _si_env("FRIDAY_CORE_BOOST_STEP", 5)
+    if step <= 0:
+        step = 5
+
+    dbg = {
+        "enabled": enabled,
+        "min_open": float(min_open),
+        "max_stake": int(max_stake),
+        "step": int(step),
+        "boost_applied": False,
+        "before_open": float(round(open_total, 2)),
+        "after_open": float(round(open_total, 2)),
+        "delta_requested": 0.0,
+        "delta_applied": 0.0,
+        "capped_out": False,
+    }
+
+    if (not enabled) or (min_open <= 0) or (not singles):
+        return singles, float(round(open_total, 2)), dbg
+
+    if float(open_total) >= float(min_open):
+        return singles, float(round(open_total, 2)), dbg
+
+    target = float(min_open)
+    delta = float(target - float(open_total))
+    dbg["delta_requested"] = float(round(delta, 2))
+
+    # Round-robin boosting in 'step' increments until we hit target or everyone hits cap.
+    idx = 0
+    n = len(singles)
+    stuck_rounds = 0
+
+    while delta > 1e-9:
+        advanced = False
+
+        ln = singles[idx]
+        cur = int(ln.get("stake") or 0)
+        if cur < max_stake:
+            add = min(step, max_stake - cur)
+            ln["stake"] = cur + add
+            open_total += add
+            delta -= add
+            advanced = True
+
+        idx = (idx + 1) % n
+
+        if not advanced:
+            stuck_rounds += 1
+            if stuck_rounds >= n:  # full cycle with no progress => all capped
+                dbg["capped_out"] = True
+                break
+        else:
+            stuck_rounds = 0
+
+        if float(open_total) >= target:
+            break
+
+    dbg["boost_applied"] = True
+    dbg["after_open"] = float(round(open_total, 2))
+    dbg["delta_applied"] = float(round(dbg["after_open"] - dbg["before_open"], 2))
+    return singles, float(round(open_total, 2)), dbg
+
+
+# -------------------------
 # Selection logic
 # -------------------------
 
@@ -310,7 +404,6 @@ def _select_core(cands: List[Dict[str, Any]], strict_ok_by_id: Dict[Any, bool]) 
         out.sort(key=lambda x: (float(x["rank_score"]), 1 if x["market"] == "Over 2.5" else 0), reverse=True)
         return out
 
-    # Pass ladder: strict -> relaxed strict -> relaxed value -> relaxed prob (small)
     passes = []
     passes.append(("strict", min_prob, min_val, require_strict))
     if fill_mode:
@@ -333,7 +426,6 @@ def _select_core(cands: List[Dict[str, Any]], strict_ok_by_id: Dict[Any, bool]) 
         if fid in used_fids:
             return False
 
-        # caps for totals
         if _is_total_market(c["market"]):
             if totals_cnt >= max_totals:
                 return False
@@ -362,11 +454,9 @@ def _select_core(cands: List[Dict[str, Any]], strict_ok_by_id: Dict[Any, bool]) 
                 unders_cnt += 1
         return True
 
-    # Phase A: fill totals first (prefer Over), then 1X2
     for tag, mp, mv, strict in passes:
         pool = _apply_filters(base, mp, mv, strict)
 
-        # A1 totals
         for c in pool:
             if len(singles) >= target_singles:
                 break
@@ -374,7 +464,6 @@ def _select_core(cands: List[Dict[str, Any]], strict_ok_by_id: Dict[Any, bool]) 
                 continue
             _try_add(c)
 
-        # A2 1X2 (Home/Away only)
         for c in pool:
             if len(singles) >= target_singles:
                 break
@@ -384,6 +473,9 @@ def _select_core(cands: List[Dict[str, Any]], strict_ok_by_id: Dict[Any, bool]) 
 
         if len(singles) >= target_singles:
             break
+
+    # OPTIONAL boost (only on existing singles)
+    singles, open_total, boost_dbg = _apply_core_stake_boost(singles, open_total)
 
     # Core double (unchanged)
     eligible = [s for s in singles if float(s["odds"]) <= 1.60]
@@ -413,6 +505,7 @@ def _select_core(cands: List[Dict[str, Any]], strict_ok_by_id: Dict[Any, bool]) 
         "totals_cnt": totals_cnt,
         "unders_cnt": unders_cnt,
         "require_strict_default": require_strict,
+        "stake_boost": boost_dbg,
     }
     return singles, core_double, float(round(open_total, 2)), dbg
 
@@ -421,7 +514,6 @@ def _select_fun_system(cands: List[Dict[str, Any]], stake_total: float, core_fix
     desired_n = _si_env("FRIDAY_FUN_POOL_SIZE", 7)
     k = _si_env("FRIDAY_FUN_K", 4)
 
-    # thresholds (env-driven)
     odds_min = _sf_env("FRIDAY_FUN_ODDS_MIN", 2.00)
     odds_max = _sf_env("FRIDAY_FUN_ODDS_MAX", 3.30)
     min_prob = _sf_env("FRIDAY_FUN_MIN_PROB", 0.40)
@@ -465,12 +557,10 @@ def _select_fun_system(cands: List[Dict[str, Any]], stake_total: float, core_fix
         if fid in seen_fixtures:
             return False
 
-        # overlap guard
         if fid in core_fixture_ids:
             if overlap_cnt >= max_overlap:
                 return False
 
-        # totals caps
         if _is_total_market(c["market"]):
             if totals_cnt >= max_totals:
                 return False
@@ -511,7 +601,6 @@ def _select_fun_system(cands: List[Dict[str, Any]], stake_total: float, core_fix
         if len(system_pool) >= desired_n:
             break
 
-    # AUTO-ADJUST system n/columns to what we actually have
     n_actual = len(system_pool)
     k_actual = min(k, n_actual) if n_actual > 0 else k
     columns = comb(n_actual, k_actual) if (n_actual > 0 and k_actual > 0 and n_actual >= k_actual) else 0
@@ -552,20 +641,23 @@ def _select_draw_top5(all_cands: List[Dict[str, Any]], stake_total: float) -> Tu
     draws = [c for c in all_cands if c["market"] == "Draw" and c.get("prob") is not None and c.get("odds") is not None]
     draws = [c for c in draws if dmin <= float(c["odds"]) <= dmax]
 
-    # tempo filter if Thursday put total_lambda into fixture (optional). If not present, we don't block.
     if use_tempo:
         filtered = []
         for c in draws:
-            # candidates don't carry total_lambda, but fixture might have it; Thursday sometimes copies it into candidate debug.
-            # If you already add it in Thursday fixture, you can pass it through here by extending _candidate_from_fixture.
-            # For now: accept all (best effort) – no hard block without data.
             filtered.append(c)
         draws = filtered
 
     draws.sort(key=lambda x: (float(x["prob"]), float(x["odds"])), reverse=True)
     draws = draws[:5]
 
-    system = {"k": 2, "n": len(draws), "columns": comb(len(draws), 2) if len(draws) >= 2 else 0, "min_hits": 2, "stake": float(stake_total), "mode": "top5_by_probability"}
+    system = {
+        "k": 2,
+        "n": len(draws),
+        "columns": comb(len(draws), 2) if len(draws) >= 2 else 0,
+        "min_hits": 2,
+        "stake": float(stake_total),
+        "mode": "top5_by_probability"
+    }
 
     draw_pool = [{
         "fixture_id": c.get("fixture_id"),
@@ -596,7 +688,6 @@ def build_friday_shortlist() -> Dict[str, Any]:
 
     core_min_q = _sf_env("FRIDAY_CORE_MIN_QUALITY", 0.70)
 
-    # bankroll continuity FROM HISTORY
     core_bankroll, fun_bankroll, draw_bankroll, next_week, hist_as_of, hist_meta = _history_bankrolls_or_env()
 
     fun_stake_total  = _sf_env("FUN_SYSTEM_STAKE", 35.0)
@@ -606,7 +697,6 @@ def build_friday_shortlist() -> Dict[str, Any]:
     q_by_id: Dict[Any, float] = {}
     strict_ok_by_id: Dict[Any, bool] = {}
 
-    # per-fixture signals
     for fx in fixtures:
         fid = fx.get("fixture_id")
         qr = fixture_quality_score(fx)
@@ -614,7 +704,6 @@ def build_friday_shortlist() -> Dict[str, Any]:
         flags = (fx.get("flags") or {})
         strict_ok_by_id[fid] = bool(flags.get("odds_strict_ok") is True)
 
-    # build candidates
     for fx in fixtures:
         for md in _market_defs():
             c = _candidate_from_fixture(fx, md)
@@ -626,7 +715,7 @@ def build_friday_shortlist() -> Dict[str, Any]:
         raise ValueError(f"Some candidates have missing fixture_id. Examples: {bad}")
 
     core_cands = [c for c in all_cands if (q_by_id.get(c["fixture_id"], 0.0) >= core_min_q)]
-    fun_cands  = [c for c in all_cands]  # fun gating happens inside selector (min quality is checked there)
+    fun_cands  = [c for c in all_cands]
 
     core_singles, core_double, core_open, core_dbg = _select_core(core_cands, strict_ok_by_id)
     core_fids = {s.get("fixture_id") for s in core_singles if s.get("fixture_id") is not None}
@@ -659,7 +748,7 @@ def build_friday_shortlist() -> Dict[str, Any]:
             "label": "CoreBet",
             "bankroll_start": float(core_bankroll),
             "max_singles": _si_env("FRIDAY_CORE_TARGET_SINGLES", 7),
-            "stake_rule": "odds<=2.00 -> 40, else -> 30 (NO scaling)",
+            "stake_rule": "odds<=2.00 -> 40, else -> 30 (NO scaling) + optional boost if open too low",
             "singles": core_singles,
             "double": core_double,
             "doubles": ([core_double] if core_double else []),
