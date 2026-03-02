@@ -21,6 +21,18 @@ NEW (CoreBet only):
     FRIDAY_CORE_MIN_OPEN=200 (default 0)
     FRIDAY_CORE_BOOST_MAX_STAKE=50 (default 50)
     FRIDAY_CORE_BOOST_STEP=5 (default 5)
+
+NEW (DrawBet => SuperFunBet):
+- DrawBet no longer selects draw markets.
+- It becomes a "super funbet" system built ONLY from already-selected Core+Fun picks (no new selection).
+- Unique fixtures are used; if > N max, we keep the top by rank_score (from Thursday candidates).
+- Default target: k = n - 4 (8/12, 7/11, 6/10...), stake per column 0.10
+  Env vars:
+    FRIDAY_DRAW_MODE=superfun (default "superfun")
+    SUPERFUN_N_MAX=12
+    SUPERFUN_HITS_OFFSET=4
+    SUPERFUN_MIN_K=6
+    SUPERFUN_STAKE_PER_COLUMN=0.10
 """
 
 from __future__ import annotations
@@ -137,6 +149,10 @@ def _sb_env(name: str, default: bool) -> bool:
     v = os.getenv(name, "true" if default else "false").strip().lower()
     return v in ("1", "true", "yes", "y", "on")
 
+def _ss_env(name: str, default: str) -> str:
+    v = os.getenv(name, "").strip()
+    return v if v else default
+
 def _fmt_date(date_str: str) -> str:
     return str(date_str or "")
 
@@ -226,12 +242,10 @@ def _load_latest_thursday_report() -> Dict[str, Any]:
 # -------------------------
 
 def _history_path() -> Path:
-    # one canonical variable going forward: HISTORY_PATH
     hp = os.getenv("HISTORY_PATH", "").strip()
     if hp:
         return Path(hp)
 
-    # backward-compat fallback
     hp2 = os.getenv("TUESDAY_HISTORY_PATH", "").strip()
     if hp2:
         return Path(hp2)
@@ -245,17 +259,11 @@ def _load_history() -> Optional[Dict[str, Any]]:
     return None
 
 def _history_bankrolls_or_env() -> Tuple[float, float, float, Optional[int], Optional[str], Dict[str, Any]]:
-    """
-    Returns: (core, fun, draw, next_week, as_of, meta)
-    - If history exists: use bankroll_current + week_count
-    - Else: fallback to CORE_BANKROLL_START etc
-    """
     require = _sb_env("FRIDAY_REQUIRE_HISTORY", True)
     hist = _load_history()
     if hist is None:
         if require:
             raise FileNotFoundError(f"History file missing at: {_history_path()}")
-        # fallback
         core = _sf_env("CORE_BANKROLL_START", 800.0)
         fun  = _sf_env("FUN_BANKROLL_START", 400.0)
         draw = _sf_env("DRAW_BANKROLL_START", 300.0)
@@ -297,20 +305,6 @@ def core_stake_from_odds(odds: float) -> int:
 # -------------------------
 
 def _apply_core_stake_boost(singles: List[Dict[str, Any]], open_total: float) -> Tuple[List[Dict[str, Any]], float, Dict[str, Any]]:
-    """
-    Boost stakes on existing Core singles to reach a minimum open (e.g. 200),
-    WITHOUT adding any new picks.
-
-    Env:
-      FRIDAY_CORE_BOOST_ENABLED (default false)
-      FRIDAY_CORE_MIN_OPEN (default 0)
-      FRIDAY_CORE_BOOST_MAX_STAKE (default 50)
-      FRIDAY_CORE_BOOST_STEP (default 5)
-
-    Notes:
-      - This does not affect selection logic at all.
-      - It preserves the base stake rule as the starting point.
-    """
     enabled = _sb_env("FRIDAY_CORE_BOOST_ENABLED", False)
     min_open = _sf_env("FRIDAY_CORE_MIN_OPEN", 0.0)
     max_stake = _si_env("FRIDAY_CORE_BOOST_MAX_STAKE", 50)
@@ -341,7 +335,6 @@ def _apply_core_stake_boost(singles: List[Dict[str, Any]], open_total: float) ->
     delta = float(target - float(open_total))
     dbg["delta_requested"] = float(round(delta, 2))
 
-    # Round-robin boosting in 'step' increments until we hit target or everyone hits cap.
     idx = 0
     n = len(singles)
     stuck_rounds = 0
@@ -362,7 +355,7 @@ def _apply_core_stake_boost(singles: List[Dict[str, Any]], open_total: float) ->
 
         if not advanced:
             stuck_rounds += 1
-            if stuck_rounds >= n:  # full cycle with no progress => all capped
+            if stuck_rounds >= n:
                 dbg["capped_out"] = True
                 break
         else:
@@ -415,7 +408,6 @@ def _select_core(cands: List[Dict[str, Any]], strict_ok_by_id: Dict[Any, bool]) 
     open_total = 0.0
     totals_cnt = 0
     unders_cnt = 0
-
     used_fids = set()
 
     def _try_add(c: Dict[str, Any]) -> bool:
@@ -474,10 +466,8 @@ def _select_core(cands: List[Dict[str, Any]], strict_ok_by_id: Dict[Any, bool]) 
         if len(singles) >= target_singles:
             break
 
-    # OPTIONAL boost (only on existing singles)
     singles, open_total, boost_dbg = _apply_core_stake_boost(singles, open_total)
 
-    # Core double (unchanged)
     eligible = [s for s in singles if float(s["odds"]) <= 1.60]
     eligible.sort(key=lambda s: float(s["odds"]))
 
@@ -631,49 +621,148 @@ def _select_fun_system(cands: List[Dict[str, Any]], stake_total: float, core_fix
     return system_pool, system, float(round(open_amt, 2)), dbg
 
 
-def _select_draw_top5(all_cands: List[Dict[str, Any]], stake_total: float) -> Tuple[List[Dict[str, Any]], Dict[str, Any], float]:
-    dmin = _sf_env("FRIDAY_DRAW_ODDS_MIN", 3.00)
-    dmax = _sf_env("FRIDAY_DRAW_ODDS_MAX", 5.50)
+# -------------------------
+# DrawBet => SuperFunBet (built from Core+Fun picks only)
+# -------------------------
 
-    use_tempo = _sb_env("FRIDAY_DRAW_USE_TEMPO_FILTER", True)
-    max_lambda = _sf_env("FRIDAY_DRAW_MAX_TOTAL_LAMBDA", 2.9)
+def _build_candidate_index(all_cands: List[Dict[str, Any]]) -> Dict[Tuple[Any, str], Dict[str, Any]]:
+    idx: Dict[Tuple[Any, str], Dict[str, Any]] = {}
+    for c in all_cands:
+        idx[(c.get("fixture_id"), str(c.get("market")))] = c
+    return idx
 
-    draws = [c for c in all_cands if c["market"] == "Draw" and c.get("prob") is not None and c.get("odds") is not None]
-    draws = [c for c in draws if dmin <= float(c["odds"]) <= dmax]
+def _select_draw_superfun(
+    core_singles: List[Dict[str, Any]],
+    fun_pool: List[Dict[str, Any]],
+    cand_index: Dict[Tuple[Any, str], Dict[str, Any]],
+    stake_per_column: float,
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any], float, Dict[str, Any]]:
+    """
+    Build a system from already-selected Core+Fun picks.
+    - Unique by fixture_id (keeps the better-ranked market if both exist).
+    - If > N max, keeps top by rank_score (using Thursday candidate ranks).
+    - k = n - offset (default offset=4) with a floor (default min_k=6).
+    """
+    n_max = _si_env("SUPERFUN_N_MAX", 12)
+    offset = _si_env("SUPERFUN_HITS_OFFSET", 4)
+    min_k = _si_env("SUPERFUN_MIN_K", 6)
 
-    if use_tempo:
-        filtered = []
-        for c in draws:
-            filtered.append(c)
-        draws = filtered
+    # Collect entries (core first, then fun), keep best per fixture by rank_score
+    per_fid: Dict[Any, Dict[str, Any]] = {}
 
-    draws.sort(key=lambda x: (float(x["prob"]), float(x["odds"])), reverse=True)
-    draws = draws[:5]
+    def _consider(item: Dict[str, Any], source: str) -> None:
+        fid = item.get("fixture_id")
+        market = str(item.get("market") or "")
+        if fid is None or not market:
+            return
+
+        cand = cand_index.get((fid, market))
+        rank = float(cand.get("rank_score", 0.0)) if cand else 0.0
+
+        row = {
+            "fixture_id": fid,
+            "date": item.get("date"),
+            "time_gr": item.get("time_gr"),
+            "league": item.get("league"),
+            "match": item.get("match"),
+            "market": market,
+            "odds": float(item.get("odds") or 0.0),
+            "prob": float(item.get("prob") or 0.0),
+            "quality": float(item.get("quality") or 0.0),
+            "source": source,          # just debug info
+            "rank_score": rank,        # internal ranking
+        }
+
+        prev = per_fid.get(fid)
+        if prev is None:
+            per_fid[fid] = row
+        else:
+            # keep whichever has higher rank_score; tie-break: prefer Core
+            if row["rank_score"] > float(prev.get("rank_score", 0.0)) + 1e-9:
+                per_fid[fid] = row
+            elif abs(row["rank_score"] - float(prev.get("rank_score", 0.0))) <= 1e-9:
+                if prev.get("source") != "core" and source == "core":
+                    per_fid[fid] = row
+
+    for s in core_singles:
+        _consider(s, "core")
+    for s in fun_pool:
+        _consider(s, "fun")
+
+    picks = list(per_fid.values())
+
+    # If too many, keep top by rank_score
+    picks.sort(key=lambda x: float(x.get("rank_score", 0.0)), reverse=True)
+    if n_max > 0 and len(picks) > n_max:
+        picks = picks[:n_max]
+
+    # Now order chronologically for presentation
+    picks.sort(key=_chrono_key)
+
+    n = len(picks)
+    if n <= 0:
+        system = {
+            "mode": "superfun_from_core_plus_fun",
+            "n": 0,
+            "k": 0,
+            "columns": 0,
+            "stake_per_column": float(stake_per_column),
+            "target": None,
+        }
+        return [], system, 0.0, {"reason": "no_picks"}
+
+    # k logic: n - offset, with floor
+    k = n - int(offset)
+    if k < int(min_k):
+        k = int(min_k)
+    if k > n:
+        k = n
+
+    columns = comb(n, k) if (n >= k and k > 0) else 0
+    open_amt = float(round(columns * float(stake_per_column), 2))
+
+    # Strip internal fields
+    pool_out = []
+    for p in picks:
+        pool_out.append({
+            "fixture_id": p["fixture_id"],
+            "date": p.get("date"),
+            "time_gr": p.get("time_gr"),
+            "league": p.get("league"),
+            "match": p.get("match"),
+            "market": p.get("market"),
+            "odds": round(float(p.get("odds") or 0.0), 2),
+            "prob": round(float(p.get("prob") or 0.0), 4),
+            "quality": round(float(p.get("quality") or 0.0), 3),
+        })
 
     system = {
-        "k": 2,
-        "n": len(draws),
-        "columns": comb(len(draws), 2) if len(draws) >= 2 else 0,
-        "min_hits": 2,
-        "stake": float(stake_total),
-        "mode": "top5_by_probability"
+        "mode": "superfun_from_core_plus_fun",
+        "n": n,
+        "k": k,
+        "columns": columns,
+        "min_hits": k,
+        "stake_per_column": float(stake_per_column),
+        "stake_total": open_amt,
+        "target": f"{k}/{n}",
+        "rules": {
+            "n_max": int(n_max),
+            "hits_offset": int(offset),
+            "min_k": int(min_k),
+            "unique_by_fixture": True,
+        },
     }
 
-    draw_pool = [{
-        "fixture_id": c.get("fixture_id"),
-        "date": c["date"],
-        "time_gr": c["time_gr"],
-        "league": c["league"],
-        "match": c["match"],
-        "market": "Draw",
-        "odds": c["odds"],
-        "prob": c["prob"],
-        "quality": c["quality"],
-    } for c in draws]
+    dbg = {
+        "n_before_cap": len(per_fid),
+        "n_after_cap": n,
+        "k": k,
+        "columns": columns,
+        "stake_per_column": float(stake_per_column),
+        "open": open_amt,
+    }
 
-    draw_pool.sort(key=_chrono_key)
-    open_amt = float(stake_total) if draw_pool else 0.0
-    return draw_pool, system, float(round(open_amt, 2))
+    return pool_out, system, open_amt, dbg
 
 
 # -------------------------
@@ -691,7 +780,10 @@ def build_friday_shortlist() -> Dict[str, Any]:
     core_bankroll, fun_bankroll, draw_bankroll, next_week, hist_as_of, hist_meta = _history_bankrolls_or_env()
 
     fun_stake_total  = _sf_env("FUN_SYSTEM_STAKE", 35.0)
-    draw_stake_total = _sf_env("DRAW_SYSTEM_STAKE", 25.0)
+
+    # DrawBet (superfun) stake per column
+    superfun_stake_per_col = _sf_env("SUPERFUN_STAKE_PER_COLUMN", 0.10)
+    draw_mode = _ss_env("FRIDAY_DRAW_MODE", "superfun").lower()
 
     all_cands: List[Dict[str, Any]] = []
     q_by_id: Dict[Any, float] = {}
@@ -721,7 +813,20 @@ def build_friday_shortlist() -> Dict[str, Any]:
     core_fids = {s.get("fixture_id") for s in core_singles if s.get("fixture_id") is not None}
 
     fun_pool, fun_system, fun_open, fun_dbg = _select_fun_system(fun_cands, fun_stake_total, core_fids)
-    draw_pool, draw_system, draw_open = _select_draw_top5(all_cands, draw_stake_total)
+
+    # DrawBet => SuperFun system from Core+Fun (no new selection)
+    cand_index = _build_candidate_index(all_cands)
+    if draw_mode == "superfun":
+        draw_pool, draw_system, draw_open, draw_dbg = _select_draw_superfun(
+            core_singles=core_singles,
+            fun_pool=fun_pool,
+            cand_index=cand_index,
+            stake_per_column=float(superfun_stake_per_col),
+        )
+    else:
+        # Safety fallback: keep previous behavior if someone sets FRIDAY_DRAW_MODE=top5_draws
+        # (we won't maintain it actively; here only to avoid breaking deploys)
+        draw_pool, draw_system, draw_open, draw_dbg = [], {"mode": "disabled"}, 0.0, {"reason": "FRIDAY_DRAW_MODE!=superfun"}
 
     window = th.get("window") or {
         "from": str(th.get("start_date") or ""),
@@ -773,7 +878,8 @@ def build_friday_shortlist() -> Dict[str, Any]:
             "system_pool": draw_pool,
             "system": draw_system,
             "open": round(draw_open, 2),
-            "after_open": round(float(draw_bankroll) - draw_open, 2),
+            "after_open": round(float(draw_bankroll) - float(draw_open), 2),
+            "debug": draw_dbg,
         },
 
         "debug": {
