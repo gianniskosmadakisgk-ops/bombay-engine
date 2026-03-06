@@ -25,7 +25,8 @@ NEW (CoreBet only):
 NEW (DrawBet => SuperFunBet):
 - DrawBet no longer selects draw markets.
 - It becomes a "super funbet" system built ONLY from already-selected Core+Fun picks (no new selection).
-- Unique fixtures are used; if > N max, we keep the top by rank_score (from Thursday candidates).
+- Core picks are always kept first in SuperFun.
+- Then Fun picks fill the remaining slots up to SUPERFUN_N_MAX.
 - Default target: k = n - 4 (8/12, 7/11, 6/10...), stake per column 0.10
   Env vars:
     FRIDAY_DRAW_MODE=superfun (default "superfun")
@@ -177,8 +178,10 @@ def _prob_points(prob: float) -> float:
 def _rank_score(value_pct: float, prob: float) -> float:
     wv = _sf_env("FRIDAY_RANK_W_VALUE", 0.60)
     wp = _sf_env("FRIDAY_RANK_W_PROB", 0.40)
-    if wv < 0: wv = 0.0
-    if wp < 0: wp = 0.0
+    if wv < 0:
+        wv = 0.0
+    if wp < 0:
+        wp = 0.0
     s = wv + wp
     if s <= 0:
         wv, wp = 0.60, 0.40
@@ -265,13 +268,13 @@ def _history_bankrolls_or_env() -> Tuple[float, float, float, Optional[int], Opt
         if require:
             raise FileNotFoundError(f"History file missing at: {_history_path()}")
         core = _sf_env("CORE_BANKROLL_START", 800.0)
-        fun  = _sf_env("FUN_BANKROLL_START", 400.0)
+        fun = _sf_env("FUN_BANKROLL_START", 400.0)
         draw = _sf_env("DRAW_BANKROLL_START", 300.0)
         return core, fun, draw, None, None, {"history_used": False, "history_path": str(_history_path())}
 
     bc = (hist.get("bankroll_current") or {})
     core = float(bc.get("core", _sf_env("CORE_BANKROLL_START", 800.0)))
-    fun  = float(bc.get("fun",  _sf_env("FUN_BANKROLL_START", 400.0)))
+    fun = float(bc.get("fun", _sf_env("FUN_BANKROLL_START", 400.0)))
     draw = float(bc.get("draw", _sf_env("DRAW_BANKROLL_START", 300.0)))
 
     week_count = hist.get("week_count")
@@ -378,7 +381,7 @@ def _select_core(cands: List[Dict[str, Any]], strict_ok_by_id: Dict[Any, bool]) 
     odds_min = _sf_env("FRIDAY_CORE_ODDS_MIN", 1.60)
     odds_max = _sf_env("FRIDAY_CORE_ODDS_MAX", 1.90)
     min_prob = _sf_env("FRIDAY_CORE_MIN_PROB", 0.50)
-    min_val  = _sf_env("FRIDAY_CORE_MIN_VALUE_PCT", 1.0)
+    min_val = _sf_env("FRIDAY_CORE_MIN_VALUE_PCT", 1.0)
 
     target_singles = _si_env("FRIDAY_CORE_TARGET_SINGLES", 7)
     max_totals = _si_env("FRIDAY_CORE_MAX_TOTALS", 4)
@@ -505,10 +508,10 @@ def _select_fun_system(cands: List[Dict[str, Any]], stake_total: float, core_fix
     k = _si_env("FRIDAY_FUN_K", 4)
 
     odds_min = _sf_env("FRIDAY_FUN_ODDS_MIN", 1.90)
-    odds_max = _sf_env("FRIDAY_FUN_ODDS_MAX", 2.70)
+    odds_max = _sf_env("FRIDAY_FUN_ODDS_MAX", 2.40)
     min_prob = _sf_env("FRIDAY_FUN_MIN_PROB", 0.40)
-    min_val  = _sf_env("FRIDAY_FUN_MIN_VALUE_PCT", 1.0)
-    min_q    = _sf_env("FRIDAY_FUN_MIN_QUALITY", 0.60)
+    min_val = _sf_env("FRIDAY_FUN_MIN_VALUE_PCT", 1.0)
+    min_q = _sf_env("FRIDAY_FUN_MIN_QUALITY", 0.60)
 
     max_totals = _si_env("FRIDAY_FUN_MAX_TOTALS", 4)
     max_unders = _si_env("FRIDAY_FUN_MAX_UNDERS", 1)
@@ -639,26 +642,25 @@ def _select_draw_superfun(
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any], float, Dict[str, Any]]:
     """
     Build a system from already-selected Core+Fun picks.
+    - Core picks are always kept first.
+    - Then Fun picks fill remaining slots up to n_max.
     - Unique by fixture_id (keeps the better-ranked market if both exist).
-    - If > N max, keeps top by rank_score (using Thursday candidate ranks).
     - k = n - offset (default offset=4) with a floor (default min_k=6).
     """
     n_max = _si_env("SUPERFUN_N_MAX", 12)
     offset = _si_env("SUPERFUN_HITS_OFFSET", 4)
     min_k = _si_env("SUPERFUN_MIN_K", 6)
 
-    per_fid: Dict[Any, Dict[str, Any]] = {}
-
-    def _consider(item: Dict[str, Any], source: str) -> None:
+    def _build_row(item: Dict[str, Any], source: str) -> Optional[Dict[str, Any]]:
         fid = item.get("fixture_id")
         market = str(item.get("market") or "")
         if fid is None or not market:
-            return
+            return None
 
         cand = cand_index.get((fid, market))
         rank = float(cand.get("rank_score", 0.0)) if cand else 0.0
 
-        row = {
+        return {
             "fixture_id": fid,
             "date": item.get("date"),
             "time_gr": item.get("time_gr"),
@@ -672,27 +674,41 @@ def _select_draw_superfun(
             "rank_score": rank,
         }
 
-        prev = per_fid.get(fid)
-        if prev is None:
-            per_fid[fid] = row
-        else:
-            if row["rank_score"] > float(prev.get("rank_score", 0.0)) + 1e-9:
-                per_fid[fid] = row
-            elif abs(row["rank_score"] - float(prev.get("rank_score", 0.0))) <= 1e-9:
-                if prev.get("source") != "core" and source == "core":
-                    per_fid[fid] = row
-
+    core_rows: List[Dict[str, Any]] = []
+    seen_core = set()
     for s in core_singles:
-        _consider(s, "core")
+        row = _build_row(s, "core")
+        if row is None:
+            continue
+        fid = row["fixture_id"]
+        if fid in seen_core:
+            continue
+        seen_core.add(fid)
+        core_rows.append(row)
+
+    fun_best_by_fid: Dict[Any, Dict[str, Any]] = {}
     for s in fun_pool:
-        _consider(s, "fun")
+        row = _build_row(s, "fun")
+        if row is None:
+            continue
+        fid = row["fixture_id"]
 
-    picks = list(per_fid.values())
+        # skip anything already in core; core always wins
+        if fid in seen_core:
+            continue
 
-    picks.sort(key=lambda x: float(x.get("rank_score", 0.0)), reverse=True)
-    if n_max > 0 and len(picks) > n_max:
-        picks = picks[:n_max]
+        prev = fun_best_by_fid.get(fid)
+        if prev is None or row["rank_score"] > float(prev.get("rank_score", 0.0)) + 1e-9:
+            fun_best_by_fid[fid] = row
 
+    fun_rows = list(fun_best_by_fid.values())
+    fun_rows.sort(key=lambda x: float(x.get("rank_score", 0.0)), reverse=True)
+
+    if n_max > 0:
+        fun_slots = max(0, n_max - len(core_rows))
+        fun_rows = fun_rows[:fun_slots]
+
+    picks = core_rows + fun_rows
     picks.sort(key=_chrono_key)
 
     n = len(picks)
@@ -744,11 +760,14 @@ def _select_draw_superfun(
             "hits_offset": int(offset),
             "min_k": int(min_k),
             "unique_by_fixture": True,
+            "core_priority": True,
         },
     }
 
     dbg = {
-        "n_before_cap": len(per_fid),
+        "core_kept": len(core_rows),
+        "fun_candidates_unique": len(fun_best_by_fid),
+        "fun_kept": len(fun_rows),
         "n_after_cap": n,
         "k": k,
         "columns": columns,
@@ -773,7 +792,7 @@ def build_friday_shortlist() -> Dict[str, Any]:
 
     core_bankroll, fun_bankroll, draw_bankroll, next_week, hist_as_of, hist_meta = _history_bankrolls_or_env()
 
-    fun_stake_total  = _sf_env("FUN_SYSTEM_STAKE", 35.0)
+    fun_stake_total = _sf_env("FUN_SYSTEM_STAKE", 35.0)
 
     superfun_stake_per_col = _sf_env("SUPERFUN_STAKE_PER_COLUMN", 0.10)
     draw_mode = _ss_env("FRIDAY_DRAW_MODE", "superfun").lower()
@@ -800,7 +819,7 @@ def build_friday_shortlist() -> Dict[str, Any]:
         raise ValueError(f"Some candidates have missing fixture_id. Examples: {bad}")
 
     core_cands = [c for c in all_cands if (q_by_id.get(c["fixture_id"], 0.0) >= core_min_q)]
-    fun_cands  = [c for c in all_cands]
+    fun_cands = [c for c in all_cands]
 
     core_singles, core_double, core_open, core_dbg = _select_core(core_cands, strict_ok_by_id)
     core_fids = {s.get("fixture_id") for s in core_singles if s.get("fixture_id") is not None}
