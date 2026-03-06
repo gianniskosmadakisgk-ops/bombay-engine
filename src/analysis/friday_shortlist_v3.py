@@ -375,8 +375,8 @@ def _apply_core_stake_boost(singles: List[Dict[str, Any]], open_total: float) ->
 # -------------------------
 
 def _select_core(cands: List[Dict[str, Any]], strict_ok_by_id: Dict[Any, bool]) -> Tuple[List[Dict[str, Any]], Optional[Dict[str, Any]], float, Dict[str, Any]]:
-    odds_min = _sf_env("FRIDAY_CORE_ODDS_MIN", 1.55)
-    odds_max = _sf_env("FRIDAY_CORE_ODDS_MAX", 2.20)
+    odds_min = _sf_env("FRIDAY_CORE_ODDS_MIN", 1.60)
+    odds_max = _sf_env("FRIDAY_CORE_ODDS_MAX", 1.90)
     min_prob = _sf_env("FRIDAY_CORE_MIN_PROB", 0.50)
     min_val  = _sf_env("FRIDAY_CORE_MIN_VALUE_PCT", 1.0)
 
@@ -504,8 +504,8 @@ def _select_fun_system(cands: List[Dict[str, Any]], stake_total: float, core_fix
     desired_n = _si_env("FRIDAY_FUN_POOL_SIZE", 7)
     k = _si_env("FRIDAY_FUN_K", 4)
 
-    odds_min = _sf_env("FRIDAY_FUN_ODDS_MIN", 2.00)
-    odds_max = _sf_env("FRIDAY_FUN_ODDS_MAX", 3.30)
+    odds_min = _sf_env("FRIDAY_FUN_ODDS_MIN", 1.90)
+    odds_max = _sf_env("FRIDAY_FUN_ODDS_MAX", 2.70)
     min_prob = _sf_env("FRIDAY_FUN_MIN_PROB", 0.40)
     min_val  = _sf_env("FRIDAY_FUN_MIN_VALUE_PCT", 1.0)
     min_q    = _sf_env("FRIDAY_FUN_MIN_QUALITY", 0.60)
@@ -647,7 +647,6 @@ def _select_draw_superfun(
     offset = _si_env("SUPERFUN_HITS_OFFSET", 4)
     min_k = _si_env("SUPERFUN_MIN_K", 6)
 
-    # Collect entries (core first, then fun), keep best per fixture by rank_score
     per_fid: Dict[Any, Dict[str, Any]] = {}
 
     def _consider(item: Dict[str, Any], source: str) -> None:
@@ -669,15 +668,14 @@ def _select_draw_superfun(
             "odds": float(item.get("odds") or 0.0),
             "prob": float(item.get("prob") or 0.0),
             "quality": float(item.get("quality") or 0.0),
-            "source": source,          # just debug info
-            "rank_score": rank,        # internal ranking
+            "source": source,
+            "rank_score": rank,
         }
 
         prev = per_fid.get(fid)
         if prev is None:
             per_fid[fid] = row
         else:
-            # keep whichever has higher rank_score; tie-break: prefer Core
             if row["rank_score"] > float(prev.get("rank_score", 0.0)) + 1e-9:
                 per_fid[fid] = row
             elif abs(row["rank_score"] - float(prev.get("rank_score", 0.0))) <= 1e-9:
@@ -691,12 +689,10 @@ def _select_draw_superfun(
 
     picks = list(per_fid.values())
 
-    # If too many, keep top by rank_score
     picks.sort(key=lambda x: float(x.get("rank_score", 0.0)), reverse=True)
     if n_max > 0 and len(picks) > n_max:
         picks = picks[:n_max]
 
-    # Now order chronologically for presentation
     picks.sort(key=_chrono_key)
 
     n = len(picks)
@@ -711,7 +707,6 @@ def _select_draw_superfun(
         }
         return [], system, 0.0, {"reason": "no_picks"}
 
-    # k logic: n - offset, with floor
     k = n - int(offset)
     if k < int(min_k):
         k = int(min_k)
@@ -721,7 +716,6 @@ def _select_draw_superfun(
     columns = comb(n, k) if (n >= k and k > 0) else 0
     open_amt = float(round(columns * float(stake_per_column), 2))
 
-    # Strip internal fields
     pool_out = []
     for p in picks:
         pool_out.append({
@@ -781,7 +775,6 @@ def build_friday_shortlist() -> Dict[str, Any]:
 
     fun_stake_total  = _sf_env("FUN_SYSTEM_STAKE", 35.0)
 
-    # DrawBet (superfun) stake per column
     superfun_stake_per_col = _sf_env("SUPERFUN_STAKE_PER_COLUMN", 0.10)
     draw_mode = _ss_env("FRIDAY_DRAW_MODE", "superfun").lower()
 
@@ -814,7 +807,6 @@ def build_friday_shortlist() -> Dict[str, Any]:
 
     fun_pool, fun_system, fun_open, fun_dbg = _select_fun_system(fun_cands, fun_stake_total, core_fids)
 
-    # DrawBet => SuperFun system from Core+Fun (no new selection)
     cand_index = _build_candidate_index(all_cands)
     if draw_mode == "superfun":
         draw_pool, draw_system, draw_open, draw_dbg = _select_draw_superfun(
@@ -824,8 +816,6 @@ def build_friday_shortlist() -> Dict[str, Any]:
             stake_per_column=float(superfun_stake_per_col),
         )
     else:
-        # Safety fallback: keep previous behavior if someone sets FRIDAY_DRAW_MODE=top5_draws
-        # (we won't maintain it actively; here only to avoid breaking deploys)
         draw_pool, draw_system, draw_open, draw_dbg = [], {"mode": "disabled"}, 0.0, {"reason": "FRIDAY_DRAW_MODE!=superfun"}
 
     window = th.get("window") or {
