@@ -1,39 +1,34 @@
 # src/analysis/friday_shortlist_v3.py
 """
-Friday shortlist v3 — history-aware + env-driven + NO SCALING + TOP-5 DRAWS + chronological ordering + fixture_id everywhere.
+Friday shortlist v4 — history-aware + style-aware + tiered Core/Fun + SuperFun from Core+Fun.
 
-Fixes:
-- Reads bankrolls + week_count from Tuesday history (HISTORY_PATH preferred).
-- Core/Fun "fill pass" so we aim to reach targets instead of stopping at 4/6.
-- Fun system auto-adjusts n/columns if pool < desired (never prints n=7 with 6 picks).
-- Keeps existing Thursday schema + quality gate behavior.
+What it does
+------------
+- Reads bankrolls + week_count from Tuesday history.
+- Builds CoreBet and FunBet from Thursday report.
+- Uses more of the Thursday data directly in selection:
+  - odds_match grade
+  - tight-game filter
+  - team_value_ratio filter
+  - tempo/style validation for Over
+  - slow-favourite trap downgrade
+- Core is tiered:
+  - STRONG -> 40 stake
+  - TRB    -> 30 stake
+- Fun is tiered:
+  - A / B
+- SuperFun is built ONLY from Core + Fun (no extra selection).
+- Core always has priority in SuperFun.
+- SuperFun targets:
+  - 12 -> 8/12
+  - 11 -> 7/11
+  - 10 -> 6/10
+  - never below 10 picks
 
-History:
-- HISTORY_PATH (preferred) or TUESDAY_HISTORY_PATH (fallback)
-- Default path: logs/tuesday_history_v3.json
-- If FRIDAY_REQUIRE_HISTORY=true and file missing -> hard error
-
-NEW (CoreBet only):
-- Optional "stake boost" when Core open is too low (e.g. only 4 picks).
-  It DOES NOT add picks; it only increases stake on existing Core singles.
-  Controlled via env vars:
-    FRIDAY_CORE_BOOST_ENABLED=true/false (default false)
-    FRIDAY_CORE_MIN_OPEN=200 (default 0)
-    FRIDAY_CORE_BOOST_MAX_STAKE=50 (default 50)
-    FRIDAY_CORE_BOOST_STEP=5 (default 5)
-
-NEW (DrawBet => SuperFunBet):
-- DrawBet no longer selects draw markets.
-- It becomes a "super funbet" system built ONLY from already-selected Core+Fun picks (no new selection).
-- Core picks are always kept first in SuperFun.
-- Then Fun picks fill the remaining slots up to SUPERFUN_N_MAX.
-- Default target: k = n - 4 (8/12, 7/11, 6/10...), stake per column 0.10
-  Env vars:
-    FRIDAY_DRAW_MODE=superfun (default "superfun")
-    SUPERFUN_N_MAX=12
-    SUPERFUN_HITS_OFFSET=4
-    SUPERFUN_MIN_K=6
-    SUPERFUN_STAKE_PER_COLUMN=0.10
+User-agreed ranges
+------------------
+- Core: 1.55 -> 1.90
+- Fun : 1.80 -> 2.40
 """
 
 from __future__ import annotations
@@ -43,9 +38,10 @@ import os
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from functools import lru_cache
+from math import comb
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
-from math import comb
 
 
 # -------------------------
@@ -71,7 +67,7 @@ for candidate in [PROJECT_ROOT, PROJECT_ROOT / "src", PROJECT_ROOT / "src" / "sr
 
 
 # -------------------------
-# Quality gate import (NO __init__.py needed)
+# Quality gate import
 # -------------------------
 
 @dataclass
@@ -115,14 +111,17 @@ def fixture_quality_score(fixture: Dict[str, Any]) -> _QualityResult:
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
+
 def _read_json(path: Path) -> Any:
     with path.open("r", encoding="utf-8") as f:
         return json.load(f)
+
 
 def _write_json(path: Path, obj: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as f:
         json.dump(obj, f, ensure_ascii=False, indent=2)
+
 
 def _safe_float(v: Any) -> Optional[float]:
     if isinstance(v, (int, float)):
@@ -134,11 +133,13 @@ def _safe_float(v: Any) -> Optional[float]:
     except Exception:
         return None
 
+
 def _sf_env(name: str, default: float) -> float:
     try:
         return float(os.getenv(name, str(default)))
     except Exception:
         return float(default)
+
 
 def _si_env(name: str, default: int) -> int:
     try:
@@ -146,34 +147,32 @@ def _si_env(name: str, default: int) -> int:
     except Exception:
         return int(default)
 
+
 def _sb_env(name: str, default: bool) -> bool:
     v = os.getenv(name, "true" if default else "false").strip().lower()
     return v in ("1", "true", "yes", "y", "on")
+
 
 def _ss_env(name: str, default: str) -> str:
     v = os.getenv(name, "").strip()
     return v if v else default
 
+
 def _fmt_date(date_str: str) -> str:
     return str(date_str or "")
+
 
 def _fmt_time(time_str: str) -> str:
     return str(time_str or "")
 
+
 def _chrono_key(item: Dict[str, Any]) -> Tuple[str, str]:
     return (str(item.get("date") or ""), str(item.get("time_gr") or ""))
 
-def _market_defs() -> List[Dict[str, str]]:
-    return [
-        {"label": "Home (1)", "odds": "offered_1", "prob": "home_prob", "value": "value_pct_1"},
-        {"label": "Draw",     "odds": "offered_x", "prob": "draw_prob", "value": "value_pct_x"},
-        {"label": "Away (2)", "odds": "offered_2", "prob": "away_prob", "value": "value_pct_2"},
-        {"label": "Over 2.5", "odds": "offered_over_2_5",  "prob": "over_2_5_prob",  "value": "value_pct_over"},
-        {"label": "Under 2.5","odds": "offered_under_2_5", "prob": "under_2_5_prob", "value": "value_pct_under"},
-    ]
 
 def _prob_points(prob: float) -> float:
     return (float(prob) - 0.50) * 100.0
+
 
 def _rank_score(value_pct: float, prob: float) -> float:
     wv = _sf_env("FRIDAY_RANK_W_VALUE", 0.60)
@@ -190,11 +189,224 @@ def _rank_score(value_pct: float, prob: float) -> float:
     wp /= s
     return (wv * float(value_pct)) + (wp * _prob_points(float(prob)))
 
+
 def _is_total_market(market: str) -> bool:
     return market in ("Over 2.5", "Under 2.5")
 
+
 def _is_under(market: str) -> bool:
     return market == "Under 2.5"
+
+
+def _prob_gap(fx: Dict[str, Any]) -> float:
+    hp = _safe_float(fx.get("home_prob")) or 0.0
+    ap = _safe_float(fx.get("away_prob")) or 0.0
+    return abs(hp - ap)
+
+
+def _odds_grade_rank(grade: str) -> int:
+    g = (grade or "").strip().upper()
+    return {"A": 4, "B": 3, "C": 2, "D": 1}.get(g, 0)
+
+
+def _grade_at_least(grade: str, minimum: str) -> bool:
+    return _odds_grade_rank(grade) >= _odds_grade_rank(minimum)
+
+
+def _normalize_team_name(name: str) -> str:
+    s = (name or "").strip().lower()
+    repl = {
+        "á": "a", "à": "a", "ä": "a", "â": "a",
+        "é": "e", "è": "e", "ë": "e", "ê": "e",
+        "í": "i", "ì": "i", "ï": "i", "î": "i",
+        "ó": "o", "ò": "o", "ö": "o", "ô": "o",
+        "ú": "u", "ù": "u", "ü": "u", "û": "u",
+        "ç": "c", "ñ": "n",
+    }
+    for a, b in repl.items():
+        s = s.replace(a, b)
+    s = s.replace(".", " ").replace("-", " ")
+    s = s.replace(" fc ", " ").replace(" cf ", " ").replace(" ac ", " ")
+    s = " ".join(s.split())
+    return s
+
+
+def _style_path() -> Path:
+    sp = os.getenv("TEAM_STYLE_METRICS_PATH", "").strip()
+    if sp:
+        return Path(sp)
+    return LOGS_DIR / "team_style_metrics.json"
+
+
+@lru_cache(maxsize=1)
+def _load_style_metrics() -> Dict[str, Any]:
+    path = _style_path()
+    if not path.exists():
+        return {}
+
+    try:
+        data = _read_json(path)
+    except Exception:
+        return {}
+
+    out: Dict[str, Any] = {}
+
+    if isinstance(data, dict):
+        teams = data.get("teams")
+        if isinstance(teams, list):
+            for row in teams:
+                if not isinstance(row, dict):
+                    continue
+                team = str(row.get("team") or row.get("name") or "").strip()
+                if team:
+                    out[_normalize_team_name(team)] = row
+        else:
+            for k, v in data.items():
+                if isinstance(v, dict):
+                    out[_normalize_team_name(str(k))] = v
+
+    elif isinstance(data, list):
+        for row in data:
+            if not isinstance(row, dict):
+                continue
+            team = str(row.get("team") or row.get("name") or "").strip()
+            if team:
+                out[_normalize_team_name(team)] = row
+
+    return out
+
+
+def _team_style_row(team_name: str) -> Dict[str, Any]:
+    return _load_style_metrics().get(_normalize_team_name(team_name), {})
+
+
+def _fixture_style_profile(fx: Dict[str, Any]) -> Dict[str, Any]:
+    home = str(fx.get("home") or "")
+    away = str(fx.get("away") or "")
+    flags = fx.get("flags") or {}
+
+    home_style = _team_style_row(home)
+    away_style = _team_style_row(away)
+
+    tempo_home = _safe_float(fx.get("tempo_index_home")) or 0.0
+    tempo_away = _safe_float(fx.get("tempo_index_away")) or 0.0
+    tempo_total = _safe_float(fx.get("tempo_total_mult")) or 1.0
+
+    home_block = _safe_float(home_style.get("defensive_block"))
+    away_block = _safe_float(away_style.get("defensive_block"))
+    home_attack = _safe_float(home_style.get("attacking_intensity"))
+    away_attack = _safe_float(away_style.get("attacking_intensity"))
+    home_transition = _safe_float(home_style.get("transition_speed"))
+    away_transition = _safe_float(away_style.get("transition_speed"))
+
+    # safe fallbacks from Thursday flags / tempo
+    if home_block is None:
+        home_block = 0.70 if flags.get("home_shape") is False else 0.50
+    if away_block is None:
+        away_block = 0.70 if flags.get("away_shape") is False else 0.50
+    if home_attack is None:
+        home_attack = 0.70 if flags.get("home_shape") else 0.50
+    if away_attack is None:
+        away_attack = 0.70 if flags.get("away_shape") else 0.50
+    if home_transition is None:
+        home_transition = tempo_home
+    if away_transition is None:
+        away_transition = tempo_away
+
+    return {
+        "tempo_home": float(tempo_home),
+        "tempo_away": float(tempo_away),
+        "tempo_total": float(tempo_total),
+        "home_block": float(home_block),
+        "away_block": float(away_block),
+        "home_attack": float(home_attack),
+        "away_attack": float(away_attack),
+        "home_transition": float(home_transition),
+        "away_transition": float(away_transition),
+    }
+
+
+def _over_style_ok(fx: Dict[str, Any]) -> bool:
+    sp = _fixture_style_profile(fx)
+    over_prob = _safe_float(fx.get("over_2_5_prob")) or 0.0
+
+    if sp["tempo_total"] >= 1.02:
+        return True
+    if over_prob >= 0.60:
+        return True
+    if sp["tempo_total"] >= 1.00 and (sp["tempo_home"] + sp["tempo_away"]) >= 4.20:
+        return True
+
+    return False
+
+
+def _slow_favourite_trap(fx: Dict[str, Any], market: str) -> bool:
+    if market not in ("Home (1)", "Away (2)"):
+        return False
+
+    sp = _fixture_style_profile(fx)
+    home_prob = _safe_float(fx.get("home_prob")) or 0.0
+    away_prob = _safe_float(fx.get("away_prob")) or 0.0
+
+    if market == "Home (1)" and home_prob >= 0.50:
+        return (
+            sp["tempo_home"] < 2.00 and
+            sp["tempo_total"] < 1.00 and
+            sp["away_block"] >= 0.70
+        )
+
+    if market == "Away (2)" and away_prob >= 0.50:
+        return (
+            sp["tempo_away"] < 2.00 and
+            sp["tempo_total"] < 1.00 and
+            sp["home_block"] >= 0.70
+        )
+
+    return False
+
+
+def _passes_tight_game_filter(fx: Dict[str, Any], market: str, mode: str) -> bool:
+    if market not in ("Home (1)", "Away (2)"):
+        return True
+
+    gap = _prob_gap(fx)
+    if mode == "core":
+        return gap >= 0.12
+    return gap >= 0.07
+
+
+def _passes_team_value_filter(fx: Dict[str, Any], market: str, value_pct: float) -> bool:
+    if market not in ("Home (1)", "Away (2)"):
+        return True
+
+    ratio = _safe_float(fx.get("team_value_ratio")) or 1.0
+    hp = _safe_float(fx.get("home_prob")) or 0.0
+    ap = _safe_float(fx.get("away_prob")) or 0.0
+
+    # Only filter underdog 1X2 bets when squad-value gap is large.
+    is_underdog = False
+    if market == "Home (1)" and hp < ap:
+        is_underdog = True
+    if market == "Away (2)" and ap < hp:
+        is_underdog = True
+
+    if not is_underdog:
+        return True
+
+    if ratio > 1.70 and float(value_pct) < 35.0:
+        return False
+    return True
+
+
+def _market_defs() -> List[Dict[str, str]]:
+    # No draw selection for now.
+    return [
+        {"label": "Home (1)", "odds": "offered_1", "prob": "home_prob", "value": "value_pct_1"},
+        {"label": "Away (2)", "odds": "offered_2", "prob": "away_prob", "value": "value_pct_2"},
+        {"label": "Over 2.5", "odds": "offered_over_2_5", "prob": "over_2_5_prob", "value": "value_pct_over"},
+        {"label": "Under 2.5", "odds": "offered_under_2_5", "prob": "under_2_5_prob", "value": "value_pct_under"},
+    ]
+
 
 def _candidate_from_fixture(fx: Dict[str, Any], md: Dict[str, str]) -> Optional[Dict[str, Any]]:
     odds = _safe_float(fx.get(md["odds"]))
@@ -207,11 +419,22 @@ def _candidate_from_fixture(fx: Dict[str, Any], md: Dict[str, str]) -> Optional[
     home = str(fx.get("home") or "")
     away = str(fx.get("away") or "")
     fixture_id = fx.get("fixture_id")
-
     date = _fmt_date(str(fx.get("date") or ""))
     time_gr = _fmt_time(str(fx.get("time") or ""))
 
     qr = fixture_quality_score(fx)
+    odds_match = fx.get("odds_match") or {}
+    odds_grade = str(odds_match.get("grade") or "").upper()
+    odds_score = _safe_float(odds_match.get("score")) or 0.0
+
+    slow_trap = _slow_favourite_trap(fx, md["label"])
+    over_ok = True
+    if md["label"] == "Over 2.5":
+        over_ok = _over_style_ok(fx)
+
+    rank = float(_rank_score(float(value_pct), float(prob)))
+    if slow_trap:
+        rank *= 0.80
 
     return {
         "fixture_id": fixture_id,
@@ -223,10 +446,17 @@ def _candidate_from_fixture(fx: Dict[str, Any], md: Dict[str, str]) -> Optional[
         "odds": round(float(odds), 2),
         "prob": round(float(prob), 4),
         "value_pct": round(float(value_pct), 2),
-        "rank_score": float(_rank_score(float(value_pct), float(prob))),
+        "rank_score": float(rank),
         "quality": round(float(qr.score), 3),
         "quality_reasons": list(qr.reasons),
+        "odds_match_grade": odds_grade,
+        "odds_match_score": float(odds_score),
+        "team_value_ratio": round(_safe_float(fx.get("team_value_ratio")) or 1.0, 3),
+        "prob_gap": round(_prob_gap(fx), 4),
+        "slow_fav_trap": bool(slow_trap),
+        "over_style_ok": bool(over_ok),
     }
+
 
 def _load_latest_thursday_report() -> Dict[str, Any]:
     p1 = LOGS_DIR / "thursday_report_v3.json"
@@ -255,11 +485,13 @@ def _history_path() -> Path:
 
     return LOGS_DIR / "tuesday_history_v3.json"
 
+
 def _load_history() -> Optional[Dict[str, Any]]:
     path = _history_path()
     if path.exists():
         return _read_json(path)
     return None
+
 
 def _history_bankrolls_or_env() -> Tuple[float, float, float, Optional[int], Optional[str], Dict[str, Any]]:
     require = _sb_env("FRIDAY_REQUIRE_HISTORY", True)
@@ -296,15 +528,15 @@ def _history_bankrolls_or_env() -> Tuple[float, float, float, Optional[int], Opt
 
 
 # -------------------------
-# Stake rules (NO scaling)
+# Stake rules
 # -------------------------
 
-def core_stake_from_odds(odds: float) -> int:
-    return 40 if float(odds) <= 2.00 else 30
+def core_stake_from_tier(tier: str) -> int:
+    return 40 if tier == "STRONG" else 30
 
 
 # -------------------------
-# Core stake boost (ONLY if open is too low)
+# Core stake boost (optional)
 # -------------------------
 
 def _apply_core_stake_boost(singles: List[Dict[str, Any]], open_total: float) -> Tuple[List[Dict[str, Any]], float, Dict[str, Any]]:
@@ -377,35 +609,69 @@ def _apply_core_stake_boost(singles: List[Dict[str, Any]], open_total: float) ->
 # Selection logic
 # -------------------------
 
-def _select_core(cands: List[Dict[str, Any]], strict_ok_by_id: Dict[Any, bool]) -> Tuple[List[Dict[str, Any]], Optional[Dict[str, Any]], float, Dict[str, Any]]:
-    odds_min = _sf_env("FRIDAY_CORE_ODDS_MIN", 1.60)
+def _select_core(
+    fixture_rows: List[Dict[str, Any]],
+    candidate_rows: List[Dict[str, Any]],
+) -> Tuple[List[Dict[str, Any]], Optional[Dict[str, Any]], float, Dict[str, Any]]:
+    odds_min = _sf_env("FRIDAY_CORE_ODDS_MIN", 1.55)
     odds_max = _sf_env("FRIDAY_CORE_ODDS_MAX", 1.90)
-    min_prob = _sf_env("FRIDAY_CORE_MIN_PROB", 0.50)
-    min_val = _sf_env("FRIDAY_CORE_MIN_VALUE_PCT", 1.0)
-
     target_singles = _si_env("FRIDAY_CORE_TARGET_SINGLES", 7)
     max_totals = _si_env("FRIDAY_CORE_MAX_TOTALS", 4)
     max_unders = _si_env("FRIDAY_CORE_MAX_UNDERS", 1)
-    require_strict = _sb_env("FRIDAY_CORE_REQUIRE_STRICT_OK", True)
 
-    fill_mode = _sb_env("FRIDAY_CORE_FILL_MODE", True)
+    # stricter selection by agreement
+    strong_prob = _sf_env("FRIDAY_CORE_STRONG_MIN_PROB", 0.53)
+    strong_val = _sf_env("FRIDAY_CORE_STRONG_MIN_VALUE_PCT", 3.0)
+    strong_q = _sf_env("FRIDAY_CORE_STRONG_MIN_QUALITY", 0.70)
 
-    base = [c for c in cands if c["market"] != "Draw"]
-    base = [c for c in base if odds_min <= float(c["odds"]) <= odds_max]
+    trb_prob = _sf_env("FRIDAY_CORE_TRB_MIN_PROB", 0.50)
+    trb_val = _sf_env("FRIDAY_CORE_TRB_MIN_VALUE_PCT", 1.0)
+    trb_q = _sf_env("FRIDAY_CORE_TRB_MIN_QUALITY", 0.65)
 
-    def _apply_filters(lst: List[Dict[str, Any]], mp: float, mv: float, strict: bool) -> List[Dict[str, Any]]:
-        out = [c for c in lst if float(c["prob"]) >= mp and float(c["value_pct"]) >= mv]
-        if strict:
-            out = [c for c in out if bool(strict_ok_by_id.get(c.get("fixture_id"), False))]
-        out.sort(key=lambda x: (float(x["rank_score"]), 1 if x["market"] == "Over 2.5" else 0), reverse=True)
-        return out
+    fixture_by_id: Dict[Any, Dict[str, Any]] = {fx.get("fixture_id"): fx for fx in fixture_rows}
 
-    passes = []
-    passes.append(("strict", min_prob, min_val, require_strict))
-    if fill_mode:
-        passes.append(("no_strict", min_prob, min_val, False))
-        passes.append(("low_value", min_prob, 0.0, False))
-        passes.append(("low_prob", max(0.45, min_prob - 0.05), 0.0, False))
+    base = []
+    for c in candidate_rows:
+        if not (odds_min <= float(c["odds"]) <= odds_max):
+            continue
+        if not _grade_at_least(str(c.get("odds_match_grade") or ""), "B"):
+            continue
+
+        fx = fixture_by_id.get(c.get("fixture_id"))
+        if not fx:
+            continue
+
+        if not _passes_tight_game_filter(fx, c["market"], "core"):
+            continue
+        if not _passes_team_value_filter(fx, c["market"], float(c["value_pct"])):
+            continue
+        if c["market"] == "Over 2.5" and not bool(c.get("over_style_ok", True)):
+            continue
+
+        base.append(c)
+
+    strong: List[Dict[str, Any]] = []
+    trb: List[Dict[str, Any]] = []
+
+    for c in base:
+        q = float(c["quality"])
+        p = float(c["prob"])
+        v = float(c["value_pct"])
+        slow_trap = bool(c.get("slow_fav_trap", False))
+
+        if p >= strong_prob and v >= strong_val and q >= strong_q and not slow_trap:
+            row = dict(c)
+            row["tier"] = "STRONG"
+            row["risk_tag"] = "A"
+            strong.append(row)
+        elif p >= trb_prob and v >= trb_val and q >= trb_q:
+            row = dict(c)
+            row["tier"] = "TRB"
+            row["risk_tag"] = "TRB"
+            trb.append(row)
+
+    strong.sort(key=lambda x: (float(x["rank_score"]), float(x["quality"])), reverse=True)
+    trb.sort(key=lambda x: (float(x["rank_score"]), float(x["quality"])), reverse=True)
 
     singles: List[Dict[str, Any]] = []
     open_total = 0.0
@@ -417,6 +683,7 @@ def _select_core(cands: List[Dict[str, Any]], strict_ok_by_id: Dict[Any, bool]) 
         nonlocal open_total, totals_cnt, unders_cnt
         if len(singles) >= target_singles:
             return False
+
         fid = c.get("fixture_id")
         if fid in used_fids:
             return False
@@ -427,7 +694,8 @@ def _select_core(cands: List[Dict[str, Any]], strict_ok_by_id: Dict[Any, bool]) 
             if _is_under(c["market"]) and unders_cnt >= max_unders:
                 return False
 
-        stake = core_stake_from_odds(float(c["odds"]))
+        stake = core_stake_from_tier(str(c.get("tier") or "TRB"))
+
         singles.append({
             "fixture_id": fid,
             "date": c["date"],
@@ -439,6 +707,11 @@ def _select_core(cands: List[Dict[str, Any]], strict_ok_by_id: Dict[Any, bool]) 
             "prob": c["prob"],
             "stake": stake,
             "quality": c["quality"],
+            "tier": c["tier"],
+            "risk_tag": c["risk_tag"],
+            "slow_fav_trap": bool(c.get("slow_fav_trap", False)),
+            "odds_match_grade": c.get("odds_match_grade"),
+            "value_pct": c.get("value_pct"),
         })
         used_fids.add(fid)
         open_total += stake
@@ -449,28 +722,23 @@ def _select_core(cands: List[Dict[str, Any]], strict_ok_by_id: Dict[Any, bool]) 
                 unders_cnt += 1
         return True
 
-    for tag, mp, mv, strict in passes:
-        pool = _apply_filters(base, mp, mv, strict)
-
-        for c in pool:
+    # Strong first, then TRB. Totals first as in current architecture.
+    ordered_groups = [strong, trb]
+    for grp in ordered_groups:
+        for c in grp:
+            if len(singles) >= target_singles:
+                break
+            if _is_total_market(c["market"]):
+                _try_add(c)
+        for c in grp:
             if len(singles) >= target_singles:
                 break
             if not _is_total_market(c["market"]):
-                continue
-            _try_add(c)
-
-        for c in pool:
-            if len(singles) >= target_singles:
-                break
-            if _is_total_market(c["market"]) or c["market"] == "Draw":
-                continue
-            _try_add(c)
-
-        if len(singles) >= target_singles:
-            break
+                _try_add(c)
 
     singles, open_total, boost_dbg = _apply_core_stake_boost(singles, open_total)
 
+    # keep optional double logic
     eligible = [s for s in singles if float(s["odds"]) <= 1.60]
     eligible.sort(key=lambda s: float(s["odds"]))
 
@@ -494,71 +762,108 @@ def _select_core(cands: List[Dict[str, Any]], strict_ok_by_id: Dict[Any, bool]) 
     dbg = {
         "target_singles": target_singles,
         "got_singles": len(singles),
-        "fill_mode": fill_mode,
+        "strong_candidates": len(strong),
+        "trb_candidates": len(trb),
         "totals_cnt": totals_cnt,
         "unders_cnt": unders_cnt,
-        "require_strict_default": require_strict,
         "stake_boost": boost_dbg,
     }
     return singles, core_double, float(round(open_total, 2)), dbg
 
 
-def _select_fun_system(cands: List[Dict[str, Any]], stake_total: float, core_fixture_ids: set) -> Tuple[List[Dict[str, Any]], Dict[str, Any], float, Dict[str, Any]]:
-    desired_n = _si_env("FRIDAY_FUN_POOL_SIZE", 7)
-    k = _si_env("FRIDAY_FUN_K", 4)
+def _soft_prob_bucket(c: Dict[str, Any]) -> int:
+    p = float(c.get("prob") or 0.0)
+    if p >= 0.53:
+        return 3
+    if p >= 0.50:
+        return 2
+    return 1
 
-    odds_min = _sf_env("FRIDAY_FUN_ODDS_MIN", 1.90)
+
+def _select_fun_system(
+    fixture_rows: List[Dict[str, Any]],
+    candidate_rows: List[Dict[str, Any]],
+    stake_total: float,
+    core_fixture_ids: set,
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any], float, Dict[str, Any]]:
+    desired_n = _si_env("FRIDAY_FUN_POOL_SIZE", 6)
+    k = _si_env("FRIDAY_FUN_K", 3)
+
+    odds_min = _sf_env("FRIDAY_FUN_ODDS_MIN", 1.80)
     odds_max = _sf_env("FRIDAY_FUN_ODDS_MAX", 2.40)
-    min_prob = _sf_env("FRIDAY_FUN_MIN_PROB", 0.40)
-    min_val = _sf_env("FRIDAY_FUN_MIN_VALUE_PCT", 1.0)
-    min_q = _sf_env("FRIDAY_FUN_MIN_QUALITY", 0.60)
 
-    max_totals = _si_env("FRIDAY_FUN_MAX_TOTALS", 4)
-    max_unders = _si_env("FRIDAY_FUN_MAX_UNDERS", 1)
+    a_prob = _sf_env("FRIDAY_FUN_A_MIN_PROB", 0.45)
+    a_val = _sf_env("FRIDAY_FUN_A_MIN_VALUE_PCT", 5.0)
+    a_q = _sf_env("FRIDAY_FUN_A_MIN_QUALITY", 0.65)
+
+    b_prob = _sf_env("FRIDAY_FUN_B_MIN_PROB", 0.40)
+    b_val = _sf_env("FRIDAY_FUN_B_MIN_VALUE_PCT", 1.0)
+    b_q = _sf_env("FRIDAY_FUN_B_MIN_QUALITY", 0.60)
+
     max_overlap = _si_env("FRIDAY_FUN_MAX_OVERLAP_WITH_CORE", 2)
 
-    fill_mode = _sb_env("FRIDAY_FUN_FILL_MODE", True)
+    fixture_by_id: Dict[Any, Dict[str, Any]] = {fx.get("fixture_id"): fx for fx in fixture_rows}
 
-    base = [c for c in cands if c["market"] != "Draw" and float(c.get("quality", 0.0)) >= min_q]
-    base = [c for c in base if odds_min <= float(c["odds"]) <= odds_max]
+    base = []
+    for c in candidate_rows:
+        if not (odds_min <= float(c["odds"]) <= odds_max):
+            continue
+        if not _grade_at_least(str(c.get("odds_match_grade") or ""), "C"):
+            continue
 
-    def _rank(lst: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        lst.sort(key=lambda x: (float(x["rank_score"]), 1 if x["market"] == "Over 2.5" else 0), reverse=True)
-        return lst
+        fx = fixture_by_id.get(c.get("fixture_id"))
+        if not fx:
+            continue
 
-    def _passes() -> List[Tuple[str, float, float]]:
-        out = [("base", min_prob, min_val)]
-        if fill_mode:
-            out += [
-                ("low_value", min_prob, 0.0),
-                ("low_prob", max(0.35, min_prob - 0.05), 0.0),
-            ]
-        return out
+        if not _passes_tight_game_filter(fx, c["market"], "fun"):
+            continue
+        if not _passes_team_value_filter(fx, c["market"], float(c["value_pct"])):
+            continue
+        if c["market"] == "Over 2.5" and not bool(c.get("over_style_ok", True)):
+            continue
+
+        base.append(c)
+
+    tier_a: List[Dict[str, Any]] = []
+    tier_b: List[Dict[str, Any]] = []
+
+    for c in base:
+        q = float(c["quality"])
+        p = float(c["prob"])
+        v = float(c["value_pct"])
+        slow_trap = bool(c.get("slow_fav_trap", False))
+
+        if p >= a_prob and v >= a_val and q >= a_q and not slow_trap:
+            row = dict(c)
+            row["tier"] = "A"
+            row["risk_tag"] = "A"
+            tier_a.append(row)
+        elif p >= b_prob and v >= b_val and q >= b_q:
+            row = dict(c)
+            row["tier"] = "B"
+            row["risk_tag"] = "B"
+            tier_b.append(row)
+
+    # soft preference for healthier probability distribution, but not hard forcing
+    tier_a.sort(key=lambda x: (_soft_prob_bucket(x), float(x["rank_score"]), float(x["quality"])), reverse=True)
+    tier_b.sort(key=lambda x: (_soft_prob_bucket(x), float(x["rank_score"]), float(x["quality"])), reverse=True)
 
     system_pool: List[Dict[str, Any]] = []
-    totals_cnt = 0
-    unders_cnt = 0
     seen_fixtures = set()
     overlap_cnt = 0
 
     def _try_add(c: Dict[str, Any]) -> bool:
-        nonlocal totals_cnt, unders_cnt, overlap_cnt
+        nonlocal overlap_cnt
 
         if len(system_pool) >= desired_n:
             return False
+
         fid = c.get("fixture_id")
         if fid in seen_fixtures:
             return False
 
-        if fid in core_fixture_ids:
-            if overlap_cnt >= max_overlap:
-                return False
-
-        if _is_total_market(c["market"]):
-            if totals_cnt >= max_totals:
-                return False
-            if _is_under(c["market"]) and unders_cnt >= max_unders:
-                return False
+        if fid in core_fixture_ids and overlap_cnt >= max_overlap:
+            return False
 
         system_pool.append({
             "fixture_id": fid,
@@ -570,29 +875,23 @@ def _select_fun_system(cands: List[Dict[str, Any]], stake_total: float, core_fix
             "odds": c["odds"],
             "prob": c["prob"],
             "quality": c["quality"],
+            "tier": c["tier"],
+            "risk_tag": c["risk_tag"],
+            "slow_fav_trap": bool(c.get("slow_fav_trap", False)),
+            "odds_match_grade": c.get("odds_match_grade"),
+            "value_pct": c.get("value_pct"),
         })
         seen_fixtures.add(fid)
 
         if fid in core_fixture_ids:
             overlap_cnt += 1
-
-        if _is_total_market(c["market"]):
-            totals_cnt += 1
-            if _is_under(c["market"]):
-                unders_cnt += 1
         return True
 
-    for tag, mp, mv in _passes():
-        pool = [c for c in base if float(c["prob"]) >= mp and float(c["value_pct"]) >= mv]
-        pool = _rank(pool)
-
-        for c in pool:
+    for grp in [tier_a, tier_b]:
+        for c in grp:
             if len(system_pool) >= desired_n:
                 break
             _try_add(c)
-
-        if len(system_pool) >= desired_n:
-            break
 
     n_actual = len(system_pool)
     k_actual = min(k, n_actual) if n_actual > 0 else k
@@ -615,17 +914,16 @@ def _select_fun_system(cands: List[Dict[str, Any]], stake_total: float, core_fix
         "got_n": n_actual,
         "k_requested": k,
         "k_used": k_actual,
-        "fill_mode": fill_mode,
+        "tier_a_candidates": len(tier_a),
+        "tier_b_candidates": len(tier_b),
         "overlap_with_core": overlap_cnt,
-        "totals_cnt": totals_cnt,
-        "unders_cnt": unders_cnt,
     }
 
     return system_pool, system, float(round(open_amt, 2)), dbg
 
 
 # -------------------------
-# DrawBet => SuperFunBet (built from Core+Fun picks only)
+# SuperFun (Core + Fun only)
 # -------------------------
 
 def _build_candidate_index(all_cands: List[Dict[str, Any]]) -> Dict[Tuple[Any, str], Dict[str, Any]]:
@@ -634,20 +932,15 @@ def _build_candidate_index(all_cands: List[Dict[str, Any]]) -> Dict[Tuple[Any, s
         idx[(c.get("fixture_id"), str(c.get("market")))] = c
     return idx
 
+
 def _select_draw_superfun(
     core_singles: List[Dict[str, Any]],
     fun_pool: List[Dict[str, Any]],
     cand_index: Dict[Tuple[Any, str], Dict[str, Any]],
     stake_per_column: float,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any], float, Dict[str, Any]]:
-    """
-    Build a system from already-selected Core+Fun picks.
-    - Core picks are always kept first.
-    - Then Fun picks fill remaining slots up to n_max.
-    - Unique by fixture_id (keeps the better-ranked market if both exist).
-    - k = n - offset (default offset=4) with a floor (default min_k=6).
-    """
     n_max = _si_env("SUPERFUN_N_MAX", 12)
+    n_min = _si_env("SUPERFUN_MIN_TOTAL", 10)
     offset = _si_env("SUPERFUN_HITS_OFFSET", 4)
     min_k = _si_env("SUPERFUN_MIN_K", 6)
 
@@ -672,6 +965,8 @@ def _select_draw_superfun(
             "quality": float(item.get("quality") or 0.0),
             "source": source,
             "rank_score": rank,
+            "tier": str(item.get("tier") or "B"),
+            "risk_tag": str(item.get("risk_tag") or "B"),
         }
 
     core_rows: List[Dict[str, Any]] = []
@@ -693,16 +988,30 @@ def _select_draw_superfun(
             continue
         fid = row["fixture_id"]
 
-        # skip anything already in core; core always wins
         if fid in seen_core:
             continue
 
         prev = fun_best_by_fid.get(fid)
-        if prev is None or row["rank_score"] > float(prev.get("rank_score", 0.0)) + 1e-9:
+        if prev is None:
             fun_best_by_fid[fid] = row
+        else:
+            # prefer A over B, then rank
+            prev_t = 2 if str(prev.get("tier")) == "A" else 1
+            row_t = 2 if str(row.get("tier")) == "A" else 1
+            if row_t > prev_t:
+                fun_best_by_fid[fid] = row
+            elif row_t == prev_t and float(row["rank_score"]) > float(prev.get("rank_score", 0.0)) + 1e-9:
+                fun_best_by_fid[fid] = row
 
     fun_rows = list(fun_best_by_fid.values())
-    fun_rows.sort(key=lambda x: float(x.get("rank_score", 0.0)), reverse=True)
+    fun_rows.sort(
+        key=lambda x: (
+            2 if str(x.get("tier")) == "A" else 1,
+            float(x.get("rank_score", 0.0)),
+            float(x.get("quality", 0.0)),
+        ),
+        reverse=True,
+    )
 
     if n_max > 0:
         fun_slots = max(0, n_max - len(core_rows))
@@ -710,18 +1019,26 @@ def _select_draw_superfun(
 
     picks = core_rows + fun_rows
     picks.sort(key=_chrono_key)
-
     n = len(picks)
-    if n <= 0:
+
+    if n < n_min:
         system = {
             "mode": "superfun_from_core_plus_fun",
-            "n": 0,
+            "n": n,
             "k": 0,
             "columns": 0,
             "stake_per_column": float(stake_per_column),
+            "stake_total": 0.0,
             "target": None,
+            "error": f"not_enough_picks_min_{n_min}",
         }
-        return [], system, 0.0, {"reason": "no_picks"}
+        return [], system, 0.0, {
+            "core_kept": len(core_rows),
+            "fun_candidates_unique": len(fun_best_by_fid),
+            "fun_kept": len(fun_rows),
+            "n_after_cap": n,
+            "reason": f"need_at_least_{n_min}",
+        }
 
     k = n - int(offset)
     if k < int(min_k):
@@ -744,6 +1061,9 @@ def _select_draw_superfun(
             "odds": round(float(p.get("odds") or 0.0), 2),
             "prob": round(float(p.get("prob") or 0.0), 4),
             "quality": round(float(p.get("quality") or 0.0), 3),
+            "source": p.get("source"),
+            "tier": p.get("tier"),
+            "risk_tag": p.get("risk_tag"),
         })
 
     system = {
@@ -757,6 +1077,7 @@ def _select_draw_superfun(
         "target": f"{k}/{n}",
         "rules": {
             "n_max": int(n_max),
+            "n_min": int(n_min),
             "hits_offset": int(offset),
             "min_k": int(min_k),
             "unique_by_fixture": True,
@@ -788,25 +1109,13 @@ def build_friday_shortlist() -> Dict[str, Any]:
     if not isinstance(fixtures, list):
         raise ValueError("Thursday report has no fixtures list.")
 
-    core_min_q = _sf_env("FRIDAY_CORE_MIN_QUALITY", 0.70)
-
-    core_bankroll, fun_bankroll, draw_bankroll, next_week, hist_as_of, hist_meta = _history_bankrolls_or_env()
+    core_bankroll, fun_bankroll, draw_bankroll, next_week, _hist_as_of, hist_meta = _history_bankrolls_or_env()
 
     fun_stake_total = _sf_env("FUN_SYSTEM_STAKE", 35.0)
-
     superfun_stake_per_col = _sf_env("SUPERFUN_STAKE_PER_COLUMN", 0.10)
     draw_mode = _ss_env("FRIDAY_DRAW_MODE", "superfun").lower()
 
     all_cands: List[Dict[str, Any]] = []
-    q_by_id: Dict[Any, float] = {}
-    strict_ok_by_id: Dict[Any, bool] = {}
-
-    for fx in fixtures:
-        fid = fx.get("fixture_id")
-        qr = fixture_quality_score(fx)
-        q_by_id[fid] = float(qr.score)
-        flags = (fx.get("flags") or {})
-        strict_ok_by_id[fid] = bool(flags.get("odds_strict_ok") is True)
 
     for fx in fixtures:
         for md in _market_defs():
@@ -818,13 +1127,10 @@ def build_friday_shortlist() -> Dict[str, Any]:
         bad = [c for c in all_cands if c.get("fixture_id") is None][:3]
         raise ValueError(f"Some candidates have missing fixture_id. Examples: {bad}")
 
-    core_cands = [c for c in all_cands if (q_by_id.get(c["fixture_id"], 0.0) >= core_min_q)]
-    fun_cands = [c for c in all_cands]
-
-    core_singles, core_double, core_open, core_dbg = _select_core(core_cands, strict_ok_by_id)
+    core_singles, core_double, core_open, core_dbg = _select_core(fixtures, all_cands)
     core_fids = {s.get("fixture_id") for s in core_singles if s.get("fixture_id") is not None}
 
-    fun_pool, fun_system, fun_open, fun_dbg = _select_fun_system(fun_cands, fun_stake_total, core_fids)
+    fun_pool, fun_system, fun_open, fun_dbg = _select_fun_system(fixtures, all_cands, fun_stake_total, core_fids)
 
     cand_index = _build_candidate_index(all_cands)
     if draw_mode == "superfun":
@@ -862,7 +1168,7 @@ def build_friday_shortlist() -> Dict[str, Any]:
             "label": "CoreBet",
             "bankroll_start": float(core_bankroll),
             "max_singles": _si_env("FRIDAY_CORE_TARGET_SINGLES", 7),
-            "stake_rule": "odds<=2.00 -> 40, else -> 30 (NO scaling) + optional boost if open too low",
+            "stake_rule": "STRONG=40, TRB=30 + optional boost if open too low",
             "singles": core_singles,
             "double": core_double,
             "doubles": ([core_double] if core_double else []),
@@ -894,6 +1200,7 @@ def build_friday_shortlist() -> Dict[str, Any]:
         "debug": {
             "project_root": str(PROJECT_ROOT),
             "logs_dir": str(LOGS_DIR),
+            "style_metrics_loaded": bool(_load_style_metrics()),
             "counts": {
                 "fixtures": len(fixtures),
                 "candidates_total": len(all_cands),
