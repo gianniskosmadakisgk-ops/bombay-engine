@@ -1,6 +1,6 @@
 # src/analysis/friday_shortlist_v3.py
 """
-Friday shortlist v4 — history-aware + style-aware + tiered Core/Fun + SuperFun from Core+Fun.
+Friday shortlist v5 — history-aware + style-aware + confirmation-aware + tiered Core/Fun + SuperFun from Core+Fun.
 
 What it does
 ------------
@@ -12,11 +12,16 @@ What it does
   - team_value_ratio filter
   - tempo/style validation for Over
   - slow-favourite trap downgrade
+  - confirmation_score
 - Core is tiered:
   - STRONG -> 40 stake
   - TRB    -> 30 stake
 - Fun is tiered:
   - A / B
+- Fun prefers 6 picks and goes to 7 only if the 7th is strong enough.
+- Fun systems:
+  - 3/6
+  - 4/7
 - SuperFun is built ONLY from Core + Fun (no extra selection).
 - Core always has priority in SuperFun.
 - SuperFun targets:
@@ -24,6 +29,7 @@ What it does
   - 11 -> 7/11
   - 10 -> 6/10
   - never below 10 picks
+- Fun and SuperFun keep approximately fixed TOTAL stake; column stake adjusts automatically.
 
 User-agreed ranges
 ------------------
@@ -213,6 +219,16 @@ def _grade_at_least(grade: str, minimum: str) -> bool:
     return _odds_grade_rank(grade) >= _odds_grade_rank(minimum)
 
 
+def _odds_grade_norm(grade: str) -> float:
+    g = (grade or "").strip().upper()
+    return {
+        "A": 1.00,
+        "B": 0.85,
+        "C": 0.70,
+        "D": 0.40,
+    }.get(g, 0.40)
+
+
 def _normalize_team_name(name: str) -> str:
     s = (name or "").strip().lower()
     repl = {
@@ -230,6 +246,10 @@ def _normalize_team_name(name: str) -> str:
     s = " ".join(s.split())
     return s
 
+
+# -------------------------
+# Style metrics
+# -------------------------
 
 def _style_path() -> Path:
     sp = os.getenv("TEAM_STYLE_METRICS_PATH", "").strip()
@@ -299,7 +319,6 @@ def _fixture_style_profile(fx: Dict[str, Any]) -> Dict[str, Any]:
     home_transition = _safe_float(home_style.get("transition_speed"))
     away_transition = _safe_float(away_style.get("transition_speed"))
 
-    # safe fallbacks from Thursday flags / tempo
     if home_block is None:
         home_block = 0.70 if flags.get("home_shape") is False else 0.50
     if away_block is None:
@@ -365,6 +384,10 @@ def _slow_favourite_trap(fx: Dict[str, Any], market: str) -> bool:
     return False
 
 
+# -------------------------
+# Filters
+# -------------------------
+
 def _passes_tight_game_filter(fx: Dict[str, Any], market: str, mode: str) -> bool:
     if market not in ("Home (1)", "Away (2)"):
         return True
@@ -383,7 +406,6 @@ def _passes_team_value_filter(fx: Dict[str, Any], market: str, value_pct: float)
     hp = _safe_float(fx.get("home_prob")) or 0.0
     ap = _safe_float(fx.get("away_prob")) or 0.0
 
-    # Only filter underdog 1X2 bets when squad-value gap is large.
     is_underdog = False
     if market == "Home (1)" and hp < ap:
         is_underdog = True
@@ -398,8 +420,62 @@ def _passes_team_value_filter(fx: Dict[str, Any], market: str, value_pct: float)
     return True
 
 
+# -------------------------
+# Confirmation score
+# -------------------------
+
+def _style_norm_for_candidate(c: Dict[str, Any]) -> float:
+    market = str(c.get("market") or "")
+    if market == "Over 2.5":
+        return 1.00 if bool(c.get("over_style_ok", True)) else 0.40
+    if market in ("Home (1)", "Away (2)"):
+        return 0.65 if bool(c.get("slow_fav_trap", False)) else 1.00
+    return 0.90
+
+
+def _stability_norm_for_candidate(c: Dict[str, Any]) -> float:
+    market = str(c.get("market") or "")
+    prob_gap = float(c.get("prob_gap") or 0.0)
+
+    if market in ("Home (1)", "Away (2)"):
+        if prob_gap >= 0.18:
+            return 1.00
+        if prob_gap >= 0.12:
+            return 0.80
+        if prob_gap >= 0.07:
+            return 0.60
+        return 0.40
+
+    if market in ("Over 2.5", "Under 2.5"):
+        if market == "Under 2.5":
+            return 0.90
+        return 0.90 if bool(c.get("over_style_ok", True)) else 0.50
+
+    return 0.70
+
+
+def _confirmation_score(c: Dict[str, Any]) -> float:
+    prob_norm = max(0.0, min(1.0, float(c.get("prob") or 0.0)))
+    quality_norm = max(0.0, min(1.0, float(c.get("quality") or 0.0)))
+    odds_match_norm = _odds_grade_norm(str(c.get("odds_match_grade") or ""))
+    style_norm = _style_norm_for_candidate(c)
+    stability_norm = _stability_norm_for_candidate(c)
+
+    score = (
+        0.35 * prob_norm
+        + 0.25 * quality_norm
+        + 0.20 * odds_match_norm
+        + 0.10 * style_norm
+        + 0.10 * stability_norm
+    )
+    return round(score, 4)
+
+
+# -------------------------
+# Market definitions
+# -------------------------
+
 def _market_defs() -> List[Dict[str, str]]:
-    # No draw selection for now.
     return [
         {"label": "Home (1)", "odds": "offered_1", "prob": "home_prob", "value": "value_pct_1"},
         {"label": "Away (2)", "odds": "offered_2", "prob": "away_prob", "value": "value_pct_2"},
@@ -436,7 +512,7 @@ def _candidate_from_fixture(fx: Dict[str, Any], md: Dict[str, str]) -> Optional[
     if slow_trap:
         rank *= 0.80
 
-    return {
+    cand = {
         "fixture_id": fixture_id,
         "date": date,
         "time_gr": time_gr,
@@ -456,6 +532,8 @@ def _candidate_from_fixture(fx: Dict[str, Any], md: Dict[str, str]) -> Optional[
         "slow_fav_trap": bool(slow_trap),
         "over_style_ok": bool(over_ok),
     }
+    cand["confirmation_score"] = _confirmation_score(cand)
+    return cand
 
 
 def _load_latest_thursday_report() -> Dict[str, Any]:
@@ -471,7 +549,7 @@ def _load_latest_thursday_report() -> Dict[str, Any]:
 
 
 # -------------------------
-# History (Tuesday bankroll continuity)
+# History
 # -------------------------
 
 def _history_path() -> Path:
@@ -606,7 +684,7 @@ def _apply_core_stake_boost(singles: List[Dict[str, Any]], open_total: float) ->
 
 
 # -------------------------
-# Selection logic
+# Core selection
 # -------------------------
 
 def _select_core(
@@ -619,7 +697,6 @@ def _select_core(
     max_totals = _si_env("FRIDAY_CORE_MAX_TOTALS", 4)
     max_unders = _si_env("FRIDAY_CORE_MAX_UNDERS", 1)
 
-    # stricter selection by agreement
     strong_prob = _sf_env("FRIDAY_CORE_STRONG_MIN_PROB", 0.53)
     strong_val = _sf_env("FRIDAY_CORE_STRONG_MIN_VALUE_PCT", 3.0)
     strong_q = _sf_env("FRIDAY_CORE_STRONG_MIN_QUALITY", 0.70)
@@ -670,8 +747,22 @@ def _select_core(
             row["risk_tag"] = "TRB"
             trb.append(row)
 
-    strong.sort(key=lambda x: (float(x["rank_score"]), float(x["quality"])), reverse=True)
-    trb.sort(key=lambda x: (float(x["rank_score"]), float(x["quality"])), reverse=True)
+    strong.sort(
+        key=lambda x: (
+            float(x.get("confirmation_score", 0.0)),
+            float(x["rank_score"]),
+            float(x["quality"]),
+        ),
+        reverse=True,
+    )
+    trb.sort(
+        key=lambda x: (
+            float(x.get("confirmation_score", 0.0)),
+            float(x["rank_score"]),
+            float(x["quality"]),
+        ),
+        reverse=True,
+    )
 
     singles: List[Dict[str, Any]] = []
     open_total = 0.0
@@ -712,6 +803,7 @@ def _select_core(
             "slow_fav_trap": bool(c.get("slow_fav_trap", False)),
             "odds_match_grade": c.get("odds_match_grade"),
             "value_pct": c.get("value_pct"),
+            "confirmation_score": c.get("confirmation_score"),
         })
         used_fids.add(fid)
         open_total += stake
@@ -722,9 +814,7 @@ def _select_core(
                 unders_cnt += 1
         return True
 
-    # Strong first, then TRB. Totals first as in current architecture.
-    ordered_groups = [strong, trb]
-    for grp in ordered_groups:
+    for grp in [strong, trb]:
         for c in grp:
             if len(singles) >= target_singles:
                 break
@@ -738,7 +828,6 @@ def _select_core(
 
     singles, open_total, boost_dbg = _apply_core_stake_boost(singles, open_total)
 
-    # keep optional double logic
     eligible = [s for s in singles if float(s["odds"]) <= 1.60]
     eligible.sort(key=lambda s: float(s["odds"]))
 
@@ -771,14 +860,9 @@ def _select_core(
     return singles, core_double, float(round(open_total, 2)), dbg
 
 
-def _soft_prob_bucket(c: Dict[str, Any]) -> int:
-    p = float(c.get("prob") or 0.0)
-    if p >= 0.53:
-        return 3
-    if p >= 0.50:
-        return 2
-    return 1
-
+# -------------------------
+# Fun selection
+# -------------------------
 
 def _select_fun_system(
     fixture_rows: List[Dict[str, Any]],
@@ -786,9 +870,8 @@ def _select_fun_system(
     stake_total: float,
     core_fixture_ids: set,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any], float, Dict[str, Any]]:
-    desired_n = _si_env("FRIDAY_FUN_POOL_SIZE", 6)
-    k = _si_env("FRIDAY_FUN_K", 3)
-
+    preferred_n = _si_env("FRIDAY_FUN_POOL_SIZE", 6)
+    max_n = _si_env("FRIDAY_FUN_MAX_POOL_SIZE", 7)
     odds_min = _sf_env("FRIDAY_FUN_ODDS_MIN", 1.80)
     odds_max = _sf_env("FRIDAY_FUN_ODDS_MAX", 2.40)
 
@@ -800,6 +883,7 @@ def _select_fun_system(
     b_val = _sf_env("FRIDAY_FUN_B_MIN_VALUE_PCT", 1.0)
     b_q = _sf_env("FRIDAY_FUN_B_MIN_QUALITY", 0.60)
 
+    seventh_min_confirmation = _sf_env("FRIDAY_FUN_7TH_MIN_CONFIRMATION", 0.78)
     max_overlap = _si_env("FRIDAY_FUN_MAX_OVERLAP_WITH_CORE", 2)
 
     fixture_by_id: Dict[Any, Dict[str, Any]] = {fx.get("fixture_id"): fx for fx in fixture_rows}
@@ -844,9 +928,22 @@ def _select_fun_system(
             row["risk_tag"] = "B"
             tier_b.append(row)
 
-    # soft preference for healthier probability distribution, but not hard forcing
-    tier_a.sort(key=lambda x: (_soft_prob_bucket(x), float(x["rank_score"]), float(x["quality"])), reverse=True)
-    tier_b.sort(key=lambda x: (_soft_prob_bucket(x), float(x["rank_score"]), float(x["quality"])), reverse=True)
+    tier_a.sort(
+        key=lambda x: (
+            float(x.get("confirmation_score", 0.0)),
+            float(x["rank_score"]),
+            float(x["quality"]),
+        ),
+        reverse=True,
+    )
+    tier_b.sort(
+        key=lambda x: (
+            float(x.get("confirmation_score", 0.0)),
+            float(x["rank_score"]),
+            float(x["quality"]),
+        ),
+        reverse=True,
+    )
 
     system_pool: List[Dict[str, Any]] = []
     seen_fixtures = set()
@@ -855,7 +952,7 @@ def _select_fun_system(
     def _try_add(c: Dict[str, Any]) -> bool:
         nonlocal overlap_cnt
 
-        if len(system_pool) >= desired_n:
+        if len(system_pool) >= max_n:
             return False
 
         fid = c.get("fixture_id")
@@ -880,6 +977,7 @@ def _select_fun_system(
             "slow_fav_trap": bool(c.get("slow_fav_trap", False)),
             "odds_match_grade": c.get("odds_match_grade"),
             "value_pct": c.get("value_pct"),
+            "confirmation_score": c.get("confirmation_score"),
         })
         seen_fixtures.add(fid)
 
@@ -889,34 +987,53 @@ def _select_fun_system(
 
     for grp in [tier_a, tier_b]:
         for c in grp:
-            if len(system_pool) >= desired_n:
+            if len(system_pool) >= max_n:
                 break
             _try_add(c)
 
+    if len(system_pool) > preferred_n:
+        seventh = system_pool[preferred_n]
+        if float(seventh.get("confirmation_score") or 0.0) < seventh_min_confirmation:
+            system_pool = system_pool[:preferred_n]
+
     n_actual = len(system_pool)
-    k_actual = min(k, n_actual) if n_actual > 0 else k
+
+    if n_actual >= 7:
+        k_actual = 4
+    elif n_actual >= 6:
+        k_actual = 3
+    else:
+        k_actual = min(3, n_actual) if n_actual > 0 else 0
+
     columns = comb(n_actual, k_actual) if (n_actual > 0 and k_actual > 0 and n_actual >= k_actual) else 0
+    open_amt = float(stake_total) if n_actual > 0 else 0.0
+    stake_per_column = round(open_amt / columns, 4) if columns > 0 else 0.0
 
     system = {
         "k": k_actual,
         "n": n_actual,
         "columns": columns,
         "min_hits": k_actual,
-        "stake": float(stake_total),
-        "requested_n": desired_n,
+        "stake": float(open_amt),
+        "stake_per_column": float(stake_per_column),
+        "requested_n": preferred_n,
+        "max_n": max_n,
+        "target": f"{k_actual}/{n_actual}" if n_actual > 0 and k_actual > 0 else None,
     }
 
     system_pool.sort(key=_chrono_key)
-    open_amt = float(stake_total) if system_pool else 0.0
 
     dbg = {
-        "requested_n": desired_n,
+        "preferred_n": preferred_n,
+        "max_n": max_n,
         "got_n": n_actual,
-        "k_requested": k,
         "k_used": k_actual,
         "tier_a_candidates": len(tier_a),
         "tier_b_candidates": len(tier_b),
         "overlap_with_core": overlap_cnt,
+        "stake_total": float(open_amt),
+        "stake_per_column": float(stake_per_column),
+        "7th_min_confirmation": float(seventh_min_confirmation),
     }
 
     return system_pool, system, float(round(open_amt, 2)), dbg
@@ -943,6 +1060,7 @@ def _select_draw_superfun(
     n_min = _si_env("SUPERFUN_MIN_TOTAL", 10)
     offset = _si_env("SUPERFUN_HITS_OFFSET", 4)
     min_k = _si_env("SUPERFUN_MIN_K", 6)
+    target_total_stake = _sf_env("SUPERFUN_SYSTEM_STAKE", 50.0)
 
     def _build_row(item: Dict[str, Any], source: str) -> Optional[Dict[str, Any]]:
         fid = item.get("fixture_id")
@@ -967,6 +1085,7 @@ def _select_draw_superfun(
             "rank_score": rank,
             "tier": str(item.get("tier") or "B"),
             "risk_tag": str(item.get("risk_tag") or "B"),
+            "confirmation_score": float(item.get("confirmation_score") or 0.0),
         }
 
     core_rows: List[Dict[str, Any]] = []
@@ -987,7 +1106,6 @@ def _select_draw_superfun(
         if row is None:
             continue
         fid = row["fixture_id"]
-
         if fid in seen_core:
             continue
 
@@ -995,18 +1113,21 @@ def _select_draw_superfun(
         if prev is None:
             fun_best_by_fid[fid] = row
         else:
-            # prefer A over B, then rank
             prev_t = 2 if str(prev.get("tier")) == "A" else 1
             row_t = 2 if str(row.get("tier")) == "A" else 1
             if row_t > prev_t:
                 fun_best_by_fid[fid] = row
-            elif row_t == prev_t and float(row["rank_score"]) > float(prev.get("rank_score", 0.0)) + 1e-9:
+            elif row_t == prev_t and float(row["confirmation_score"]) > float(prev.get("confirmation_score", 0.0)) + 1e-9:
                 fun_best_by_fid[fid] = row
+            elif row_t == prev_t and abs(float(row["confirmation_score"]) - float(prev.get("confirmation_score", 0.0))) <= 1e-9:
+                if float(row["rank_score"]) > float(prev.get("rank_score", 0.0)) + 1e-9:
+                    fun_best_by_fid[fid] = row
 
     fun_rows = list(fun_best_by_fid.values())
     fun_rows.sort(
         key=lambda x: (
             2 if str(x.get("tier")) == "A" else 1,
+            float(x.get("confirmation_score", 0.0)),
             float(x.get("rank_score", 0.0)),
             float(x.get("quality", 0.0)),
         ),
@@ -1027,7 +1148,7 @@ def _select_draw_superfun(
             "n": n,
             "k": 0,
             "columns": 0,
-            "stake_per_column": float(stake_per_column),
+            "stake_per_column": 0.0,
             "stake_total": 0.0,
             "target": None,
             "error": f"not_enough_picks_min_{n_min}",
@@ -1047,7 +1168,8 @@ def _select_draw_superfun(
         k = n
 
     columns = comb(n, k) if (n >= k and k > 0) else 0
-    open_amt = float(round(columns * float(stake_per_column), 2))
+    open_amt = float(round(target_total_stake, 2))
+    stake_per_column_used = round(open_amt / columns, 4) if columns > 0 else 0.0
 
     pool_out = []
     for p in picks:
@@ -1064,6 +1186,7 @@ def _select_draw_superfun(
             "source": p.get("source"),
             "tier": p.get("tier"),
             "risk_tag": p.get("risk_tag"),
+            "confirmation_score": round(float(p.get("confirmation_score") or 0.0), 4),
         })
 
     system = {
@@ -1072,7 +1195,7 @@ def _select_draw_superfun(
         "k": k,
         "columns": columns,
         "min_hits": k,
-        "stake_per_column": float(stake_per_column),
+        "stake_per_column": float(stake_per_column_used),
         "stake_total": open_amt,
         "target": f"{k}/{n}",
         "rules": {
@@ -1092,8 +1215,8 @@ def _select_draw_superfun(
         "n_after_cap": n,
         "k": k,
         "columns": columns,
-        "stake_per_column": float(stake_per_column),
-        "open": open_amt,
+        "stake_total": float(open_amt),
+        "stake_per_column": float(stake_per_column_used),
     }
 
     return pool_out, system, open_amt, dbg
@@ -1112,7 +1235,7 @@ def build_friday_shortlist() -> Dict[str, Any]:
     core_bankroll, fun_bankroll, draw_bankroll, next_week, _hist_as_of, hist_meta = _history_bankrolls_or_env()
 
     fun_stake_total = _sf_env("FUN_SYSTEM_STAKE", 35.0)
-    superfun_stake_per_col = _sf_env("SUPERFUN_STAKE_PER_COLUMN", 0.10)
+    superfun_stake_per_col = 0.0  # no fixed per-column stake; system keeps fixed total stake
     draw_mode = _ss_env("FRIDAY_DRAW_MODE", "superfun").lower()
 
     all_cands: List[Dict[str, Any]] = []
