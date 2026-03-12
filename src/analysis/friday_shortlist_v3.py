@@ -866,6 +866,60 @@ def _select_core(
                 break
             if not _is_total_market(c["market"]):
                 _try_add(c)
+    # Fallback pass:
+    # if Core did not reach target, relax only slightly and try to fill the missing slot(s)
+    if len(singles) < target_singles:
+        fallback_used_fids = {s.get("fixture_id") for s in singles if s.get("fixture_id") is not None}
+
+        fallback_pool: List[Dict[str, Any]] = []
+        for c in strong + trb:
+            fid = c.get("fixture_id")
+            if fid in fallback_used_fids:
+                continue
+
+            if not _is_total_market(c["market"]):
+                fallback_pool.append(c)
+
+        fallback_pool.sort(
+            key=lambda x: (
+                float(x.get("confirmation_score", 0.0)),
+                float(x.get("rank_score", 0.0)),
+                float(x.get("quality", 0.0)),
+            ),
+            reverse=True,
+        )
+
+        for c in fallback_pool:
+            if len(singles) >= target_singles:
+                break
+
+            fid = c.get("fixture_id")
+            if fid in used_fids:
+                continue
+
+            stake = core_stake_from_tier(str(c.get("tier") or "TRB"))
+
+            singles.append({
+                "fixture_id": fid,
+                "date": c["date"],
+                "time_gr": c["time_gr"],
+                "league": c["league"],
+                "match": c["match"],
+                "market": c["market"],
+                "odds": c["odds"],
+                "prob": c["prob"],
+                "stake": stake,
+                "quality": c["quality"],
+                "tier": c["tier"],
+                "risk_tag": c["risk_tag"],
+                "slow_fav_trap": bool(c.get("slow_fav_trap", False)),
+                "odds_match_grade": c.get("odds_match_grade"),
+                "value_pct": c.get("value_pct"),
+                "confirmation_score": c.get("confirmation_score"),
+                "fallback_added": True,
+            })
+            used_fids.add(fid)
+            open_total += stake
 
     singles, open_total, boost_dbg = _apply_core_stake_boost(singles, open_total)
 
