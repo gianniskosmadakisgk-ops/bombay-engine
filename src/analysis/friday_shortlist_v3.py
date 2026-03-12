@@ -1007,6 +1007,23 @@ def _select_fun_system(
         if fid in core_fixture_ids and overlap_cnt >= max_overlap:
             return False
 
+            system_pool: List[Dict[str, Any]] = []
+    seen_fixtures = set()
+    overlap_cnt = 0
+
+    def _try_add(c: Dict[str, Any]) -> bool:
+        nonlocal overlap_cnt
+
+        if len(system_pool) >= max_n:
+            return False
+
+        fid = c.get("fixture_id")
+        if fid in seen_fixtures:
+            return False
+
+        if fid in core_fixture_ids and overlap_cnt >= max_overlap:
+            return False
+
         system_pool.append({
             "fixture_id": fid,
             "date": c["date"],
@@ -1031,6 +1048,7 @@ def _select_fun_system(
         return True
 
     for grp in [tier_a, tier_b]:
+
         non_overlap = [c for c in grp if c.get("fixture_id") not in core_fixture_ids]
         overlap = [c for c in grp if c.get("fixture_id") in core_fixture_ids]
 
