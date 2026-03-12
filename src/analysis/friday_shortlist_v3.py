@@ -1,6 +1,6 @@
 # src/analysis/friday_shortlist_v3.py
 """
-Friday shortlist v7 — history-aware + style-aware + confirmation-aware + value-weighted + tiered Core/Fun + SuperFun from Core+Fun.
+Friday shortlist v8 — history-aware + style-aware + confirmation-aware + value-weighted + tiered Core/Fun + SuperFun from Core+Fun.
 
 What it does
 ------------
@@ -195,7 +195,6 @@ def _rank_score(value_pct: float, prob: float) -> float:
     wv /= s
     wp /= s
     base = (wv * float(value_pct)) + (wp * _prob_points(float(prob)))
-    # mild value weighting (Option A)
     return base * (1.0 + (float(value_pct) / 100.0))
 
 
@@ -267,12 +266,10 @@ def _style_path() -> Path:
         LOGS_DIR / "team_style_metrics.json",
         PROJECT_ROOT / "team_style_metrics.json",
     ]
-
     for p in candidates:
         if p.exists():
             return p
 
-    # default to the upload-page contract
     return PROJECT_ROOT / "data" / "team_style_metrics.json"
 
 
@@ -916,8 +913,10 @@ def _select_fun_system(
     stake_total: float,
     core_fixture_ids: set,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any], float, Dict[str, Any]]:
-    preferred_n = _si_env("FRIDAY_FUN_POOL_SIZE", 6)
-    max_n = _si_env("FRIDAY_FUN_MAX_POOL_SIZE", 7)
+    # Hard-locked by agreement: prefer 6, allow 7 only if 7th is strong enough.
+    preferred_n = 6
+    max_n = 7
+
     odds_min = _sf_env("FRIDAY_FUN_ODDS_MIN", 1.80)
     odds_max = _sf_env("FRIDAY_FUN_ODDS_MAX", 2.40)
 
@@ -1180,6 +1179,7 @@ def _select_draw_superfun(
         reverse=True,
     )
 
+    # Keep all Core. Trim only from Fun. Target 12 whenever possible.
     if n_max > 0:
         fun_slots = max(0, n_max - len(core_rows))
         fun_rows = fun_rows[:fun_slots]
@@ -1251,6 +1251,8 @@ def _select_draw_superfun(
             "min_k": int(min_k),
             "unique_by_fixture": True,
             "core_priority": True,
+            "trim_from_fun_only": True,
+            "target_12_when_possible": True,
         },
     }
 
@@ -1380,6 +1382,7 @@ def build_friday_shortlist() -> Dict[str, Any]:
         "debug": {
             "project_root": str(PROJECT_ROOT),
             "logs_dir": str(LOGS_DIR),
+            "style_path": str(_style_path()),
             "style_metrics_loaded": bool(_load_style_metrics()),
             "style_metrics_teams": len(_load_style_metrics()),
             "resolved_week": resolved_week,
@@ -1410,6 +1413,7 @@ def main() -> int:
             "title": friday.get("title"),
             "history": friday.get("history", {}),
             "counts": friday["debug"]["counts"],
+            "style_path": friday["debug"].get("style_path"),
             "style_metrics_loaded": friday["debug"].get("style_metrics_loaded"),
             "style_metrics_teams": friday["debug"].get("style_metrics_teams"),
             "resolved_week": friday["debug"].get("resolved_week"),
