@@ -261,7 +261,19 @@ def _style_path() -> Path:
     sp = os.getenv("TEAM_STYLE_METRICS_PATH", "").strip()
     if sp:
         return Path(sp)
-    return LOGS_DIR / "team_style_metrics.json"
+
+    candidates = [
+        PROJECT_ROOT / "data" / "team_style_metrics.json",
+        LOGS_DIR / "team_style_metrics.json",
+        PROJECT_ROOT / "team_style_metrics.json",
+    ]
+
+    for p in candidates:
+        if p.exists():
+            return p
+
+    # default to the upload-page contract
+    return PROJECT_ROOT / "data" / "team_style_metrics.json"
 
 
 def _extract_style_team_rows_from_dict(data: Dict[str, Any]) -> Dict[str, Any]:
