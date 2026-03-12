@@ -1030,11 +1030,19 @@ def _select_fun_system(
             overlap_cnt += 1
         return True
 
-    for grp in [tier_a, tier_b]:
-        for c in grp:
-            if len(system_pool) >= max_n:
-                break
-            _try_add(c)
+   for grp in [tier_a, tier_b]:
+    non_overlap = [c for c in grp if c.get("fixture_id") not in core_fixture_ids]
+    overlap = [c for c in grp if c.get("fixture_id") in core_fixture_ids]
+
+    for c in non_overlap:
+        if len(system_pool) >= max_n:
+            break
+        _try_add(c)
+
+    for c in overlap:
+        if len(system_pool) >= max_n:
+            break
+        _try_add(c)
 
     if len(system_pool) > preferred_n:
         seventh = system_pool[preferred_n]
