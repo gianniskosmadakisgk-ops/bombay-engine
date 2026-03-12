@@ -1,6 +1,6 @@
 # src/analysis/friday_shortlist_v3.py
 """
-Friday shortlist v5 — history-aware + style-aware + confirmation-aware + tiered Core/Fun + SuperFun from Core+Fun.
+Friday shortlist v7 — history-aware + style-aware + confirmation-aware + value-weighted + tiered Core/Fun + SuperFun from Core+Fun.
 
 What it does
 ------------
@@ -13,6 +13,7 @@ What it does
   - tempo/style validation for Over
   - slow-favourite trap downgrade
   - confirmation_score
+  - value-weighted rank_score
 - Core is tiered:
   - STRONG -> 40 stake
   - TRB    -> 30 stake
@@ -193,7 +194,9 @@ def _rank_score(value_pct: float, prob: float) -> float:
         s = 1.0
     wv /= s
     wp /= s
-    return (wv * float(value_pct)) + (wp * _prob_points(float(prob)))
+    base = (wv * float(value_pct)) + (wp * _prob_points(float(prob)))
+    # mild value weighting (Option A)
+    return base * (1.0 + (float(value_pct) / 100.0))
 
 
 def _is_total_market(market: str) -> bool:
@@ -242,7 +245,10 @@ def _normalize_team_name(name: str) -> str:
     for a, b in repl.items():
         s = s.replace(a, b)
     s = s.replace(".", " ").replace("-", " ")
-    s = s.replace(" fc ", " ").replace(" cf ", " ").replace(" ac ", " ")
+    s = s.replace("&", " and ")
+    s = f" {s} "
+    for token in (" fc ", " cf ", " ac ", " sc ", " afc ", " ssc ", " bk ", " fk ", " if ", " ud ", " cd ", " sv "):
+        s = s.replace(token, " ")
     s = " ".join(s.split())
     return s
 
@@ -256,6 +262,46 @@ def _style_path() -> Path:
     if sp:
         return Path(sp)
     return LOGS_DIR / "team_style_metrics.json"
+
+
+def _extract_style_team_rows_from_dict(data: Dict[str, Any]) -> Dict[str, Any]:
+    out: Dict[str, Any] = {}
+
+    teams = data.get("teams")
+    if isinstance(teams, list):
+        for row in teams:
+            if not isinstance(row, dict):
+                continue
+            team = str(row.get("team") or row.get("name") or "").strip()
+            if team:
+                out[_normalize_team_name(team)] = row
+
+    countries = data.get("countries")
+    if isinstance(countries, dict):
+        for _country_name, country_blob in countries.items():
+            if not isinstance(country_blob, dict):
+                continue
+            c_teams = country_blob.get("teams")
+            if isinstance(c_teams, dict):
+                for team_name, row in c_teams.items():
+                    if isinstance(row, dict):
+                        out[_normalize_team_name(str(team_name))] = row
+            elif isinstance(c_teams, list):
+                for row in c_teams:
+                    if not isinstance(row, dict):
+                        continue
+                    team = str(row.get("team") or row.get("name") or "").strip()
+                    if team:
+                        out[_normalize_team_name(team)] = row
+
+    for k, v in data.items():
+        if k in ("teams", "countries"):
+            continue
+        if isinstance(v, dict):
+            if any(metric in v for metric in ("defensive_block", "attacking_intensity", "transition_speed")):
+                out[_normalize_team_name(str(k))] = v
+
+    return out
 
 
 @lru_cache(maxsize=1)
@@ -272,19 +318,7 @@ def _load_style_metrics() -> Dict[str, Any]:
     out: Dict[str, Any] = {}
 
     if isinstance(data, dict):
-        teams = data.get("teams")
-        if isinstance(teams, list):
-            for row in teams:
-                if not isinstance(row, dict):
-                    continue
-                team = str(row.get("team") or row.get("name") or "").strip()
-                if team:
-                    out[_normalize_team_name(team)] = row
-        else:
-            for k, v in data.items():
-                if isinstance(v, dict):
-                    out[_normalize_team_name(str(k))] = v
-
+        out.update(_extract_style_team_rows_from_dict(data))
     elif isinstance(data, list):
         for row in data:
             if not isinstance(row, dict):
@@ -1235,7 +1269,7 @@ def build_friday_shortlist() -> Dict[str, Any]:
     core_bankroll, fun_bankroll, draw_bankroll, next_week, _hist_as_of, hist_meta = _history_bankrolls_or_env()
 
     fun_stake_total = _sf_env("FUN_SYSTEM_STAKE", 35.0)
-    superfun_stake_per_col = 0.0  # no fixed per-column stake; system keeps fixed total stake
+    superfun_stake_per_col = 0.0
     draw_mode = _ss_env("FRIDAY_DRAW_MODE", "superfun").lower()
 
     all_cands: List[Dict[str, Any]] = []
@@ -1266,15 +1300,26 @@ def build_friday_shortlist() -> Dict[str, Any]:
     else:
         draw_pool, draw_system, draw_open, draw_dbg = [], {"mode": "disabled"}, 0.0, {"reason": "FRIDAY_DRAW_MODE!=superfun"}
 
+    resolved_week = next_week
+    if resolved_week is None:
+        hist = _load_history() or {}
+        try:
+            wc = hist.get("week_count")
+            if wc is not None:
+                resolved_week = int(wc) + 1
+        except Exception:
+            resolved_week = None
+
+    if resolved_week is None:
+        resolved_week = 1
+
     window = th.get("window") or {
         "from": str(th.get("start_date") or ""),
         "to": str(th.get("end_date") or ""),
         "hours": int(th.get("window_hours") or 72),
     }
 
-    title = "Bombay Friday — Week"
-    if next_week is not None:
-        title = f"Bombay Friday — Week {next_week}"
+    title = f"Bombay Friday — Week {resolved_week}"
 
     out = {
         "title": title,
@@ -1284,7 +1329,7 @@ def build_friday_shortlist() -> Dict[str, Any]:
         "history": {
             **hist_meta,
             "bankroll_start_from_history": {"core": core_bankroll, "fun": fun_bankroll, "draw": draw_bankroll},
-            "next_week": next_week,
+            "next_week": resolved_week,
         },
 
         "core": {
@@ -1324,6 +1369,8 @@ def build_friday_shortlist() -> Dict[str, Any]:
             "project_root": str(PROJECT_ROOT),
             "logs_dir": str(LOGS_DIR),
             "style_metrics_loaded": bool(_load_style_metrics()),
+            "style_metrics_teams": len(_load_style_metrics()),
+            "resolved_week": resolved_week,
             "counts": {
                 "fixtures": len(fixtures),
                 "candidates_total": len(all_cands),
@@ -1351,6 +1398,9 @@ def main() -> int:
             "title": friday.get("title"),
             "history": friday.get("history", {}),
             "counts": friday["debug"]["counts"],
+            "style_metrics_loaded": friday["debug"].get("style_metrics_loaded"),
+            "style_metrics_teams": friday["debug"].get("style_metrics_teams"),
+            "resolved_week": friday["debug"].get("resolved_week"),
             "logs_dir": str(LOGS_DIR),
         }))
         return 0
