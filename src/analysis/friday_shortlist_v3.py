@@ -913,7 +913,6 @@ def _select_fun_system(
     stake_total: float,
     core_fixture_ids: set,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any], float, Dict[str, Any]]:
-    # Hard-locked by agreement: prefer 6, allow 7 only if 7th is strong enough.
     preferred_n = 6
     max_n = 7
 
@@ -994,23 +993,6 @@ def _select_fun_system(
     seen_fixtures = set()
     overlap_cnt = 0
 
-       def _try_add(c: Dict[str, Any]) -> bool:
-        nonlocal overlap_cnt
-
-        if len(system_pool) >= max_n:
-            return False
-
-        fid = c.get("fixture_id")
-        if fid in seen_fixtures:
-            return False
-
-        if fid in core_fixture_ids and overlap_cnt >= max_overlap:
-            return False
-
-            system_pool: List[Dict[str, Any]] = []
-    seen_fixtures = set()
-    overlap_cnt = 0
-
     def _try_add(c: Dict[str, Any]) -> bool:
         nonlocal overlap_cnt
 
@@ -1048,7 +1030,6 @@ def _select_fun_system(
         return True
 
     for grp in [tier_a, tier_b]:
-
         non_overlap = [c for c in grp if c.get("fixture_id") not in core_fixture_ids]
         overlap = [c for c in grp if c.get("fixture_id") in core_fixture_ids]
 
@@ -1061,6 +1042,7 @@ def _select_fun_system(
             if len(system_pool) >= max_n:
                 break
             _try_add(c)
+
     if len(system_pool) > preferred_n:
         seventh = system_pool[preferred_n]
         if float(seventh.get("confirmation_score") or 0.0) < seventh_min_confirmation:
@@ -1204,7 +1186,6 @@ def _select_draw_superfun(
         reverse=True,
     )
 
-    # Keep all Core. Trim only from Fun. Target 12 whenever possible.
     if n_max > 0:
         fun_slots = max(0, n_max - len(core_rows))
         fun_rows = fun_rows[:fun_slots]
