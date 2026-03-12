@@ -1,6 +1,6 @@
 # src/analysis/friday_shortlist_v3.py
 """
-Friday shortlist v8 — history-aware + style-aware + confirmation-aware + value-weighted + tiered Core/Fun + SuperFun from Core+Fun.
+Friday shortlist v9 — history-aware + style-aware + confirmation-aware + value-weighted + tiered Core/Fun + SuperFun from Core+Fun.
 
 What it does
 ------------
@@ -20,9 +20,7 @@ What it does
 - Fun is tiered:
   - A / B
 - Fun prefers 6 picks and goes to 7 only if the 7th is strong enough.
-- Fun systems:
-  - 3/6
-  - 4/7
+- Fun fills with UNIQUE fun fixtures first and uses Core overlap only if needed.
 - SuperFun is built ONLY from Core + Fun (no extra selection).
 - Core always has priority in SuperFun.
 - SuperFun targets:
@@ -1029,24 +1027,55 @@ def _select_fun_system(
             overlap_cnt += 1
         return True
 
-    for grp in [tier_a, tier_b]:
-        non_overlap = [c for c in grp if c.get("fixture_id") not in core_fixture_ids]
-        overlap = [c for c in grp if c.get("fixture_id") in core_fixture_ids]
+    a_non_overlap = [c for c in tier_a if c.get("fixture_id") not in core_fixture_ids]
+    b_non_overlap = [c for c in tier_b if c.get("fixture_id") not in core_fixture_ids]
+    a_overlap = [c for c in tier_a if c.get("fixture_id") in core_fixture_ids]
+    b_overlap = [c for c in tier_b if c.get("fixture_id") in core_fixture_ids]
 
-        for c in non_overlap:
-            if len(system_pool) >= max_n:
+    for c in a_non_overlap:
+        if len(system_pool) >= preferred_n:
+            break
+        _try_add(c)
+
+    for c in b_non_overlap:
+        if len(system_pool) >= preferred_n:
+            break
+        _try_add(c)
+
+    if len(system_pool) < preferred_n:
+        for c in a_overlap:
+            if len(system_pool) >= preferred_n:
                 break
             _try_add(c)
 
-        for c in overlap:
-            if len(system_pool) >= max_n:
+    if len(system_pool) < preferred_n:
+        for c in b_overlap:
+            if len(system_pool) >= preferred_n:
                 break
             _try_add(c)
 
-    if len(system_pool) > preferred_n:
-        seventh = system_pool[preferred_n]
-        if float(seventh.get("confirmation_score") or 0.0) < seventh_min_confirmation:
-            system_pool = system_pool[:preferred_n]
+    if len(system_pool) >= preferred_n and len(system_pool) < max_n:
+        extra_candidates: List[Dict[str, Any]] = []
+
+        for bucket in [a_non_overlap, b_non_overlap, a_overlap, b_overlap]:
+            for c in bucket:
+                if c.get("fixture_id") not in seen_fixtures:
+                    extra_candidates.append(c)
+
+        extra_candidates.sort(
+            key=lambda x: (
+                2 if str(x.get("tier")) == "A" else 1,
+                float(x.get("confirmation_score", 0.0)),
+                float(x.get("rank_score", 0.0)),
+                float(x.get("quality", 0.0)),
+            ),
+            reverse=True,
+        )
+
+        if extra_candidates:
+            seventh = extra_candidates[0]
+            if float(seventh.get("confirmation_score") or 0.0) >= seventh_min_confirmation:
+                _try_add(seventh)
 
     n_actual = len(system_pool)
 
@@ -1071,6 +1100,7 @@ def _select_fun_system(
         "requested_n": preferred_n,
         "max_n": max_n,
         "target": f"{k_actual}/{n_actual}" if n_actual > 0 and k_actual > 0 else None,
+        "selection_rule": "fill_unique_first_then_overlap_then_optional_7th",
     }
 
     system_pool.sort(key=_chrono_key)
@@ -1086,6 +1116,7 @@ def _select_fun_system(
         "stake_total": float(open_amt),
         "stake_per_column": float(stake_per_column),
         "7th_min_confirmation": float(seventh_min_confirmation),
+        "unique_non_overlap_available": len(a_non_overlap) + len(b_non_overlap),
     }
 
     return system_pool, system, float(round(open_amt, 2)), dbg
@@ -1186,9 +1217,20 @@ def _select_draw_superfun(
         reverse=True,
     )
 
-    if n_max > 0:
-        fun_slots = max(0, n_max - len(core_rows))
-        fun_rows = fun_rows[:fun_slots]
+    available_total = len(core_rows) + len(fun_rows)
+    target_n = min(n_max, available_total)
+
+    if target_n >= 12:
+        desired_n = 12
+    elif target_n == 11:
+        desired_n = 11
+    elif target_n == 10:
+        desired_n = 10
+    else:
+        desired_n = target_n
+
+    fun_slots = max(0, desired_n - len(core_rows))
+    fun_rows = fun_rows[:fun_slots]
 
     picks = core_rows + fun_rows
     picks.sort(key=_chrono_key)
@@ -1210,6 +1252,7 @@ def _select_draw_superfun(
             "fun_candidates_unique": len(fun_best_by_fid),
             "fun_kept": len(fun_rows),
             "n_after_cap": n,
+            "desired_n": desired_n,
             "reason": f"need_at_least_{n_min}",
         }
 
@@ -1259,6 +1302,7 @@ def _select_draw_superfun(
             "core_priority": True,
             "trim_from_fun_only": True,
             "target_12_when_possible": True,
+            "desired_n": int(desired_n),
         },
     }
 
@@ -1267,6 +1311,7 @@ def _select_draw_superfun(
         "fun_candidates_unique": len(fun_best_by_fid),
         "fun_kept": len(fun_rows),
         "n_after_cap": n,
+        "desired_n": desired_n,
         "k": k,
         "columns": columns,
         "stake_total": float(open_amt),
