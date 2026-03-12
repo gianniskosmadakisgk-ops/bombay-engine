@@ -250,6 +250,55 @@ def _normalize_team_name(name: str) -> str:
     return s
 
 
+def _candidate_strength_key(c: Dict[str, Any]) -> Tuple[float, float, float]:
+    return (
+        float(c.get("confirmation_score", 0.0)),
+        float(c.get("rank_score", 0.0)),
+        float(c.get("quality", 0.0)),
+    )
+
+
+def _fun_candidate_strength_key(c: Dict[str, Any]) -> Tuple[int, float, float, float]:
+    return (
+        2 if str(c.get("tier")) == "A" else 1,
+        float(c.get("confirmation_score", 0.0)),
+        float(c.get("rank_score", 0.0)),
+        float(c.get("quality", 0.0)),
+    )
+
+
+def _fun_candidate_weakness_key(c: Dict[str, Any]) -> Tuple[int, float, float, float]:
+    return (
+        0 if str(c.get("tier")) == "B" else 1,
+        float(c.get("confirmation_score", 0.0)),
+        float(c.get("rank_score", 0.0)),
+        float(c.get("quality", 0.0)),
+    )
+
+
+def _fun_allows_seventh(c: Dict[str, Any], overlap_with_core: bool) -> Tuple[bool, str]:
+    min_confirmation = _sf_env("FRIDAY_FUN_7TH_MIN_CONFIRMATION", 0.80)
+    min_quality = _sf_env("FRIDAY_FUN_7TH_MIN_QUALITY", 0.68)
+    min_value = _sf_env("FRIDAY_FUN_7TH_MIN_VALUE_PCT", 4.0)
+    overlap_bonus = _sf_env("FRIDAY_FUN_7TH_OVERLAP_CONFIRMATION_BONUS", 0.02)
+
+    needed_confirmation = float(min_confirmation) + (float(overlap_bonus) if overlap_with_core else 0.0)
+
+    if str(c.get("tier") or "") != "A":
+        return False, "tier_not_A"
+    if not _grade_at_least(str(c.get("odds_match_grade") or ""), "B"):
+        return False, "odds_grade_below_B"
+    if bool(c.get("slow_fav_trap", False)):
+        return False, "slow_fav_trap"
+    if float(c.get("confirmation_score") or 0.0) < needed_confirmation:
+        return False, "confirmation_too_low"
+    if float(c.get("quality") or 0.0) < float(min_quality):
+        return False, "quality_too_low"
+    if float(c.get("value_pct") or 0.0) < float(min_value):
+        return False, "value_too_low"
+    return True, "ok"
+
+
 # -------------------------
 # Style metrics
 # -------------------------
@@ -746,6 +795,10 @@ def _select_core(
     trb_val = _sf_env("FRIDAY_CORE_TRB_MIN_VALUE_PCT", 1.0)
     trb_q = _sf_env("FRIDAY_CORE_TRB_MIN_QUALITY", 0.65)
 
+    fill_relax_totals = _sb_env("FRIDAY_CORE_FILL_RELAX_TOTALS", True)
+    fill_max_totals_extra = _si_env("FRIDAY_CORE_FILL_MAX_TOTALS_EXTRA", 1)
+    fill_max_unders_extra = _si_env("FRIDAY_CORE_FILL_MAX_UNDERS_EXTRA", 0)
+
     fixture_by_id: Dict[Any, Dict[str, Any]] = {fx.get("fixture_id"): fx for fx in fixture_rows}
 
     base = []
@@ -788,22 +841,8 @@ def _select_core(
             row["risk_tag"] = "TRB"
             trb.append(row)
 
-    strong.sort(
-        key=lambda x: (
-            float(x.get("confirmation_score", 0.0)),
-            float(x["rank_score"]),
-            float(x["quality"]),
-        ),
-        reverse=True,
-    )
-    trb.sort(
-        key=lambda x: (
-            float(x.get("confirmation_score", 0.0)),
-            float(x["rank_score"]),
-            float(x["quality"]),
-        ),
-        reverse=True,
-    )
+    strong.sort(key=_candidate_strength_key, reverse=True)
+    trb.sort(key=_candidate_strength_key, reverse=True)
 
     singles: List[Dict[str, Any]] = []
     open_total = 0.0
@@ -811,8 +850,14 @@ def _select_core(
     unders_cnt = 0
     used_fids = set()
 
-    def _try_add(c: Dict[str, Any]) -> bool:
-        nonlocal open_total, totals_cnt, unders_cnt
+    strong_used = 0
+    trb_used = 0
+    fallback_added_cnt = 0
+    relaxed_total_additions = 0
+
+    def _try_add(c: Dict[str, Any], allow_relaxed_totals: bool = False) -> bool:
+        nonlocal open_total, totals_cnt, unders_cnt, strong_used, trb_used, relaxed_total_additions
+
         if len(singles) >= target_singles:
             return False
 
@@ -820,10 +865,13 @@ def _select_core(
         if fid in used_fids:
             return False
 
+        totals_cap = max_totals + (fill_max_totals_extra if allow_relaxed_totals and fill_relax_totals else 0)
+        unders_cap = max_unders + (fill_max_unders_extra if allow_relaxed_totals and fill_relax_totals else 0)
+
         if _is_total_market(c["market"]):
-            if totals_cnt >= max_totals:
+            if totals_cnt >= totals_cap:
                 return False
-            if _is_under(c["market"]) and unders_cnt >= max_unders:
+            if _is_under(c["market"]) and unders_cnt >= unders_cap:
                 return False
 
         stake = core_stake_from_tier(str(c.get("tier") or "TRB"))
@@ -845,11 +893,19 @@ def _select_core(
             "odds_match_grade": c.get("odds_match_grade"),
             "value_pct": c.get("value_pct"),
             "confirmation_score": c.get("confirmation_score"),
+            **({"fallback_added": True} if allow_relaxed_totals else {}),
         })
         used_fids.add(fid)
         open_total += stake
 
+        if str(c.get("tier")) == "STRONG":
+            strong_used += 1
+        else:
+            trb_used += 1
+
         if _is_total_market(c["market"]):
+            if allow_relaxed_totals and (totals_cnt >= max_totals or (_is_under(c["market"]) and unders_cnt >= max_unders)):
+                relaxed_total_additions += 1
             totals_cnt += 1
             if _is_under(c["market"]):
                 unders_cnt += 1
@@ -859,67 +915,48 @@ def _select_core(
         for c in grp:
             if len(singles) >= target_singles:
                 break
-            if _is_total_market(c["market"]):
-                _try_add(c)
+            if not _is_total_market(c["market"]):
+                _try_add(c, allow_relaxed_totals=False)
+
         for c in grp:
             if len(singles) >= target_singles:
                 break
-            if not _is_total_market(c["market"]):
-                _try_add(c)
-    # Fallback pass:
-    # if Core did not reach target, relax only slightly and try to fill the missing slot(s)
+            if _is_total_market(c["market"]):
+                _try_add(c, allow_relaxed_totals=False)
+
     if len(singles) < target_singles:
-        fallback_used_fids = {s.get("fixture_id") for s in singles if s.get("fixture_id") is not None}
-
-        fallback_pool: List[Dict[str, Any]] = []
+        fallback_pool_sides: List[Dict[str, Any]] = []
         for c in strong + trb:
-            fid = c.get("fixture_id")
-            if fid in fallback_used_fids:
-                continue
-
-            if not _is_total_market(c["market"]):
-                fallback_pool.append(c)
-
-        fallback_pool.sort(
-            key=lambda x: (
-                float(x.get("confirmation_score", 0.0)),
-                float(x.get("rank_score", 0.0)),
-                float(x.get("quality", 0.0)),
-            ),
-            reverse=True,
-        )
-
-        for c in fallback_pool:
-            if len(singles) >= target_singles:
-                break
-
             fid = c.get("fixture_id")
             if fid in used_fids:
                 continue
+            if not _is_total_market(c["market"]):
+                fallback_pool_sides.append(c)
 
-            stake = core_stake_from_tier(str(c.get("tier") or "TRB"))
+        fallback_pool_sides.sort(key=_candidate_strength_key, reverse=True)
 
-            singles.append({
-                "fixture_id": fid,
-                "date": c["date"],
-                "time_gr": c["time_gr"],
-                "league": c["league"],
-                "match": c["match"],
-                "market": c["market"],
-                "odds": c["odds"],
-                "prob": c["prob"],
-                "stake": stake,
-                "quality": c["quality"],
-                "tier": c["tier"],
-                "risk_tag": c["risk_tag"],
-                "slow_fav_trap": bool(c.get("slow_fav_trap", False)),
-                "odds_match_grade": c.get("odds_match_grade"),
-                "value_pct": c.get("value_pct"),
-                "confirmation_score": c.get("confirmation_score"),
-                "fallback_added": True,
-            })
-            used_fids.add(fid)
-            open_total += stake
+        for c in fallback_pool_sides:
+            if len(singles) >= target_singles:
+                break
+            if _try_add(c, allow_relaxed_totals=False):
+                fallback_added_cnt += 1
+
+    if len(singles) < target_singles and fill_relax_totals:
+        fallback_pool_totals: List[Dict[str, Any]] = []
+        for c in strong + trb:
+            fid = c.get("fixture_id")
+            if fid in used_fids:
+                continue
+            if _is_total_market(c["market"]):
+                fallback_pool_totals.append(c)
+
+        fallback_pool_totals.sort(key=_candidate_strength_key, reverse=True)
+
+        for c in fallback_pool_totals:
+            if len(singles) >= target_singles:
+                break
+            if _try_add(c, allow_relaxed_totals=True):
+                fallback_added_cnt += 1
 
     singles, open_total, boost_dbg = _apply_core_stake_boost(singles, open_total)
 
@@ -948,8 +985,15 @@ def _select_core(
         "got_singles": len(singles),
         "strong_candidates": len(strong),
         "trb_candidates": len(trb),
+        "strong_used": strong_used,
+        "trb_used": trb_used,
         "totals_cnt": totals_cnt,
         "unders_cnt": unders_cnt,
+        "fallback_added_cnt": fallback_added_cnt,
+        "relaxed_total_additions": relaxed_total_additions,
+        "fill_relax_totals": bool(fill_relax_totals),
+        "acceptable_pool_total": len(strong) + len(trb),
+        "left_below_target_because_pool_short": bool(len(singles) < target_singles and (len(strong) + len(trb) <= len(singles))),
         "stake_boost": boost_dbg,
     }
     return singles, core_double, float(round(open_total, 2)), dbg
@@ -979,8 +1023,8 @@ def _select_fun_system(
     b_val = _sf_env("FRIDAY_FUN_B_MIN_VALUE_PCT", 1.0)
     b_q = _sf_env("FRIDAY_FUN_B_MIN_QUALITY", 0.60)
 
-    seventh_min_confirmation = _sf_env("FRIDAY_FUN_7TH_MIN_CONFIRMATION", 0.78)
     max_overlap = _si_env("FRIDAY_FUN_MAX_OVERLAP_WITH_CORE", 2)
+    swap_max_rank_gap = _sf_env("FRIDAY_FUN_SWAP_MAX_RANK_GAP", 2.5)
 
     fixture_by_id: Dict[Any, Dict[str, Any]] = {fx.get("fixture_id"): fx for fx in fixture_rows}
 
@@ -1024,29 +1068,20 @@ def _select_fun_system(
             row["risk_tag"] = "B"
             tier_b.append(row)
 
-    tier_a.sort(
-        key=lambda x: (
-            float(x.get("confirmation_score", 0.0)),
-            float(x["rank_score"]),
-            float(x["quality"]),
-        ),
-        reverse=True,
-    )
-    tier_b.sort(
-        key=lambda x: (
-            float(x.get("confirmation_score", 0.0)),
-            float(x["rank_score"]),
-            float(x["quality"]),
-        ),
-        reverse=True,
-    )
+    tier_a.sort(key=_candidate_strength_key, reverse=True)
+    tier_b.sort(key=_candidate_strength_key, reverse=True)
 
     system_pool: List[Dict[str, Any]] = []
     seen_fixtures = set()
     overlap_cnt = 0
+    non_overlap_used = 0
+    core_overlap_used = 0
+    seventh_allowed = False
+    seventh_reason = "not_checked"
+    superfun_swaps = 0
 
     def _try_add(c: Dict[str, Any]) -> bool:
-        nonlocal overlap_cnt
+        nonlocal overlap_cnt, non_overlap_used, core_overlap_used
 
         if len(system_pool) >= max_n:
             return False
@@ -1079,6 +1114,9 @@ def _select_fun_system(
 
         if fid in core_fixture_ids:
             overlap_cnt += 1
+            core_overlap_used += 1
+        else:
+            non_overlap_used += 1
         return True
 
     a_non_overlap = [c for c in tier_a if c.get("fixture_id") not in core_fixture_ids]
@@ -1086,50 +1124,103 @@ def _select_fun_system(
     a_overlap = [c for c in tier_a if c.get("fixture_id") in core_fixture_ids]
     b_overlap = [c for c in tier_b if c.get("fixture_id") in core_fixture_ids]
 
-    for c in a_non_overlap:
-        if len(system_pool) >= preferred_n:
-            break
-        _try_add(c)
-
-    for c in b_non_overlap:
-        if len(system_pool) >= preferred_n:
-            break
-        _try_add(c)
-
-    if len(system_pool) < preferred_n:
-        for c in a_overlap:
+    for bucket in [a_non_overlap, b_non_overlap]:
+        for c in bucket:
             if len(system_pool) >= preferred_n:
                 break
             _try_add(c)
 
     if len(system_pool) < preferred_n:
-        for c in b_overlap:
-            if len(system_pool) >= preferred_n:
+        for bucket in [a_overlap, b_overlap]:
+            for c in bucket:
+                if len(system_pool) >= preferred_n:
+                    break
+                _try_add(c)
+
+    if system_pool:
+        unused_non_overlap: List[Dict[str, Any]] = []
+        for c in a_non_overlap + b_non_overlap:
+            if c.get("fixture_id") not in seen_fixtures:
+                unused_non_overlap.append(c)
+        unused_non_overlap.sort(key=_fun_candidate_strength_key, reverse=True)
+
+        overlap_rows_idx = [i for i, row in enumerate(system_pool) if row.get("fixture_id") in core_fixture_ids]
+        overlap_rows_idx.sort(key=lambda i: _fun_candidate_weakness_key(system_pool[i]))
+
+        for idx in overlap_rows_idx:
+            if not unused_non_overlap:
                 break
-            _try_add(c)
+
+            weakest_overlap = system_pool[idx]
+            replacement = unused_non_overlap[0]
+
+            weakest_key = _fun_candidate_strength_key(weakest_overlap)
+            replacement_key = _fun_candidate_strength_key(replacement)
+
+            tier_ok = replacement_key[0] >= weakest_key[0]
+            conf_ok = replacement_key[1] + 1e-9 >= weakest_key[1] - 0.03
+            rank_ok = float(replacement.get("rank_score", 0.0)) + float(swap_max_rank_gap) >= float(weakest_overlap.get("rank_score", 0.0))
+
+            if not (tier_ok and conf_ok and rank_ok):
+                continue
+
+            old_fid = weakest_overlap.get("fixture_id")
+            new_fid = replacement.get("fixture_id")
+            if new_fid in seen_fixtures:
+                continue
+
+            system_pool[idx] = {
+                "fixture_id": new_fid,
+                "date": replacement["date"],
+                "time_gr": replacement["time_gr"],
+                "league": replacement["league"],
+                "match": replacement["match"],
+                "market": replacement["market"],
+                "odds": replacement["odds"],
+                "prob": replacement["prob"],
+                "quality": replacement["quality"],
+                "tier": replacement["tier"],
+                "risk_tag": replacement["risk_tag"],
+                "slow_fav_trap": bool(replacement.get("slow_fav_trap", False)),
+                "odds_match_grade": replacement.get("odds_match_grade"),
+                "value_pct": replacement.get("value_pct"),
+                "confirmation_score": replacement.get("confirmation_score"),
+                "replaced_core_overlap": True,
+            }
+            seen_fixtures.discard(old_fid)
+            seen_fixtures.add(new_fid)
+            overlap_cnt = max(0, overlap_cnt - 1)
+            core_overlap_used = max(0, core_overlap_used - 1)
+            non_overlap_used += 1
+            superfun_swaps += 1
+            unused_non_overlap.pop(0)
 
     if len(system_pool) >= preferred_n and len(system_pool) < max_n:
-        extra_candidates: List[Dict[str, Any]] = []
+        extra_non_overlap_a = [c for c in a_non_overlap if c.get("fixture_id") not in seen_fixtures]
+        extra_overlap_a = [c for c in a_overlap if c.get("fixture_id") not in seen_fixtures]
 
-        for bucket in [a_non_overlap, b_non_overlap, a_overlap, b_overlap]:
-            for c in bucket:
-                if c.get("fixture_id") not in seen_fixtures:
-                    extra_candidates.append(c)
+        extra_non_overlap_a.sort(key=_fun_candidate_strength_key, reverse=True)
+        extra_overlap_a.sort(key=_fun_candidate_strength_key, reverse=True)
 
-        extra_candidates.sort(
-            key=lambda x: (
-                2 if str(x.get("tier")) == "A" else 1,
-                float(x.get("confirmation_score", 0.0)),
-                float(x.get("rank_score", 0.0)),
-                float(x.get("quality", 0.0)),
-            ),
-            reverse=True,
-        )
+        seventh_candidate: Optional[Dict[str, Any]] = None
+        overlap_flag = False
 
-        if extra_candidates:
-            seventh = extra_candidates[0]
-            if float(seventh.get("confirmation_score") or 0.0) >= seventh_min_confirmation:
-                _try_add(seventh)
+        if extra_non_overlap_a:
+            seventh_candidate = extra_non_overlap_a[0]
+            overlap_flag = False
+        elif extra_overlap_a:
+            seventh_candidate = extra_overlap_a[0]
+            overlap_flag = True
+
+        if seventh_candidate is None:
+            seventh_allowed = False
+            seventh_reason = "no_unused_A_candidate"
+        else:
+            allowed, reason = _fun_allows_seventh(seventh_candidate, overlap_with_core=overlap_flag)
+            seventh_allowed = bool(allowed)
+            seventh_reason = reason
+            if allowed:
+                _try_add(seventh_candidate)
 
     n_actual = len(system_pool)
 
@@ -1154,10 +1245,12 @@ def _select_fun_system(
         "requested_n": preferred_n,
         "max_n": max_n,
         "target": f"{k_actual}/{n_actual}" if n_actual > 0 and k_actual > 0 else None,
-        "selection_rule": "fill_unique_first_then_overlap_then_optional_7th",
+        "selection_rule": "fill_unique_first_then_overlap_if_needed_then_strict_optional_7th",
     }
 
     system_pool.sort(key=_chrono_key)
+
+    unique_with_core = len(core_fixture_ids.union({row.get("fixture_id") for row in system_pool if row.get("fixture_id") is not None}))
 
     dbg = {
         "preferred_n": preferred_n,
@@ -1167,10 +1260,15 @@ def _select_fun_system(
         "tier_a_candidates": len(tier_a),
         "tier_b_candidates": len(tier_b),
         "overlap_with_core": overlap_cnt,
+        "non_overlap_used": non_overlap_used,
+        "core_overlap_used": core_overlap_used,
         "stake_total": float(open_amt),
         "stake_per_column": float(stake_per_column),
-        "7th_min_confirmation": float(seventh_min_confirmation),
         "unique_non_overlap_available": len(a_non_overlap) + len(b_non_overlap),
+        "seventh_allowed": seventh_allowed,
+        "seventh_reason": seventh_reason,
+        "superfun_swaps": superfun_swaps,
+        "unique_core_plus_fun_after_selection": unique_with_core,
     }
 
     return system_pool, system, float(round(open_amt, 2)), dbg
@@ -1284,6 +1382,7 @@ def _select_draw_superfun(
         desired_n = target_n
 
     fun_slots = max(0, desired_n - len(core_rows))
+    trimmed_fun_out = max(0, len(fun_rows) - fun_slots)
     fun_rows = fun_rows[:fun_slots]
 
     picks = core_rows + fun_rows
@@ -1305,8 +1404,10 @@ def _select_draw_superfun(
             "core_kept": len(core_rows),
             "fun_candidates_unique": len(fun_best_by_fid),
             "fun_kept": len(fun_rows),
+            "fun_trimmed_out": trimmed_fun_out,
             "n_after_cap": n,
             "desired_n": desired_n,
+            "available_total_unique": available_total,
             "reason": f"need_at_least_{n_min}",
         }
 
@@ -1355,6 +1456,7 @@ def _select_draw_superfun(
             "unique_by_fixture": True,
             "core_priority": True,
             "trim_from_fun_only": True,
+            "trim_weakest_fun_first": True,
             "target_12_when_possible": True,
             "desired_n": int(desired_n),
         },
@@ -1364,8 +1466,12 @@ def _select_draw_superfun(
         "core_kept": len(core_rows),
         "fun_candidates_unique": len(fun_best_by_fid),
         "fun_kept": len(fun_rows),
+        "fun_trimmed_out": trimmed_fun_out,
         "n_after_cap": n,
         "desired_n": desired_n,
+        "available_total_unique": available_total,
+        "core_unique": len(core_rows),
+        "fun_unique_non_core": len(fun_best_by_fid),
         "k": k,
         "columns": columns,
         "stake_total": float(open_amt),
