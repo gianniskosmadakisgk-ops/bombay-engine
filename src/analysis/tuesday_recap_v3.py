@@ -58,8 +58,12 @@ def _load_latest_friday() -> Dict[str, Any]:
     return _read_json(files[0])
 
 
+def _history_path() -> Path:
+    return LOGS / "tuesday_history_v3.json"
+
+
 def _load_history() -> Dict[str, Any]:
-    p = LOGS / "tuesday_history_v3.json"
+    p = _history_path()
     if p.exists():
         try:
             data = _read_json(p)
@@ -86,6 +90,11 @@ def _si(v: Any, d: Optional[int] = None) -> Optional[int]:
         return int(v)
     except Exception:
         return d
+
+
+def _sb_env(name: str, default: bool) -> bool:
+    v = os.getenv(name, "true" if default else "false").strip().lower()
+    return v in ("1", "true", "yes", "y", "on")
 
 
 def _fmt_tick(won: Optional[bool]) -> str:
@@ -169,6 +178,7 @@ def fetch_fixture_ft(fixture_id: int) -> Optional[FixtureFT]:
     url = f"{API_FOOTBALL_BASE}/fixtures"
     params = {"id": int(fixture_id)}
     r = requests.get(url, headers=HEADERS_FOOTBALL, params=params, timeout=25)
+    r.raise_for_status()
     data = r.json()
     resp = data.get("response") or []
     if not resp:
@@ -221,6 +231,7 @@ def _api_fixtures_by_date(date_yyyy_mm_dd: str) -> List[Dict[str, Any]]:
     url = f"{API_FOOTBALL_BASE}/fixtures"
     params = {"date": date_yyyy_mm_dd}
     r = requests.get(url, headers=HEADERS_FOOTBALL, params=params, timeout=25)
+    r.raise_for_status()
     data = r.json()
     resp = data.get("response") or []
 
@@ -299,7 +310,6 @@ def system_payout(lines: List[Dict[str, Any]], k: int, columns: int, stake_total
         }
 
     combos = _comb_indices(len(lines), k)
-    # trust provided columns for stake splitting if valid; else derive from actual combos
     used_columns = int(columns) if int(columns) > 0 else len(combos)
     if used_columns <= 0:
         used_columns = len(combos)
@@ -344,12 +354,57 @@ def _extract_all_lines(friday: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], Li
 
 
 # -------------------------
+# History guards
+# -------------------------
+
+def _friday_fingerprint(friday: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "title": str(friday.get("title") or ""),
+        "generated_at": str(friday.get("generated_at") or ""),
+        "window": friday.get("window") or {},
+    }
+
+
+def _assert_history_update_allowed(friday: Dict[str, Any], hist: Dict[str, Any]) -> int:
+    history_week_count = _si(hist.get("week_count"), 0) or 0
+    current_week = int(
+        _si((friday.get("history") or {}).get("next_week"), history_week_count + 1)
+        or (history_week_count + 1)
+    )
+
+    if history_week_count >= current_week:
+        raise ValueError(
+            f"Refusing to update history: week {current_week} has already been applied "
+            f"(history week_count={history_week_count})."
+        )
+
+    last_applied = hist.get("last_applied_friday") or {}
+    fp = _friday_fingerprint(friday)
+    if (
+        str(last_applied.get("generated_at") or "") == fp["generated_at"]
+        and fp["generated_at"]
+    ):
+        raise ValueError(
+            f"Refusing to update history: friday generated_at={fp['generated_at']} "
+            f"already exists in history."
+        )
+
+    return current_week
+
+
+# -------------------------
 # Main recap builder
 # -------------------------
 
 def build_tuesday_recap() -> Dict[str, Any]:
     friday = _load_latest_friday()
     hist = _load_history()
+
+    update_history = _sb_env("TUESDAY_UPDATE_HISTORY", True)
+    current_week = _assert_history_update_allowed(friday, hist) if update_history else int(
+        _si((friday.get("history") or {}).get("next_week"), (_si(hist.get("week_count"), 0) or 0) + 1)
+        or ((_si(hist.get("week_count"), 0) or 0) + 1)
+    )
 
     core_lines, fun_lines, superfun_lines = _extract_all_lines(friday)
 
@@ -364,7 +419,6 @@ def build_tuesday_recap() -> Dict[str, Any]:
                 pass
         return _resolve_fixture_id_legacy(line, date_cache)
 
-    # Fetch all fixtures once
     all_fxids: List[int] = []
     for group in (core_lines, fun_lines, superfun_lines):
         for ln in group:
@@ -537,6 +591,9 @@ def build_tuesday_recap() -> Dict[str, Any]:
     prev_sf_stake = float(_sf((prev_wallets.get("superfun") or {}).get("stake_total"), 0.0) or 0.0)
     prev_sf_return = float(_sf((prev_wallets.get("superfun") or {}).get("return_total"), 0.0) or 0.0)
 
+    prev_system_stake = float(_sf(prev_system.get("stake_total"), 0.0) or 0.0)
+    prev_system_return = float(_sf(prev_system.get("return_total"), 0.0) or 0.0)
+
     cum_core_stake = round(prev_core_stake + core_staked, 2)
     cum_core_return = round(prev_core_return + core_returned, 2)
 
@@ -546,18 +603,9 @@ def build_tuesday_recap() -> Dict[str, Any]:
     cum_sf_stake = round(prev_sf_stake + float(superfun_payout["staked"]), 2)
     cum_sf_return = round(prev_sf_return + float(superfun_payout["returned"]), 2)
 
-    cum_system_stake = round(float(_sf(prev_system.get("stake_total"), 0.0) or 0.0) + week_stake_total, 2)
-    cum_system_return = round(float(_sf(prev_system.get("return_total"), 0.0) or 0.0) + week_return_total, 2)
+    cum_system_stake = round(prev_system_stake + week_stake_total, 2)
+    cum_system_return = round(prev_system_return + week_return_total, 2)
 
-    # -------------------------
-    # Week count
-    # -------------------------
-    history_week_count = _si(hist.get("week_count"), 0) or 0
-    current_week = int(_si((friday.get("history") or {}).get("next_week"), history_week_count + 1) or (history_week_count + 1))
-
-    # -------------------------
-    # Build recap output
-    # -------------------------
     out = {
         "title": "Bombay Tuesday Recap — v4",
         "generated_at": _utc_now_iso(),
@@ -658,12 +706,10 @@ def build_tuesday_recap() -> Dict[str, Any]:
                 "funbet": round(fun_end, 2),
                 "superfunbet": round(sf_end, 2),
             },
+            "history_update_enabled": update_history,
         },
     }
 
-    # -------------------------
-    # Next-week history for Friday
-    # -------------------------
     out_hist = {
         "week_count": current_week,
         "as_of": out["generated_at"][:10],
@@ -677,7 +723,7 @@ def build_tuesday_recap() -> Dict[str, Any]:
         "bankroll_current": {
             "core": round(core_end, 2),
             "fun": round(fun_end, 2),
-            "draw": round(sf_end, 2),   # keep key name for Friday compatibility
+            "draw": round(sf_end, 2),
             "total": round(core_end + fun_end + sf_end, 2),
         },
         "stats": {
@@ -709,10 +755,12 @@ def build_tuesday_recap() -> Dict[str, Any]:
             },
         },
         "last_window": out.get("window") or {},
+        "last_applied_friday": _friday_fingerprint(friday),
     }
 
     _write_json(LOGS / "tuesday_recap_v3.json", out)
-    _write_json(LOGS / "tuesday_history_v3.json", out_hist)
+    if update_history:
+        _write_json(_history_path(), out_hist)
 
     return out
 
@@ -723,15 +771,16 @@ def main() -> int:
         print(json.dumps({
             "status": "ok",
             "saved": str(LOGS / "tuesday_recap_v3.json"),
-            "history_saved": str(LOGS / "tuesday_history_v3.json"),
+            "history_saved": str(_history_path()) if _sb_env("TUESDAY_UPDATE_HISTORY", True) else None,
             "generated_at": out["generated_at"],
             "week": out["week"],
             "system_roi_week": (out.get("system_week") or {}).get("roi"),
             "system_roi_cumulative": ((out.get("cumulative") or {}).get("system") or {}).get("roi"),
+            "history_update_enabled": (out.get("summary") or {}).get("history_update_enabled"),
         }))
         return 0
     except Exception as e:
-        print(json.dumps({"status": "error", "error": str(e)}))
+        print(json.dumps({"status": "error", "error": str(e), "history_path": str(_history_path())}))
         return 1
 
 
