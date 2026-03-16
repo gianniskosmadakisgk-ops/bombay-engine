@@ -299,6 +299,30 @@ def _fun_allows_seventh(c: Dict[str, Any], overlap_with_core: bool) -> Tuple[boo
     return True, "ok"
 
 
+def _marginal_slot_ok(
+    chosen: Dict[str, Any],
+    next_best: Optional[Dict[str, Any]],
+    *,
+    min_confirmation_edge: float,
+    min_rank_edge: float,
+) -> Tuple[bool, str]:
+    if next_best is None:
+        return True, "no_next_candidate"
+
+    chosen_conf = float(chosen.get("confirmation_score") or 0.0)
+    next_conf = float(next_best.get("confirmation_score") or 0.0)
+    chosen_rank = float(chosen.get("rank_score") or 0.0)
+    next_rank = float(next_best.get("rank_score") or 0.0)
+
+    if (chosen_conf - next_conf) >= float(min_confirmation_edge):
+        return True, "confirmation_edge_ok"
+
+    if (chosen_rank - next_rank) >= float(min_rank_edge):
+        return True, "rank_edge_ok"
+
+    return False, "edge_too_small"
+
+
 # -------------------------
 # Style metrics
 # -------------------------
@@ -783,6 +807,7 @@ def _select_core(
 ) -> Tuple[List[Dict[str, Any]], Optional[Dict[str, Any]], float, Dict[str, Any]]:
     odds_min = _sf_env("FRIDAY_CORE_ODDS_MIN", 1.55)
     odds_max = _sf_env("FRIDAY_CORE_ODDS_MAX", 1.90)
+    min_singles = _si_env("FRIDAY_CORE_MIN_SINGLES", 6)
     target_singles = _si_env("FRIDAY_CORE_TARGET_SINGLES", 7)
     max_totals = _si_env("FRIDAY_CORE_MAX_TOTALS", 4)
     max_unders = _si_env("FRIDAY_CORE_MAX_UNDERS", 1)
@@ -798,6 +823,9 @@ def _select_core(
     fill_relax_totals = _sb_env("FRIDAY_CORE_FILL_RELAX_TOTALS", True)
     fill_max_totals_extra = _si_env("FRIDAY_CORE_FILL_MAX_TOTALS_EXTRA", 1)
     fill_max_unders_extra = _si_env("FRIDAY_CORE_FILL_MAX_UNDERS_EXTRA", 0)
+
+    marginal_conf_edge = _sf_env("FRIDAY_CORE_7TH_MIN_CONFIRMATION_EDGE", 0.03)
+    marginal_rank_edge = _sf_env("FRIDAY_CORE_7TH_MIN_RANK_EDGE", 1.5)
 
     fixture_by_id: Dict[Any, Dict[str, Any]] = {fx.get("fixture_id"): fx for fx in fixture_rows}
 
@@ -854,6 +882,11 @@ def _select_core(
     trb_used = 0
     fallback_added_cnt = 0
     relaxed_total_additions = 0
+    marginal_7th_checked = False
+    marginal_7th_allowed = False
+    marginal_7th_reason = "not_needed"
+    marginal_7th_candidate = None
+    marginal_7th_next_best = None
 
     def _try_add(c: Dict[str, Any], allow_relaxed_totals: bool = False) -> bool:
         nonlocal open_total, totals_cnt, unders_cnt, strong_used, trb_used, relaxed_total_additions
@@ -911,17 +944,59 @@ def _select_core(
                 unders_cnt += 1
         return True
 
+    def _best_remaining_candidate(exclude_candidate: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+        best = None
+        for c in strong + trb:
+            fid = c.get("fixture_id")
+            if fid in used_fids:
+                continue
+            if exclude_candidate is not None and fid == exclude_candidate.get("fixture_id") and str(c.get("market")) == str(exclude_candidate.get("market")):
+                continue
+            if best is None or _candidate_strength_key(c) > _candidate_strength_key(best):
+                best = c
+        return best
+
+    def _can_add_candidate(c: Dict[str, Any]) -> bool:
+        nonlocal marginal_7th_checked, marginal_7th_allowed, marginal_7th_reason
+        nonlocal marginal_7th_candidate, marginal_7th_next_best
+
+        if len(singles) < min_singles:
+            return True
+        if len(singles) > min_singles:
+            return True
+
+        marginal_7th_checked = True
+        marginal_7th_candidate = f"{c.get('match')} | {c.get('market')}"
+
+        next_best = _best_remaining_candidate(exclude_candidate=c)
+        if next_best is not None:
+            marginal_7th_next_best = f"{next_best.get('match')} | {next_best.get('market')}"
+
+        ok, reason = _marginal_slot_ok(
+            c,
+            next_best,
+            min_confirmation_edge=marginal_conf_edge,
+            min_rank_edge=marginal_rank_edge,
+        )
+        marginal_7th_allowed = bool(ok)
+        marginal_7th_reason = reason
+        return ok
+
     for grp in [strong, trb]:
         for c in grp:
             if len(singles) >= target_singles:
                 break
             if not _is_total_market(c["market"]):
+                if not _can_add_candidate(c):
+                    continue
                 _try_add(c, allow_relaxed_totals=False)
 
         for c in grp:
             if len(singles) >= target_singles:
                 break
             if _is_total_market(c["market"]):
+                if not _can_add_candidate(c):
+                    continue
                 _try_add(c, allow_relaxed_totals=False)
 
     if len(singles) < target_singles:
@@ -938,6 +1013,8 @@ def _select_core(
         for c in fallback_pool_sides:
             if len(singles) >= target_singles:
                 break
+            if not _can_add_candidate(c):
+                continue
             if _try_add(c, allow_relaxed_totals=False):
                 fallback_added_cnt += 1
 
@@ -955,6 +1032,8 @@ def _select_core(
         for c in fallback_pool_totals:
             if len(singles) >= target_singles:
                 break
+            if not _can_add_candidate(c):
+                continue
             if _try_add(c, allow_relaxed_totals=True):
                 fallback_added_cnt += 1
 
@@ -981,6 +1060,7 @@ def _select_core(
     singles.sort(key=_chrono_key)
 
     dbg = {
+        "min_singles": min_singles,
         "target_singles": target_singles,
         "got_singles": len(singles),
         "strong_candidates": len(strong),
@@ -993,7 +1073,12 @@ def _select_core(
         "relaxed_total_additions": relaxed_total_additions,
         "fill_relax_totals": bool(fill_relax_totals),
         "acceptable_pool_total": len(strong) + len(trb),
-        "left_below_target_because_pool_short": bool(len(singles) < target_singles and (len(strong) + len(trb) <= len(singles))),
+        "left_below_target_because_pool_short": bool(len(singles) < min_singles and (len(strong) + len(trb) <= len(singles))),
+        "marginal_7th_checked": marginal_7th_checked,
+        "marginal_7th_allowed": marginal_7th_allowed,
+        "marginal_7th_reason": marginal_7th_reason,
+        "marginal_7th_candidate": marginal_7th_candidate,
+        "marginal_7th_next_best": marginal_7th_next_best,
         "stake_boost": boost_dbg,
     }
     return singles, core_double, float(round(open_total, 2)), dbg
@@ -1009,6 +1094,7 @@ def _select_fun_system(
     stake_total: float,
     core_fixture_ids: set,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any], float, Dict[str, Any]]:
+    min_n = _si_env("FRIDAY_FUN_MIN_PICKS", 6)
     preferred_n = 6
     max_n = 7
 
@@ -1025,6 +1111,8 @@ def _select_fun_system(
 
     max_overlap = _si_env("FRIDAY_FUN_MAX_OVERLAP_WITH_CORE", 2)
     swap_max_rank_gap = _sf_env("FRIDAY_FUN_SWAP_MAX_RANK_GAP", 2.5)
+    marginal_conf_edge = _sf_env("FRIDAY_FUN_7TH_MIN_CONFIRMATION_EDGE", 0.025)
+    marginal_rank_edge = _sf_env("FRIDAY_FUN_7TH_MIN_RANK_EDGE", 1.0)
 
     fixture_by_id: Dict[Any, Dict[str, Any]] = {fx.get("fixture_id"): fx for fx in fixture_rows}
 
@@ -1078,7 +1166,13 @@ def _select_fun_system(
     core_overlap_used = 0
     seventh_allowed = False
     seventh_reason = "not_checked"
+    seventh_gate_reason = "not_checked"
     superfun_swaps = 0
+    marginal_7th_checked = False
+    marginal_7th_allowed = False
+    marginal_7th_reason = "not_checked"
+    marginal_7th_candidate = None
+    marginal_7th_next_best = None
 
     def _try_add(c: Dict[str, Any]) -> bool:
         nonlocal overlap_cnt, non_overlap_used, core_overlap_used
@@ -1198,9 +1292,15 @@ def _select_fun_system(
     if len(system_pool) >= preferred_n and len(system_pool) < max_n:
         extra_non_overlap_a = [c for c in a_non_overlap if c.get("fixture_id") not in seen_fixtures]
         extra_overlap_a = [c for c in a_overlap if c.get("fixture_id") not in seen_fixtures]
-
         extra_non_overlap_a.sort(key=_fun_candidate_strength_key, reverse=True)
         extra_overlap_a.sort(key=_fun_candidate_strength_key, reverse=True)
+
+        extra_all = []
+        for c in extra_non_overlap_a:
+            extra_all.append((c, False))
+        for c in extra_overlap_a:
+            extra_all.append((c, True))
+        extra_all.sort(key=lambda item: _fun_candidate_strength_key(item[0]), reverse=True)
 
         seventh_candidate: Optional[Dict[str, Any]] = None
         overlap_flag = False
@@ -1215,12 +1315,45 @@ def _select_fun_system(
         if seventh_candidate is None:
             seventh_allowed = False
             seventh_reason = "no_unused_A_candidate"
+            seventh_gate_reason = "no_candidate"
+            marginal_7th_checked = False
+            marginal_7th_allowed = False
+            marginal_7th_reason = "no_candidate"
         else:
             allowed, reason = _fun_allows_seventh(seventh_candidate, overlap_with_core=overlap_flag)
-            seventh_allowed = bool(allowed)
-            seventh_reason = reason
-            if allowed:
-                _try_add(seventh_candidate)
+            seventh_gate_reason = reason
+            marginal_7th_candidate = f"{seventh_candidate.get('match')} | {seventh_candidate.get('market')}"
+
+            next_best = None
+            for c, _is_overlap in extra_all:
+                if c.get("fixture_id") == seventh_candidate.get("fixture_id") and str(c.get("market")) == str(seventh_candidate.get("market")):
+                    continue
+                next_best = c
+                break
+
+            if next_best is not None:
+                marginal_7th_next_best = f"{next_best.get('match')} | {next_best.get('market')}"
+
+            if not allowed:
+                seventh_allowed = False
+                seventh_reason = reason
+                marginal_7th_checked = False
+                marginal_7th_allowed = False
+                marginal_7th_reason = "blocked_by_absolute_gate"
+            else:
+                marginal_7th_checked = True
+                ok2, reason2 = _marginal_slot_ok(
+                    seventh_candidate,
+                    next_best,
+                    min_confirmation_edge=marginal_conf_edge,
+                    min_rank_edge=marginal_rank_edge,
+                )
+                marginal_7th_allowed = bool(ok2)
+                marginal_7th_reason = reason2
+                seventh_allowed = bool(ok2)
+                seventh_reason = reason2
+                if ok2:
+                    _try_add(seventh_candidate)
 
     n_actual = len(system_pool)
 
@@ -1253,6 +1386,7 @@ def _select_fun_system(
     unique_with_core = len(core_fixture_ids.union({row.get("fixture_id") for row in system_pool if row.get("fixture_id") is not None}))
 
     dbg = {
+        "min_n": min_n,
         "preferred_n": preferred_n,
         "max_n": max_n,
         "got_n": n_actual,
@@ -1267,6 +1401,12 @@ def _select_fun_system(
         "unique_non_overlap_available": len(a_non_overlap) + len(b_non_overlap),
         "seventh_allowed": seventh_allowed,
         "seventh_reason": seventh_reason,
+        "seventh_gate_reason": seventh_gate_reason,
+        "marginal_7th_checked": marginal_7th_checked,
+        "marginal_7th_allowed": marginal_7th_allowed,
+        "marginal_7th_reason": marginal_7th_reason,
+        "marginal_7th_candidate": marginal_7th_candidate,
+        "marginal_7th_next_best": marginal_7th_next_best,
         "superfun_swaps": superfun_swaps,
         "unique_core_plus_fun_after_selection": unique_with_core,
     }
