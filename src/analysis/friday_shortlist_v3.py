@@ -279,7 +279,7 @@ def _fun_candidate_weakness_key(c: Dict[str, Any]) -> Tuple[int, float, float, f
 def _fun_allows_seventh(c: Dict[str, Any], overlap_with_core: bool) -> Tuple[bool, str]:
     min_confirmation = _sf_env("FRIDAY_FUN_7TH_MIN_CONFIRMATION", 0.80)
     min_quality = _sf_env("FRIDAY_FUN_7TH_MIN_QUALITY", 0.68)
-    min_value = _sf_env("FRIDAY_FUN_7TH_MIN_VALUE_PCT", 4.0)
+    min_value = _sf_env("FRIDAY_FUN_7TH_MIN_VALUE_PCT", 6.0)
     overlap_bonus = _sf_env("FRIDAY_FUN_7TH_OVERLAP_CONFIRMATION_BONUS", 0.02)
 
     needed_confirmation = float(min_confirmation) + (float(overlap_bonus) if overlap_with_core else 0.0)
@@ -321,6 +321,47 @@ def _marginal_slot_ok(
         return True, "rank_edge_ok"
 
     return False, "edge_too_small"
+
+
+def _core_fallback_ok(c: Dict[str, Any]) -> bool:
+    min_conf = _sf_env("FRIDAY_CORE_FALLBACK_MIN_CONFIRMATION", 0.80)
+    min_val = _sf_env("FRIDAY_CORE_FALLBACK_MIN_VALUE_PCT", 5.0)
+    return (
+        float(c.get("confirmation_score") or 0.0) >= float(min_conf)
+        and float(c.get("value_pct") or 0.0) >= float(min_val)
+    )
+
+
+def _core_side_should_yield_to_over(
+    side_cand: Dict[str, Any],
+    eligible_by_fixture: Dict[Any, Dict[str, Dict[str, Any]]],
+) -> bool:
+    if str(side_cand.get("market")) not in ("Home (1)", "Away (2)"):
+        return False
+
+    fid = side_cand.get("fixture_id")
+    fixture_bucket = eligible_by_fixture.get(fid) or {}
+    over_cand = fixture_bucket.get("Over 2.5")
+    if not over_cand:
+        return False
+
+    ratio = _sf_env("FRIDAY_CORE_MARKET_OVERRIDE_OVER_VALUE_RATIO", 1.8)
+    over_min_val = _sf_env("FRIDAY_CORE_MARKET_OVERRIDE_OVER_MIN_VALUE_PCT", 8.0)
+    over_min_conf = _sf_env("FRIDAY_CORE_MARKET_OVERRIDE_OVER_MIN_CONFIRMATION", 0.80)
+
+    side_val = float(side_cand.get("value_pct") or 0.0)
+    over_val = float(over_cand.get("value_pct") or 0.0)
+    over_conf = float(over_cand.get("confirmation_score") or 0.0)
+
+    if not bool(over_cand.get("over_style_ok", True)):
+        return False
+    if over_conf < over_min_conf:
+        return False
+    if over_val < over_min_val:
+        return False
+    if over_val >= max(side_val * ratio, over_min_val):
+        return True
+    return False
 
 
 # -------------------------
@@ -807,7 +848,7 @@ def _select_core(
 ) -> Tuple[List[Dict[str, Any]], Optional[Dict[str, Any]], float, Dict[str, Any]]:
     odds_min = _sf_env("FRIDAY_CORE_ODDS_MIN", 1.55)
     odds_max = _sf_env("FRIDAY_CORE_ODDS_MAX", 1.90)
-    min_singles = _si_env("FRIDAY_CORE_MIN_SINGLES", 6)
+    min_singles = _si_env("FRIDAY_CORE_MIN_SINGLES", 5)
     target_singles = _si_env("FRIDAY_CORE_TARGET_SINGLES", 7)
     max_totals = _si_env("FRIDAY_CORE_MAX_TOTALS", 4)
     max_unders = _si_env("FRIDAY_CORE_MAX_UNDERS", 1)
@@ -819,6 +860,8 @@ def _select_core(
     trb_prob = _sf_env("FRIDAY_CORE_TRB_MIN_PROB", 0.50)
     trb_val = _sf_env("FRIDAY_CORE_TRB_MIN_VALUE_PCT", 1.0)
     trb_q = _sf_env("FRIDAY_CORE_TRB_MIN_QUALITY", 0.65)
+    trb_strict_val = _sf_env("FRIDAY_CORE_TRB_STRICT_MIN_VALUE_PCT", 5.0)
+    trb_strict_conf = _sf_env("FRIDAY_CORE_TRB_STRICT_MIN_CONFIRMATION", 0.80)
 
     fill_relax_totals = _sb_env("FRIDAY_CORE_FILL_RELAX_TOTALS", True)
     fill_max_totals_extra = _si_env("FRIDAY_CORE_FILL_MAX_TOTALS_EXTRA", 1)
@@ -829,7 +872,7 @@ def _select_core(
 
     fixture_by_id: Dict[Any, Dict[str, Any]] = {fx.get("fixture_id"): fx for fx in fixture_rows}
 
-    base = []
+    pre_base: List[Dict[str, Any]] = []
     for c in candidate_rows:
         if not (odds_min <= float(c["odds"]) <= odds_max):
             continue
@@ -847,6 +890,19 @@ def _select_core(
         if c["market"] == "Over 2.5" and not bool(c.get("over_style_ok", True)):
             continue
 
+        pre_base.append(c)
+
+    eligible_by_fixture: Dict[Any, Dict[str, Dict[str, Any]]] = {}
+    for c in pre_base:
+        fid = c.get("fixture_id")
+        if fid is None:
+            continue
+        eligible_by_fixture.setdefault(fid, {})[str(c.get("market"))] = c
+
+    base: List[Dict[str, Any]] = []
+    for c in pre_base:
+        if _core_side_should_yield_to_over(c, eligible_by_fixture):
+            continue
         base.append(c)
 
     strong: List[Dict[str, Any]] = []
@@ -863,7 +919,12 @@ def _select_core(
             row["tier"] = "STRONG"
             row["risk_tag"] = "A"
             strong.append(row)
-        elif p >= trb_prob and v >= trb_val and q >= trb_q:
+        elif (
+            p >= trb_prob
+            and v >= max(trb_val, trb_strict_val)
+            and q >= trb_q
+            and float(c.get("confirmation_score") or 0.0) >= trb_strict_conf
+        ):
             row = dict(c)
             row["tier"] = "TRB"
             row["risk_tag"] = "TRB"
@@ -962,8 +1023,6 @@ def _select_core(
 
         if len(singles) < min_singles:
             return True
-        if len(singles) > min_singles:
-            return True
 
         marginal_7th_checked = True
         marginal_7th_candidate = f"{c.get('match')} | {c.get('market')}"
@@ -1013,6 +1072,8 @@ def _select_core(
         for c in fallback_pool_sides:
             if len(singles) >= target_singles:
                 break
+            if not _core_fallback_ok(c):
+                continue
             if not _can_add_candidate(c):
                 continue
             if _try_add(c, allow_relaxed_totals=False):
@@ -1032,6 +1093,8 @@ def _select_core(
         for c in fallback_pool_totals:
             if len(singles) >= target_singles:
                 break
+            if not _core_fallback_ok(c):
+                continue
             if not _can_add_candidate(c):
                 continue
             if _try_add(c, allow_relaxed_totals=True):
