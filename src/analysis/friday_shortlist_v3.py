@@ -1,6 +1,6 @@
 # src/analysis/friday_shortlist_v3.py
 """
-Friday shortlist v9 — history-aware + style-aware + confirmation-aware + value-weighted + tiered Core/Fun + SuperFun from Core+Fun.
+Friday shortlist v10 — history-aware + style-aware + confirmation-aware + value-weighted + tiered Core/Fun + SuperFun from Core+Fun.
 
 What it does
 ------------
@@ -852,6 +852,7 @@ def _select_core(
     target_singles = _si_env("FRIDAY_CORE_TARGET_SINGLES", 7)
     max_totals = _si_env("FRIDAY_CORE_MAX_TOTALS", 4)
     max_unders = _si_env("FRIDAY_CORE_MAX_UNDERS", 1)
+    max_same_market = _si_env("FRIDAY_CORE_MAX_SAME_MARKET", 3)
 
     strong_prob = _sf_env("FRIDAY_CORE_STRONG_MIN_PROB", 0.53)
     strong_val = _sf_env("FRIDAY_CORE_STRONG_MIN_VALUE_PCT", 3.0)
@@ -938,6 +939,7 @@ def _select_core(
     totals_cnt = 0
     unders_cnt = 0
     used_fids = set()
+    market_counts: Dict[str, int] = {}
 
     strong_used = 0
     trb_used = 0
@@ -957,6 +959,11 @@ def _select_core(
 
         fid = c.get("fixture_id")
         if fid in used_fids:
+            return False
+
+        mkt = str(c["market"])
+        market_counts[mkt] = market_counts.get(mkt, 0)
+        if market_counts[mkt] >= max_same_market:
             return False
 
         totals_cap = max_totals + (fill_max_totals_extra if allow_relaxed_totals and fill_relax_totals else 0)
@@ -990,6 +997,7 @@ def _select_core(
             **({"fallback_added": True} if allow_relaxed_totals else {}),
         })
         used_fids.add(fid)
+        market_counts[mkt] += 1
         open_total += stake
 
         if str(c.get("tier")) == "STRONG":
@@ -1132,6 +1140,8 @@ def _select_core(
         "trb_used": trb_used,
         "totals_cnt": totals_cnt,
         "unders_cnt": unders_cnt,
+        "market_counts": market_counts,
+        "max_same_market": max_same_market,
         "fallback_added_cnt": fallback_added_cnt,
         "relaxed_total_additions": relaxed_total_additions,
         "fill_relax_totals": bool(fill_relax_totals),
@@ -1160,6 +1170,7 @@ def _select_fun_system(
     min_n = _si_env("FRIDAY_FUN_MIN_PICKS", 6)
     preferred_n = 6
     max_n = 7
+    max_same_market = _si_env("FRIDAY_FUN_MAX_SAME_MARKET", 2)
 
     odds_min = _sf_env("FRIDAY_FUN_ODDS_MIN", 1.80)
     odds_max = _sf_env("FRIDAY_FUN_ODDS_MAX", 2.40)
@@ -1225,6 +1236,7 @@ def _select_fun_system(
     system_pool: List[Dict[str, Any]] = []
     seen_fixtures = set()
     overlap_cnt = 0
+    market_counts: Dict[str, int] = {}
     non_overlap_used = 0
     core_overlap_used = 0
     seventh_allowed = False
@@ -1250,6 +1262,11 @@ def _select_fun_system(
         if fid in core_fixture_ids and overlap_cnt >= max_overlap:
             return False
 
+        mkt = str(c["market"])
+        market_counts[mkt] = market_counts.get(mkt, 0)
+        if market_counts[mkt] >= max_same_market:
+            return False
+
         system_pool.append({
             "fixture_id": fid,
             "date": c["date"],
@@ -1268,6 +1285,7 @@ def _select_fun_system(
             "confirmation_score": c.get("confirmation_score"),
         })
         seen_fixtures.add(fid)
+        market_counts[mkt] += 1
 
         if fid in core_fixture_ids:
             overlap_cnt += 1
@@ -1318,6 +1336,12 @@ def _select_fun_system(
             conf_ok = replacement_key[1] + 1e-9 >= weakest_key[1] - 0.03
             rank_ok = float(replacement.get("rank_score", 0.0)) + float(swap_max_rank_gap) >= float(weakest_overlap.get("rank_score", 0.0))
 
+            new_mkt = str(replacement["market"])
+            old_mkt = str(weakest_overlap["market"])
+            current_new_count = market_counts.get(new_mkt, 0)
+            if new_mkt != old_mkt and current_new_count >= max_same_market:
+                continue
+
             if not (tier_ok and conf_ok and rank_ok):
                 continue
 
@@ -1350,6 +1374,10 @@ def _select_fun_system(
             core_overlap_used = max(0, core_overlap_used - 1)
             non_overlap_used += 1
             superfun_swaps += 1
+
+            market_counts[old_mkt] = max(0, market_counts.get(old_mkt, 0) - 1)
+            market_counts[new_mkt] = market_counts.get(new_mkt, 0) + 1
+
             unused_non_overlap.pop(0)
 
     if len(system_pool) >= preferred_n and len(system_pool) < max_n:
@@ -1396,6 +1424,11 @@ def _select_fun_system(
 
             if next_best is not None:
                 marginal_7th_next_best = f"{next_best.get('match')} | {next_best.get('market')}"
+
+            seventh_mkt = str(seventh_candidate["market"])
+            if market_counts.get(seventh_mkt, 0) >= max_same_market:
+                allowed = False
+                reason = "market_exposure_limit"
 
             if not allowed:
                 seventh_allowed = False
@@ -1459,6 +1492,8 @@ def _select_fun_system(
         "overlap_with_core": overlap_cnt,
         "non_overlap_used": non_overlap_used,
         "core_overlap_used": core_overlap_used,
+        "market_counts": market_counts,
+        "max_same_market": max_same_market,
         "stake_total": float(open_amt),
         "stake_per_column": float(stake_per_column),
         "unique_non_overlap_available": len(a_non_overlap) + len(b_non_overlap),
