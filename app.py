@@ -24,8 +24,10 @@ FRIDAY_V10_1_PRIMARY = "logs/friday_shortlist_v10_1.json"
 FRIDAY_V10_1_FALLBACKS = [
     "logs/friday_shortlist_v10_1.json",
     "logs/friday_v10_1.json",
-    "logs/friday_shortlist_v10.json",
-    "logs/friday_v10.json",
+]
+FRIDAY_V10_1_GLOBS = [
+    "logs/friday_shortlist_v10_1*.json",
+    "logs/friday_v10_1*.json",
 ]
 
 ADMIN_KEY = os.environ.get("ADMIN_KEY", "").strip()
@@ -266,12 +268,11 @@ def _chunk_thursday_report(report: dict, cursor: int, per_page: int, lite: bool,
     }
 
 def friday_v10_1_file_info():
-    full, rel = resolve_report_path(
+    return resolve_report_path(
         FRIDAY_V10_1_PRIMARY,
         FRIDAY_V10_1_FALLBACKS,
-        ["logs/friday_shortlist_v10_1*.json", "logs/friday_v10_1*.json", "logs/friday_*.json"]
+        FRIDAY_V10_1_GLOBS
     )
-    return full, rel
 
 @app.route("/healthcheck", methods=["GET"])
 def healthcheck():
@@ -382,8 +383,6 @@ def upload_post():
         "data_dir": list_data_dir(),
     })
 
-# ---------------- RUN endpoints ----------------
-
 @app.route("/run/thursday-v3", methods=["GET"])
 def run_thursday():
     guard = require_admin()
@@ -442,8 +441,6 @@ def run_style_builder():
     r = run_script("src/tools/style_builder_v1.py")
     return jsonify({**r, "status": "ok" if r["ok"] else "error", "timestamp": datetime.utcnow().isoformat()})
 
-# ---------------- DOWNLOAD endpoints ----------------
-
 @app.route("/download/thursday-report-v3", methods=["GET"])
 def download_thursday():
     guard = require_admin()
@@ -481,6 +478,7 @@ def download_friday_v10_1():
             "message": "missing Friday V10.1 report",
             "primary": FRIDAY_V10_1_PRIMARY,
             "fallbacks": FRIDAY_V10_1_FALLBACKS,
+            "globs": FRIDAY_V10_1_GLOBS,
             "logs": list_logs_dir()
         }), 404
 
@@ -525,8 +523,6 @@ def download_style():
         return jsonify({"status": "error", "message": "missing", "path": p, "data": list_data_dir()}), 404
 
     return send_file(p, mimetype="application/json", as_attachment=True)
-
-# ---------------- GPT read endpoints ----------------
 
 @app.route("/thursday-analysis-v3", methods=["GET"])
 def gpt_thursday():
@@ -587,7 +583,7 @@ def gpt_friday_v10_1():
     report, error = load_json_report(
         FRIDAY_V10_1_PRIMARY,
         FRIDAY_V10_1_FALLBACKS,
-        ["logs/friday_shortlist_v10_1*.json", "logs/friday_v10_1*.json", "logs/friday_*.json"]
+        FRIDAY_V10_1_GLOBS
     )
 
     if report is None:
