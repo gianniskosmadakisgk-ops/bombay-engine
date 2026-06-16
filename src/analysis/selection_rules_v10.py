@@ -75,8 +75,8 @@ class FunSelectionConfig:
 
 @dataclass(frozen=True)
 class SuperFunSelectionConfig:
-    min_n: int = 10
-    target_n: int = 12
+    min_n: int = 8
+    target_n: int = 10
     max_n: int = 12
 
     min_confirmation: float = 0.66
@@ -180,13 +180,6 @@ def market_probability_ok(row: Dict[str, Any], mode: str) -> bool:
 
 
 def favourite_trap(row: Dict[str, Any]) -> bool:
-    """
-    Reject the exact thing that hurt us:
-    favourite sides without enough separation / style / value.
-
-    It is intentionally simple.
-    The Thursday engine already calculated slow_fav_trap.
-    """
     if bool(row.get("slow_fav_trap")):
         return True
 
@@ -208,10 +201,6 @@ def favourite_trap(row: Dict[str, Any]) -> bool:
 
 
 def over_preferred_over_side(side_row: Dict[str, Any], over_row: Optional[Dict[str, Any]]) -> bool:
-    """
-    If same fixture has a strong Over and a shaky side,
-    prefer Over. User observation: Overs confirm easier than weak sides.
-    """
     if over_row is None:
         return False
 
@@ -239,12 +228,6 @@ def over_preferred_over_side(side_row: Dict[str, Any], over_row: Optional[Dict[s
 
 
 def selection_score(row: Dict[str, Any]) -> float:
-    """
-    One practical score for ordering candidates.
-
-    Value matters, but not blindly.
-    Confirmation + quality keep us away from fake value.
-    """
     prob = sf(row.get("prob"))
     value_pct = sf(row.get("value_pct"))
     confirmation = sf(row.get("confirmation_score"))
@@ -565,12 +548,6 @@ def select_fun(candidates: List[Dict[str, Any]], core_fixture_ids: Optional[set]
 # ============================================================
 
 def select_superfun(core: List[Dict[str, Any]], fun: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
-    """
-    SuperFun is built only from Core + Fun.
-
-    Core has priority.
-    Fun fills the rest.
-    """
     pool: List[Dict[str, Any]] = []
 
     for row in core:
