@@ -1,4 +1,3 @@
-# filename: app.py
 import os
 import json
 import subprocess
@@ -20,7 +19,6 @@ def abs_path(rel_path: str) -> str:
 LOGS_DIR = abs_path("logs")
 DATA_DIR = abs_path("data")
 
-# Optional admin protection
 ADMIN_KEY = os.environ.get("ADMIN_KEY", "").strip()
 
 def require_admin():
@@ -63,18 +61,18 @@ def run_script(script_rel_path: str):
             print(stderr, flush=True)
 
         return {
-            "ok": (result.returncode == 0),
+            "ok": result.returncode == 0,
             "return_code": result.returncode,
             "stdout": stdout,
             "stderr": stderr,
             "script": script_rel_path,
         }
+
     except subprocess.TimeoutExpired:
         msg = f"Timeout: script exceeded {SCRIPT_TIMEOUT_SEC}s"
-        print(f"⏳ {msg} ({script_rel_path})", flush=True)
         return {"ok": False, "return_code": -2, "stdout": "", "stderr": msg, "script": script_rel_path}
+
     except Exception as e:
-        print(f"❌ Error running {script_rel_path}: {e}", flush=True)
         return {"ok": False, "return_code": -1, "stdout": "", "stderr": str(e), "script": script_rel_path}
 
 def atomic_write_json(full_path: str, obj: dict):
@@ -103,6 +101,7 @@ def list_dir(p: str):
     try:
         if not os.path.exists(p):
             return {"exists": False, "path": p, "files": []}
+
         files = []
         for name in sorted(os.listdir(p)):
             fp = os.path.join(p, name)
@@ -114,7 +113,9 @@ def list_dir(p: str):
                 })
             except Exception:
                 files.append({"name": name})
+
         return {"exists": True, "path": p, "files": files}
+
     except Exception as e:
         return {"exists": None, "path": p, "error": str(e), "files": []}
 
@@ -125,10 +126,6 @@ def list_data_dir():
     return list_dir(DATA_DIR)
 
 def _tz_convert_date_time(date_str: str, time_str: str, tz_name: str):
-    """
-    Display-only conversion: assumes date+time are UTC.
-    Returns (date_out, time_out) in tz_name, or (None, None) if cannot convert.
-    """
     if not ZoneInfo:
         return None, None
     if not date_str or not time_str:
@@ -142,14 +139,15 @@ def _tz_convert_date_time(date_str: str, time_str: str, tz_name: str):
 
 def _slim_fixture_for_display(fx: dict):
     keep = {
-        "fixture_id","date","time","league","league_id","home","away",
-        "home_prob","draw_prob","away_prob","over_2_5_prob","under_2_5_prob",
-        "fair_1","fair_x","fair_2","fair_over_2_5","fair_under_2_5",
-        "offered_1","offered_x","offered_2","offered_over_2_5","offered_under_2_5",
-        "value_pct_1","value_pct_x","value_pct_2","value_pct_over","value_pct_under",
-        "ev_1","ev_x","ev_2","ev_over","ev_under",
-        "odds_match","flags"
+        "fixture_id", "date", "time", "league", "league_id", "home", "away",
+        "home_prob", "draw_prob", "away_prob", "over_2_5_prob", "under_2_5_prob",
+        "fair_1", "fair_x", "fair_2", "fair_over_2_5", "fair_under_2_5",
+        "offered_1", "offered_x", "offered_2", "offered_over_2_5", "offered_under_2_5",
+        "value_pct_1", "value_pct_x", "value_pct_2", "value_pct_over", "value_pct_under",
+        "ev_1", "ev_x", "ev_2", "ev_over", "ev_under",
+        "odds_match", "flags"
     }
+
     out = {k: fx.get(k) for k in keep if k in fx}
 
     flags = fx.get("flags") or {}
@@ -180,22 +178,25 @@ def _slim_fixture_for_display(fx: dict):
         "grade": om.get("grade"),
         "reason": om.get("reason"),
     }
+
     return out
 
 def _chunk_thursday_report(report: dict, cursor: int, per_page: int, lite: bool, tz: str):
     fixtures = report.get("fixtures") or []
     league_order = report.get("engine_leagues")
+
     if not isinstance(league_order, list) or not league_order:
         league_order = sorted({(f.get("league") or "") for f in fixtures if f.get("league")})
-    total_leagues = len(league_order)
 
+    total_leagues = len(league_order)
     cursor = max(0, int(cursor))
     per_page = max(1, min(3, int(per_page)))
+
     start = cursor * per_page
     end = start + per_page
     leagues_slice = league_order[start:end]
 
-    fx_slice = [f for f in fixtures if (f.get("league") in leagues_slice)]
+    fx_slice = [f for f in fixtures if f.get("league") in leagues_slice]
 
     if lite:
         fx_slice = [_slim_fixture_for_display(f) for f in fx_slice]
@@ -207,11 +208,9 @@ def _chunk_thursday_report(report: dict, cursor: int, per_page: int, lite: bool,
             f["date_gr"] = dgr
             f["time_gr"] = tgr
 
-    next_cursor = None
-    if end < total_leagues:
-        next_cursor = cursor + 1
+    next_cursor = cursor + 1 if end < total_leagues else None
 
-    out_report = {
+    return {
         "generated_at": report.get("generated_at"),
         "season_used": report.get("season_used"),
         "window": report.get("window"),
@@ -228,7 +227,6 @@ def _chunk_thursday_report(report: dict, cursor: int, per_page: int, lite: bool,
             "tz": tz_name,
         }
     }
-    return out_report
 
 @app.route("/healthcheck", methods=["GET"])
 def healthcheck():
@@ -243,6 +241,7 @@ def debug_logs():
     guard = require_admin()
     if guard:
         return guard
+
     return jsonify({
         "status": "ok",
         "timestamp": datetime.utcnow().isoformat(),
@@ -260,10 +259,11 @@ UPLOAD_HTML = """<!doctype html>
   <form method="post" action="/upload" enctype="multipart/form-data">
     <label>Τύπος</label>
     <select name="kind">
-      <option value="thursday">Thursday report (logs/thursday_report_v3.json)</option>
-      <option value="friday">Friday shortlist (logs/friday_shortlist_v3.json)</option>
-      <option value="tuesday">Tuesday recap (logs/tuesday_recap_v3.json)</option>
-      <option value="history">Tuesday history (logs/tuesday_history_v3.json)</option>
+      <option value="thursday">Thursday report V3 (logs/thursday_report_v3.json)</option>
+      <option value="friday">Friday shortlist V3 (logs/friday_shortlist_v3.json)</option>
+      <option value="friday_v10_1">Friday shortlist V10.1 (logs/friday_shortlist_v10_1.json)</option>
+      <option value="tuesday">Tuesday recap V3 (logs/tuesday_recap_v3.json)</option>
+      <option value="history">Tuesday history V3 (logs/tuesday_history_v3.json)</option>
       <option value="style">Style metrics (data/team_style_metrics.json)</option>
       <option value="domestic_history">Domestic history (data/team_domestic_history_last5.json)</option>
       <option value="market_values">Market values (data/team_market_values.json)</option>
@@ -292,6 +292,7 @@ def upload_post():
 
     kind = (request.form.get("kind") or "").strip().lower()
     f = request.files.get("file")
+
     if not f:
         return jsonify({"status": "error", "message": "missing file"}), 400
 
@@ -300,17 +301,16 @@ def upload_post():
     except Exception as e:
         return jsonify({"status": "error", "message": f"invalid json: {e}"}), 400
 
-    # LOGS targets
     if kind == "thursday":
         rel = "logs/thursday_report_v3.json"
     elif kind == "friday":
         rel = "logs/friday_shortlist_v3.json"
+    elif kind == "friday_v10_1":
+        rel = "logs/friday_shortlist_v10_1.json"
     elif kind == "tuesday":
         rel = "logs/tuesday_recap_v3.json"
     elif kind == "history":
         rel = "logs/tuesday_history_v3.json"
-
-    # DATA targets (THIS is the fix)
     elif kind == "style":
         rel = "data/team_style_metrics.json"
     elif kind == "domestic_history":
@@ -321,6 +321,7 @@ def upload_post():
         return jsonify({"status": "error", "message": "invalid kind"}), 400
 
     full = save_json_report(rel, payload)
+
     return jsonify({
         "status": "ok",
         "timestamp": datetime.utcnow().isoformat(),
@@ -332,7 +333,8 @@ def upload_post():
         "data_dir": list_data_dir(),
     })
 
-# ---------------- RUN endpoints (manual runs) ----------------
+# ---------------- RUN endpoints ----------------
+
 @app.route("/run/thursday-v3", methods=["GET"])
 def run_thursday():
     guard = require_admin()
@@ -349,6 +351,18 @@ def run_friday():
     r = run_script("src/analysis/friday_shortlist_v3.py")
     return jsonify({**r, "status": "ok" if r["ok"] else "error", "timestamp": datetime.utcnow().isoformat()})
 
+@app.route("/run/friday-v10-1", methods=["GET"])
+def run_friday_v10_1():
+    guard = require_admin()
+    if guard:
+        return guard
+    r = run_script("src/analysis/friday_shortlist_v10_1.py")
+    return jsonify({**r, "status": "ok" if r["ok"] else "error", "timestamp": datetime.utcnow().isoformat()})
+
+@app.route("/run/friday-shortlist-v10-1", methods=["GET"])
+def run_friday_shortlist_v10_1_alias():
+    return run_friday_v10_1()
+
 @app.route("/run/tuesday-recap-v3", methods=["GET"])
 def run_tuesday():
     guard = require_admin()
@@ -361,7 +375,6 @@ def run_tuesday():
 def run_tuesday_alias():
     return run_tuesday()
 
-# optional: run style builder on server (if you ever want)
 @app.route("/run/style-builder-v1", methods=["GET"])
 def run_style_builder():
     guard = require_admin()
@@ -371,14 +384,17 @@ def run_style_builder():
     return jsonify({**r, "status": "ok" if r["ok"] else "error", "timestamp": datetime.utcnow().isoformat()})
 
 # ---------------- DOWNLOAD endpoints ----------------
+
 @app.route("/download/thursday-report-v3", methods=["GET"])
 def download_thursday():
     guard = require_admin()
     if guard:
         return guard
+
     p = abs_path("logs/thursday_report_v3.json")
     if not os.path.exists(p):
-        return jsonify({"status":"error","message":"missing","path":p,"logs":list_logs_dir()}), 404
+        return jsonify({"status": "error", "message": "missing", "path": p, "logs": list_logs_dir()}), 404
+
     return send_file(p, mimetype="application/json", as_attachment=True)
 
 @app.route("/download/friday-shortlist-v3", methods=["GET"])
@@ -386,19 +402,39 @@ def download_friday():
     guard = require_admin()
     if guard:
         return guard
+
     p = abs_path("logs/friday_shortlist_v3.json")
     if not os.path.exists(p):
-        return jsonify({"status":"error","message":"missing","path":p,"logs":list_logs_dir()}), 404
+        return jsonify({"status": "error", "message": "missing", "path": p, "logs": list_logs_dir()}), 404
+
     return send_file(p, mimetype="application/json", as_attachment=True)
+
+@app.route("/download/friday-v10-1", methods=["GET"])
+def download_friday_v10_1():
+    guard = require_admin()
+    if guard:
+        return guard
+
+    p = abs_path("logs/friday_shortlist_v10_1.json")
+    if not os.path.exists(p):
+        return jsonify({"status": "error", "message": "missing", "path": p, "logs": list_logs_dir()}), 404
+
+    return send_file(p, mimetype="application/json", as_attachment=True)
+
+@app.route("/download/friday-shortlist-v10-1", methods=["GET"])
+def download_friday_shortlist_v10_1_alias():
+    return download_friday_v10_1()
 
 @app.route("/download/tuesday-recap-v3", methods=["GET"])
 def download_tuesday_recap():
     guard = require_admin()
     if guard:
         return guard
+
     p = abs_path("logs/tuesday_recap_v3.json")
     if not os.path.exists(p):
-        return jsonify({"status":"error","message":"missing","path":p,"logs":list_logs_dir()}), 404
+        return jsonify({"status": "error", "message": "missing", "path": p, "logs": list_logs_dir()}), 404
+
     return send_file(p, mimetype="application/json", as_attachment=True)
 
 @app.route("/download/tuesday-history-v3", methods=["GET"])
@@ -406,28 +442,39 @@ def download_tuesday_history():
     guard = require_admin()
     if guard:
         return guard
+
     p = abs_path("logs/tuesday_history_v3.json")
     if not os.path.exists(p):
-        return jsonify({"status":"error","message":"missing","path":p,"logs":list_logs_dir()}), 404
+        return jsonify({"status": "error", "message": "missing", "path": p, "logs": list_logs_dir()}), 404
+
     return send_file(p, mimetype="application/json", as_attachment=True)
 
-# download current style (so you can verify server is using your upload)
 @app.route("/download/style-metrics", methods=["GET"])
 def download_style():
     guard = require_admin()
     if guard:
         return guard
+
     p = abs_path("data/team_style_metrics.json")
     if not os.path.exists(p):
-        return jsonify({"status":"error","message":"missing","path":p,"data":list_data_dir()}), 404
+        return jsonify({"status": "error", "message": "missing", "path": p, "data": list_data_dir()}), 404
+
     return send_file(p, mimetype="application/json", as_attachment=True)
 
-# ---------------- GPT read endpoints (report-only) ----------------
+# ---------------- GPT read endpoints ----------------
+
 @app.route("/thursday-analysis-v3", methods=["GET"])
 def gpt_thursday():
     report, error = load_json_report("logs/thursday_report_v3.json")
+
     if report is None:
-        return jsonify({"status":"error","message":"Thursday report not available","error":error,"timestamp":datetime.utcnow().isoformat(),"report":None}), 404
+        return jsonify({
+            "status": "error",
+            "message": "Thursday report not available",
+            "error": error,
+            "timestamp": datetime.utcnow().isoformat(),
+            "report": None
+        }), 404
 
     cursor = request.args.get("cursor", "0")
     per_page = request.args.get("per_page", "2")
@@ -437,23 +484,80 @@ def gpt_thursday():
     try:
         chunked = _chunk_thursday_report(report, int(cursor), int(per_page), bool(lite), tz)
     except Exception as e:
-        return jsonify({"status":"error","message":"Thursday report chunking failed","error":str(e),"timestamp":datetime.utcnow().isoformat(),"report":None}), 500
+        return jsonify({
+            "status": "error",
+            "message": "Thursday report chunking failed",
+            "error": str(e),
+            "timestamp": datetime.utcnow().isoformat(),
+            "report": None
+        }), 500
 
-    return jsonify({"status":"ok","timestamp":datetime.utcnow().isoformat(),"report":chunked})
+    return jsonify({
+        "status": "ok",
+        "timestamp": datetime.utcnow().isoformat(),
+        "report": chunked
+    })
 
 @app.route("/friday-shortlist-v3", methods=["GET"])
 def gpt_friday():
     report, error = load_json_report("logs/friday_shortlist_v3.json")
+
     if report is None:
-        return jsonify({"status":"error","message":"Friday shortlist v3 not available","error":error,"timestamp":datetime.utcnow().isoformat(),"report":None}), 404
-    return jsonify({"status":"ok","timestamp":datetime.utcnow().isoformat(),"report":report})
+        return jsonify({
+            "status": "error",
+            "message": "Friday shortlist v3 not available",
+            "error": error,
+            "timestamp": datetime.utcnow().isoformat(),
+            "report": None
+        }), 404
+
+    return jsonify({
+        "status": "ok",
+        "timestamp": datetime.utcnow().isoformat(),
+        "report": report
+    })
+
+@app.route("/friday-v10-1", methods=["GET"])
+def gpt_friday_v10_1():
+    report, error = load_json_report("logs/friday_shortlist_v10_1.json")
+
+    if report is None:
+        return jsonify({
+            "status": "error",
+            "message": "Friday shortlist V10.1 not available",
+            "error": error,
+            "timestamp": datetime.utcnow().isoformat(),
+            "report": None
+        }), 404
+
+    return jsonify({
+        "status": "ok",
+        "timestamp": datetime.utcnow().isoformat(),
+        "report": report
+    })
+
+@app.route("/friday-shortlist-v10-1", methods=["GET"])
+def gpt_friday_shortlist_v10_1_alias():
+    return gpt_friday_v10_1()
 
 @app.route("/tuesday-recap", methods=["GET"])
 def gpt_tuesday():
     report, error = load_json_report("logs/tuesday_recap_v3.json")
+
     if report is None:
-        return jsonify({"status":"error","message":"Tuesday recap v3 not available","error":error,"timestamp":datetime.utcnow().isoformat(),"report":None}), 404
-    return jsonify({"status":"ok","timestamp":datetime.utcnow().isoformat(),"report":report})
+        return jsonify({
+            "status": "error",
+            "message": "Tuesday recap v3 not available",
+            "error": error,
+            "timestamp": datetime.utcnow().isoformat(),
+            "report": None
+        }), 404
+
+    return jsonify({
+        "status": "ok",
+        "timestamp": datetime.utcnow().isoformat(),
+        "report": report
+    })
 
 @app.route("/tuesday-recap-v3", methods=["GET"])
 def gpt_tuesday_v3():
