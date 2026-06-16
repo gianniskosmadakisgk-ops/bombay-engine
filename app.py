@@ -564,7 +564,17 @@ def run_tuesday():
         return guard
 
     r = run_script("src/analysis/tuesday_recap_v3.py")
-    persist_result = persist_file("tuesday-recap-v3") if r["ok"] else {"status": "skipped", "reason": "script_failed"}
+
+    if r["ok"]:
+        persist_result = {
+            "recap": persist_file("tuesday-recap-v3"),
+            "history": persist_file("tuesday-history-v3"),
+        }
+    else:
+        persist_result = {
+            "status": "skipped",
+            "reason": "script_failed"
+        }
 
     return jsonify({
         **r,
