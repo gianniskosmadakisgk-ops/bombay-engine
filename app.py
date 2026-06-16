@@ -1,5 +1,6 @@
 import os
 import json
+import glob
 import subprocess
 from datetime import datetime
 from flask import Flask, jsonify, send_file, request, Response
@@ -18,6 +19,14 @@ def abs_path(rel_path: str) -> str:
 
 LOGS_DIR = abs_path("logs")
 DATA_DIR = abs_path("data")
+
+FRIDAY_V10_1_PRIMARY = "logs/friday_shortlist_v10_1.json"
+FRIDAY_V10_1_FALLBACKS = [
+    "logs/friday_shortlist_v10_1.json",
+    "logs/friday_v10_1.json",
+    "logs/friday_shortlist_v10.json",
+    "logs/friday_v10.json",
+]
 
 ADMIN_KEY = os.environ.get("ADMIN_KEY", "").strip()
 
@@ -82,13 +91,41 @@ def atomic_write_json(full_path: str, obj: dict):
         json.dump(obj, f, ensure_ascii=False, indent=2)
     os.replace(tmp_path, full_path)
 
-def load_json_report(report_rel_path: str):
-    full_path = abs_path(report_rel_path)
-    if not os.path.exists(full_path):
-        return None, f"Report file not found: {full_path}"
+def resolve_report_path(primary_rel_path: str, fallback_rel_paths=None, glob_patterns=None):
+    candidates = []
+
+    for rel in [primary_rel_path] + (fallback_rel_paths or []):
+        if rel and rel not in candidates:
+            candidates.append(rel)
+
+    for rel in candidates:
+        full = abs_path(rel)
+        if os.path.exists(full):
+            return full, rel
+
+    matches = []
+    for pattern in (glob_patterns or []):
+        matches.extend(glob.glob(abs_path(pattern)))
+
+    matches = [p for p in matches if os.path.isfile(p)]
+
+    if matches:
+        latest = max(matches, key=os.path.getmtime)
+        rel_latest = os.path.relpath(latest, PROJECT_ROOT)
+        return latest, rel_latest
+
+    return None, None
+
+def load_json_report(report_rel_path: str, fallback_rel_paths=None, glob_patterns=None):
+    full_path, resolved_rel = resolve_report_path(report_rel_path, fallback_rel_paths, glob_patterns)
+
+    if not full_path:
+        return None, f"Report file not found. Tried primary={report_rel_path}, fallbacks={fallback_rel_paths}, globs={glob_patterns}"
+
     try:
         with open(full_path, "r", encoding="utf-8") as f:
-            return json.load(f), None
+            obj = json.load(f)
+        return obj, None
     except Exception as e:
         return None, f"Failed to load report file {full_path}: {e}"
 
@@ -228,6 +265,14 @@ def _chunk_thursday_report(report: dict, cursor: int, per_page: int, lite: bool,
         }
     }
 
+def friday_v10_1_file_info():
+    full, rel = resolve_report_path(
+        FRIDAY_V10_1_PRIMARY,
+        FRIDAY_V10_1_FALLBACKS,
+        ["logs/friday_shortlist_v10_1*.json", "logs/friday_v10_1*.json", "logs/friday_*.json"]
+    )
+    return full, rel
+
 @app.route("/healthcheck", methods=["GET"])
 def healthcheck():
     return jsonify({
@@ -242,10 +287,14 @@ def debug_logs():
     if guard:
         return guard
 
+    friday_full, friday_rel = friday_v10_1_file_info()
+
     return jsonify({
         "status": "ok",
         "timestamp": datetime.utcnow().isoformat(),
         "project_root": PROJECT_ROOT,
+        "friday_v10_1_resolved": friday_rel,
+        "friday_v10_1_full_path": friday_full,
         "logs": list_logs_dir(),
         "data": list_data_dir(),
     })
@@ -255,7 +304,7 @@ UPLOAD_HTML = """<!doctype html>
 <head><meta charset="utf-8"/><title>Bombay Upload</title></head>
 <body style="font-family:Arial;margin:24px">
   <h2>Upload JSON into server</h2>
-  <p><b>Important:</b> Style MUST be uploaded to <code>data/team_style_metrics.json</code> so Thursday reads it.</p>
+  <p><b>Important:</b> Render free storage is temporary. Upload Thursday again after redeploy/sleep if needed.</p>
   <form method="post" action="/upload" enctype="multipart/form-data">
     <label>Τύπος</label>
     <select name="kind">
@@ -306,7 +355,7 @@ def upload_post():
     elif kind == "friday":
         rel = "logs/friday_shortlist_v3.json"
     elif kind == "friday_v10_1":
-        rel = "logs/friday_shortlist_v10_1.json"
+        rel = FRIDAY_V10_1_PRIMARY
     elif kind == "tuesday":
         rel = "logs/tuesday_recap_v3.json"
     elif kind == "history":
@@ -356,8 +405,18 @@ def run_friday_v10_1():
     guard = require_admin()
     if guard:
         return guard
+
     r = run_script("src/analysis/friday_shortlist_v10_1.py")
-    return jsonify({**r, "status": "ok" if r["ok"] else "error", "timestamp": datetime.utcnow().isoformat()})
+    friday_full, friday_rel = friday_v10_1_file_info()
+
+    return jsonify({
+        **r,
+        "status": "ok" if r["ok"] else "error",
+        "timestamp": datetime.utcnow().isoformat(),
+        "friday_v10_1_resolved": friday_rel,
+        "friday_v10_1_full_path": friday_full,
+        "logs_dir": list_logs_dir(),
+    })
 
 @app.route("/run/friday-shortlist-v10-1", methods=["GET"])
 def run_friday_shortlist_v10_1_alias():
@@ -415,9 +474,15 @@ def download_friday_v10_1():
     if guard:
         return guard
 
-    p = abs_path("logs/friday_shortlist_v10_1.json")
-    if not os.path.exists(p):
-        return jsonify({"status": "error", "message": "missing", "path": p, "logs": list_logs_dir()}), 404
+    p, rel = friday_v10_1_file_info()
+    if not p:
+        return jsonify({
+            "status": "error",
+            "message": "missing Friday V10.1 report",
+            "primary": FRIDAY_V10_1_PRIMARY,
+            "fallbacks": FRIDAY_V10_1_FALLBACKS,
+            "logs": list_logs_dir()
+        }), 404
 
     return send_file(p, mimetype="application/json", as_attachment=True)
 
@@ -519,7 +584,11 @@ def gpt_friday():
 
 @app.route("/friday-v10-1", methods=["GET"])
 def gpt_friday_v10_1():
-    report, error = load_json_report("logs/friday_shortlist_v10_1.json")
+    report, error = load_json_report(
+        FRIDAY_V10_1_PRIMARY,
+        FRIDAY_V10_1_FALLBACKS,
+        ["logs/friday_shortlist_v10_1*.json", "logs/friday_v10_1*.json", "logs/friday_*.json"]
+    )
 
     if report is None:
         return jsonify({
@@ -527,12 +596,16 @@ def gpt_friday_v10_1():
             "message": "Friday shortlist V10.1 not available",
             "error": error,
             "timestamp": datetime.utcnow().isoformat(),
-            "report": None
+            "report": None,
+            "logs": list_logs_dir()
         }), 404
+
+    friday_full, friday_rel = friday_v10_1_file_info()
 
     return jsonify({
         "status": "ok",
         "timestamp": datetime.utcnow().isoformat(),
+        "resolved_file": friday_rel,
         "report": report
     })
 
