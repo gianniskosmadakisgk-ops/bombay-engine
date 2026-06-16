@@ -17,7 +17,7 @@ It only decides:
 - bankroll defaults
 - weekly exposure targets
 - hard caps
-- Core single stake sizing
+- Core stake distribution
 - FunBet system stake
 - SuperFun system stake
 - system k/n rules
@@ -37,7 +37,7 @@ from typing import Any, Dict, List, Optional, Tuple
 @dataclass(frozen=True)
 class CorePolicy:
     bankroll_default: float = 1000.0
-    target_exposure: float = 160.0
+    target_exposure: float = 170.0
     hard_cap: float = 180.0
 
     elite_stake: float = 50.0
@@ -75,8 +75,8 @@ SUPERFUN_POLICY = SystemPolicy(
     bankroll_default=500.0,
     target_stake=50.0,
     hard_cap=60.0,
-    min_picks=10,
-    soft_target_picks=12,
+    min_picks=8,
+    soft_target_picks=10,
     max_picks=12,
 )
 
@@ -116,16 +116,6 @@ def round_money(value: Any) -> float:
 # ============================================================
 
 def core_stake_from_rating(rating: str) -> float:
-    """
-    CoreBet is singles only.
-
-    Ratings expected:
-    - ELITE
-    - STRONG
-    - NORMAL
-
-    Unknown rating falls back to NORMAL.
-    """
     r = str(rating or "").strip().upper()
 
     if r == "ELITE":
@@ -145,12 +135,6 @@ def core_rating_from_score(
     odds_grade: str,
     slow_fav_trap: bool = False,
 ) -> str:
-    """
-    Converts candidate metrics into a money rating.
-
-    This is intentionally strict.
-    We do not want 7 fake “strong” bets.
-    """
     conf = safe_float(confirmation_score)
     q = safe_float(quality)
     v = safe_float(value_pct)
@@ -160,58 +144,93 @@ def core_rating_from_score(
     if slow_fav_trap:
         return "NORMAL"
 
-    if (
-        conf >= 0.86
-        and q >= 0.75
-        and v >= 8.0
-        and p >= 0.54
-        and grade in ("A", "B")
-    ):
+    if conf >= 0.86 and q >= 0.75 and v >= 8.0 and p >= 0.54 and grade in ("A", "B"):
         return "ELITE"
 
-    if (
-        conf >= 0.80
-        and q >= 0.68
-        and v >= 5.0
-        and p >= 0.51
-        and grade in ("A", "B")
-    ):
+    if conf >= 0.80 and q >= 0.68 and v >= 5.0 and p >= 0.51 and grade in ("A", "B"):
         return "STRONG"
 
     return "NORMAL"
 
 
+def _redistribute_core_stakes(lines: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], float, Dict[str, Any]]:
+    """
+    Keeps all selected Core picks up to max_picks.
+    Then redistributes stake inside hard cap instead of dropping picks.
+    """
+    n = len(lines)
+    if n <= 0:
+        return [], 0.0, {
+            "redistribution": "no_picks",
+            "target_exposure": CORE_POLICY.target_exposure,
+            "hard_cap": CORE_POLICY.hard_cap,
+        }
+
+    base_by_n = {
+        1: [50],
+        2: [50, 50],
+        3: [50, 50, 40],
+        4: [45, 45, 40, 40],
+        5: [40, 40, 35, 35, 30],
+    }
+
+    stakes = base_by_n.get(n, [30] * n)
+    total = sum(stakes)
+
+    if total > CORE_POLICY.hard_cap:
+        scale = CORE_POLICY.hard_cap / total
+        stakes = [max(20, round((s * scale) / 5) * 5) for s in stakes]
+
+    total = sum(stakes)
+
+    if total > CORE_POLICY.hard_cap:
+        overflow = total - CORE_POLICY.hard_cap
+        i = len(stakes) - 1
+        while overflow > 0 and i >= 0:
+            reducible = max(0, stakes[i] - 20)
+            cut = min(reducible, overflow)
+            stakes[i] -= cut
+            overflow -= cut
+            i -= 1
+
+    out = []
+    for row, stake in zip(lines, stakes):
+        x = dict(row)
+        x["stake"] = round_money(stake)
+        out.append(x)
+
+    exposure = round_money(sum(stakes))
+
+    return out, exposure, {
+        "redistribution": "keep_all_selected_inside_cap",
+        "selected_before_money": n,
+        "stakes": stakes,
+        "target_exposure": CORE_POLICY.target_exposure,
+        "hard_cap": CORE_POLICY.hard_cap,
+        "open": exposure,
+    }
+
+
 def apply_core_exposure_cap(lines: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """
     Receives already-ranked Core lines.
-    Adds stakes.
-    Stops before hard cap.
-
-    Expected order:
-    strongest first.
+    Keeps up to 5 and redistributes stakes inside cap.
     """
     selected: List[Dict[str, Any]] = []
-    exposure = 0.0
 
     for line in lines:
         if len(selected) >= CORE_POLICY.max_picks:
             break
 
         rating = str(line.get("money_rating") or line.get("rating") or "NORMAL").upper()
-        stake = core_stake_from_rating(rating)
-
-        if exposure + stake > CORE_POLICY.hard_cap:
-            continue
-
         row = dict(line)
         row["money_rating"] = rating
-        row["stake"] = round_money(stake)
-
         selected.append(row)
-        exposure += stake
+
+    selected, exposure, redistribution_debug = _redistribute_core_stakes(selected)
 
     debug = {
-        "policy": "core_singles_v10",
+        "policy": "core_singles_v10_redistributed",
         "bankroll_default": CORE_POLICY.bankroll_default,
         "target_exposure": CORE_POLICY.target_exposure,
         "hard_cap": CORE_POLICY.hard_cap,
@@ -220,6 +239,7 @@ def apply_core_exposure_cap(lines: List[Dict[str, Any]]) -> Tuple[List[Dict[str,
         "max_picks": CORE_POLICY.max_picks,
         "selected_picks": len(selected),
         "open": round_money(exposure),
+        "redistribution": redistribution_debug,
     }
 
     return selected, debug
@@ -230,41 +250,18 @@ def apply_core_exposure_cap(lines: List[Dict[str, Any]]) -> Tuple[List[Dict[str,
 # ============================================================
 
 def fun_system_shape(n: int) -> Tuple[int, str]:
-    """
-    FunBet system shape.
-
-    Current preferred logic:
-    - 6 picks => 3/6
-    - 7 picks => 4/7
-
-    Why:
-    FunBet is not lottery. It is controlled upside.
-    """
     n = safe_int(n)
 
     if n >= 7:
         return 4, "4/7"
 
-    if n >= 6:
+    if n == 6:
         return 3, "3/6"
 
-    if n > 0:
-        return max(1, n - 3), f"{max(1, n - 3)}/{n}"
-
-    return 0, "0/0"
+    return 0, "NO BET"
 
 
 def superfun_system_shape(n: int) -> Tuple[int, str]:
-    """
-    SuperFun system shape.
-
-    Current preferred logic:
-    - 10 picks => 6/10
-    - 11 picks => 7/11
-    - 12 picks => 8/12
-
-    This is lottery/upside, but not random garbage.
-    """
     n = safe_int(n)
 
     if n >= 12:
@@ -276,10 +273,13 @@ def superfun_system_shape(n: int) -> Tuple[int, str]:
     if n == 10:
         return 6, "6/10"
 
-    if n > 0:
-        return max(1, n - 4), f"{max(1, n - 4)}/{n}"
+    if n == 9:
+        return 5, "5/9"
 
-    return 0, "0/0"
+    if n == 8:
+        return 5, "5/8"
+
+    return 0, "NO BET"
 
 
 def system_columns(n: int, k: int) -> int:
@@ -297,25 +297,44 @@ def build_system_bet(
     mode: str,
     requested_stake: Optional[float] = None,
 ) -> Dict[str, Any]:
-    """
-    Builds system metadata only.
-
-    mode:
-    - fun
-    - superfun
-    """
     mode_clean = str(mode or "").strip().lower()
 
     if mode_clean == "fun":
         policy = FUN_POLICY
+        min_picks = FUN_POLICY.min_picks
         k, target = fun_system_shape(len(picks))
     elif mode_clean == "superfun":
         policy = SUPERFUN_POLICY
+        min_picks = SUPERFUN_POLICY.min_picks
         k, target = superfun_system_shape(len(picks))
     else:
         raise ValueError(f"Unknown system mode: {mode}")
 
     n = len(picks)
+
+    if n < min_picks or k <= 0:
+        return {
+            "mode": mode_clean,
+            "status": "no_bet",
+            "reason": "not_enough_picks",
+            "n": n,
+            "k": 0,
+            "target": "NO BET",
+            "columns": 0,
+            "stake_total": 0.0,
+            "stake": 0.0,
+            "stake_per_column": 0.0,
+            "min_hits": 0,
+            "policy": {
+                "bankroll_default": policy.bankroll_default,
+                "target_stake": policy.target_stake,
+                "hard_cap": policy.hard_cap,
+                "min_picks": policy.min_picks,
+                "soft_target_picks": policy.soft_target_picks,
+                "max_picks": policy.max_picks,
+            },
+        }
+
     columns = system_columns(n, k)
 
     stake_total = safe_float(requested_stake, policy.target_stake)
@@ -325,6 +344,7 @@ def build_system_bet(
 
     return {
         "mode": mode_clean,
+        "status": "active",
         "n": n,
         "k": k,
         "target": target,
@@ -358,16 +378,6 @@ def default_bankrolls() -> Dict[str, float]:
 
 
 def normalize_history_bankrolls(history: Optional[Dict[str, Any]]) -> Dict[str, float]:
-    """
-    Reads current bankrolls from history.
-    Falls back to V10 defaults.
-
-    Supports old key:
-    - draw
-
-    Maps it to:
-    - superfun
-    """
     defaults = default_bankrolls()
 
     if not isinstance(history, dict):
@@ -419,12 +429,20 @@ def bankroll_policy_summary() -> Dict[str, Any]:
             "min_picks": CORE_POLICY.min_picks,
             "soft_target_picks": CORE_POLICY.soft_target_picks,
             "max_picks": CORE_POLICY.max_picks,
+            "stake_distribution": {
+                "1": "50",
+                "2": "50/50",
+                "3": "50/50/40",
+                "4": "45/45/40/40",
+                "5": "40/40/35/35/30",
+            },
         },
         "fun": {
             "bankroll_default": FUN_POLICY.bankroll_default,
             "target_stake": FUN_POLICY.target_stake,
             "hard_cap": FUN_POLICY.hard_cap,
             "system_rules": {
+                "below_6": "NO BET",
                 "6": "3/6",
                 "7": "4/7",
             },
@@ -437,6 +455,9 @@ def bankroll_policy_summary() -> Dict[str, Any]:
             "target_stake": SUPERFUN_POLICY.target_stake,
             "hard_cap": SUPERFUN_POLICY.hard_cap,
             "system_rules": {
+                "below_8": "NO BET",
+                "8": "5/8",
+                "9": "5/9",
                 "10": "6/10",
                 "11": "7/11",
                 "12": "8/12",
