@@ -1,130 +1,419 @@
 {
-  "title": "Bombay Tuesday Recap â v4",
-  "generated_at": "2026-06-17T17:06:50.277402+00:00",
-  "window": {},
-  "week": 1,
+  "title": "Bombay Tuesday Recap — v4",
+  "generated_at": "2026-05-26T08:19:22.065657+00:00",
+  "window": {
+    "from": "2026-05-22",
+    "to": "2026-05-25",
+    "hours": 72
+  },
+  "week": 18,
   "corebet": {
-    "bankroll_start": 0.0,
-    "open": 0.0,
-    "after_open": 0.0,
-    "staked": 0.0,
-    "returned": 0.0,
-    "profit_week": 0.0,
-    "roi_week": null,
-    "won": 0,
-    "lost": 0,
+    "bankroll_start": 651.6,
+    "open": 200.0,
+    "after_open": 451.6,
+    "staked": 200.0,
+    "returned": 132.4,
+    "profit_week": -67.6,
+    "roi_week": -0.338,
+    "won": 2,
+    "lost": 3,
     "unsettled": 0,
-    "bankroll_end": 0.0,
-    "lines": []
+    "bankroll_end": 584.0,
+    "lines": [
+      {
+        "tick": "✅",
+        "date": "2026-05-23",
+        "time_gr": "18:45",
+        "league": "Serie A",
+        "match": "Lazio – Pisa",
+        "market": "Home (1)",
+        "odds": 1.6,
+        "stake": 40.0,
+        "tier": "STRONG",
+        "risk_tag": "A",
+        "quality": 1.0,
+        "fixture_id": 1378237
+      },
+      {
+        "tick": "❌",
+        "date": "2026-05-23",
+        "time_gr": "19:00",
+        "league": "La Liga",
+        "match": "Girona – Elche",
+        "market": "Home (1)",
+        "odds": 1.88,
+        "stake": 40.0,
+        "tier": "STRONG",
+        "risk_tag": "A",
+        "quality": 1.0,
+        "fixture_id": 1391194
+      },
+      {
+        "tick": "✅",
+        "date": "2026-05-23",
+        "time_gr": "19:00",
+        "league": "La Liga",
+        "match": "Real Betis – Levante",
+        "market": "Over 2.5",
+        "odds": 1.71,
+        "stake": 40.0,
+        "tier": "STRONG",
+        "risk_tag": "A",
+        "quality": 1.0,
+        "fixture_id": 1391190
+      },
+      {
+        "tick": "❌",
+        "date": "2026-05-24",
+        "time_gr": "15:00",
+        "league": "Premier League",
+        "match": "Liverpool – Brentford",
+        "market": "Home (1)",
+        "odds": 1.87,
+        "stake": 40.0,
+        "tier": "STRONG",
+        "risk_tag": "A",
+        "quality": 1.0,
+        "fixture_id": 1379343
+      },
+      {
+        "tick": "❌",
+        "date": "2026-05-24",
+        "time_gr": "16:00",
+        "league": "Eredivisie",
+        "match": "Ajax – Utrecht",
+        "market": "Home (1)",
+        "odds": 1.73,
+        "stake": 40.0,
+        "tier": "STRONG",
+        "risk_tag": "A",
+        "quality": 1.0,
+        "fixture_id": 1546052
+      }
+    ]
   },
   "funbet": {
-    "bankroll_start": 0.0,
-    "open": 0.0,
-    "after_open": 0.0,
+    "bankroll_start": 799.97,
+    "open": 35.0,
+    "after_open": 764.97,
     "system": {
-      "n": 0,
-      "k": 0,
-      "columns": 0,
-      "stake": 0.0
+      "n": 6,
+      "k": 3,
+      "columns": 20,
+      "stake": 35.0
     },
     "payout": {
-      "staked": 0.0,
+      "staked": 35.0,
       "returned": 0.0,
-      "profit": 0.0,
-      "roi": null,
+      "profit": -35.0,
+      "roi": -1.0,
       "winning_columns": 0,
-      "stake_per_column": 0.0
+      "stake_per_column": 1.75
     },
-    "profit_week": 0.0,
-    "roi_week": null,
-    "bankroll_end": 0.0,
-    "lines": []
+    "profit_week": -35.0,
+    "roi_week": -1.0,
+    "bankroll_end": 764.97,
+    "lines": [
+      {
+        "tick": "✅",
+        "date": "2026-05-23",
+        "time_gr": "18:45",
+        "league": "Belgium First Division A",
+        "match": "Standard Liege – Charleroi",
+        "market": "Under 2.5",
+        "odds": 1.95,
+        "tier": "A",
+        "risk_tag": "A",
+        "quality": 1.0,
+        "fixture_id": 1536963
+      },
+      {
+        "tick": "❌",
+        "date": "2026-05-23",
+        "time_gr": "19:00",
+        "league": "La Liga",
+        "match": "Celta Vigo – Sevilla",
+        "market": "Over 2.5",
+        "odds": 1.99,
+        "tier": "A",
+        "risk_tag": "A",
+        "quality": 1.0,
+        "fixture_id": 1391191
+      },
+      {
+        "tick": "❌",
+        "date": "2026-05-23",
+        "time_gr": "19:00",
+        "league": "La Liga",
+        "match": "Valencia – Barcelona",
+        "market": "Away (2)",
+        "odds": 1.93,
+        "tier": "A",
+        "risk_tag": "A",
+        "quality": 1.0,
+        "fixture_id": 1391197
+      },
+      {
+        "tick": "✅",
+        "date": "2026-05-24",
+        "time_gr": "15:00",
+        "league": "Premier League",
+        "match": "Tottenham – Everton",
+        "market": "Home (1)",
+        "odds": 1.96,
+        "tier": "A",
+        "risk_tag": "A",
+        "quality": 0.85,
+        "fixture_id": 1379347
+      },
+      {
+        "tick": "❌",
+        "date": "2026-05-24",
+        "time_gr": "16:00",
+        "league": "Serie A",
+        "match": "Napoli – Udinese",
+        "market": "Over 2.5",
+        "odds": 1.96,
+        "tier": "A",
+        "risk_tag": "A",
+        "quality": 1.0,
+        "fixture_id": 1378240
+      },
+      {
+        "tick": "❌",
+        "date": "2026-05-24",
+        "time_gr": "18:45",
+        "league": "Serie A",
+        "match": "Torino – Juventus",
+        "market": "Under 2.5",
+        "odds": 2.18,
+        "tier": "A",
+        "risk_tag": "A",
+        "quality": 1.0,
+        "fixture_id": 1378242
+      }
+    ]
   },
   "superfunbet": {
-    "bankroll_start": 0.0,
-    "open": 0.0,
-    "after_open": 0.0,
+    "bankroll_start": -68.31,
+    "open": 50.0,
+    "after_open": -118.31,
     "system": {
-      "n": 0,
-      "k": 0,
-      "columns": 0,
-      "stake_total": 0.0,
-      "target": null,
-      "mode": null
+      "n": 11,
+      "k": 7,
+      "columns": 330,
+      "stake_total": 50.0,
+      "target": "7/11",
+      "mode": "superfun_from_core_plus_fun"
     },
     "payout": {
-      "staked": 0.0,
+      "staked": 50.0,
       "returned": 0.0,
-      "profit": 0.0,
-      "roi": null,
+      "profit": -50.0,
+      "roi": -1.0,
       "winning_columns": 0,
-      "stake_per_column": 0.0
+      "stake_per_column": 0.1515
     },
-    "profit_week": 0.0,
-    "roi_week": null,
-    "bankroll_end": 0.0,
-    "lines": []
+    "profit_week": -50.0,
+    "roi_week": -1.0,
+    "bankroll_end": -118.31,
+    "lines": [
+      {
+        "tick": "✅",
+        "date": "2026-05-23",
+        "time_gr": "18:45",
+        "league": "Serie A",
+        "match": "Lazio – Pisa",
+        "market": "Home (1)",
+        "odds": 1.6,
+        "tier": "STRONG",
+        "risk_tag": "A",
+        "quality": 1.0,
+        "source": "core",
+        "fixture_id": 1378237
+      },
+      {
+        "tick": "✅",
+        "date": "2026-05-23",
+        "time_gr": "18:45",
+        "league": "Belgium First Division A",
+        "match": "Standard Liege – Charleroi",
+        "market": "Under 2.5",
+        "odds": 1.95,
+        "tier": "A",
+        "risk_tag": "A",
+        "quality": 1.0,
+        "source": "fun",
+        "fixture_id": 1536963
+      },
+      {
+        "tick": "❌",
+        "date": "2026-05-23",
+        "time_gr": "19:00",
+        "league": "La Liga",
+        "match": "Girona – Elche",
+        "market": "Home (1)",
+        "odds": 1.88,
+        "tier": "STRONG",
+        "risk_tag": "A",
+        "quality": 1.0,
+        "source": "core",
+        "fixture_id": 1391194
+      },
+      {
+        "tick": "✅",
+        "date": "2026-05-23",
+        "time_gr": "19:00",
+        "league": "La Liga",
+        "match": "Real Betis – Levante",
+        "market": "Over 2.5",
+        "odds": 1.71,
+        "tier": "STRONG",
+        "risk_tag": "A",
+        "quality": 1.0,
+        "source": "core",
+        "fixture_id": 1391190
+      },
+      {
+        "tick": "❌",
+        "date": "2026-05-23",
+        "time_gr": "19:00",
+        "league": "La Liga",
+        "match": "Celta Vigo – Sevilla",
+        "market": "Over 2.5",
+        "odds": 1.99,
+        "tier": "A",
+        "risk_tag": "A",
+        "quality": 1.0,
+        "source": "fun",
+        "fixture_id": 1391191
+      },
+      {
+        "tick": "❌",
+        "date": "2026-05-23",
+        "time_gr": "19:00",
+        "league": "La Liga",
+        "match": "Valencia – Barcelona",
+        "market": "Away (2)",
+        "odds": 1.93,
+        "tier": "A",
+        "risk_tag": "A",
+        "quality": 1.0,
+        "source": "fun",
+        "fixture_id": 1391197
+      },
+      {
+        "tick": "❌",
+        "date": "2026-05-24",
+        "time_gr": "15:00",
+        "league": "Premier League",
+        "match": "Liverpool – Brentford",
+        "market": "Home (1)",
+        "odds": 1.87,
+        "tier": "STRONG",
+        "risk_tag": "A",
+        "quality": 1.0,
+        "source": "core",
+        "fixture_id": 1379343
+      },
+      {
+        "tick": "✅",
+        "date": "2026-05-24",
+        "time_gr": "15:00",
+        "league": "Premier League",
+        "match": "Tottenham – Everton",
+        "market": "Home (1)",
+        "odds": 1.96,
+        "tier": "A",
+        "risk_tag": "A",
+        "quality": 0.85,
+        "source": "fun",
+        "fixture_id": 1379347
+      },
+      {
+        "tick": "❌",
+        "date": "2026-05-24",
+        "time_gr": "16:00",
+        "league": "Eredivisie",
+        "match": "Ajax – Utrecht",
+        "market": "Home (1)",
+        "odds": 1.73,
+        "tier": "STRONG",
+        "risk_tag": "A",
+        "quality": 1.0,
+        "source": "core",
+        "fixture_id": 1546052
+      },
+      {
+        "tick": "❌",
+        "date": "2026-05-24",
+        "time_gr": "16:00",
+        "league": "Serie A",
+        "match": "Napoli – Udinese",
+        "market": "Over 2.5",
+        "odds": 1.96,
+        "tier": "A",
+        "risk_tag": "A",
+        "quality": 1.0,
+        "source": "fun",
+        "fixture_id": 1378240
+      },
+      {
+        "tick": "❌",
+        "date": "2026-05-24",
+        "time_gr": "18:45",
+        "league": "Serie A",
+        "match": "Torino – Juventus",
+        "market": "Under 2.5",
+        "odds": 2.18,
+        "tier": "A",
+        "risk_tag": "A",
+        "quality": 1.0,
+        "source": "fun",
+        "fixture_id": 1378242
+      }
+    ]
   },
   "system_week": {
-    "stake_total": 0.0,
-    "return_total": 0.0,
-    "profit": 0.0,
-    "roi": null
-  },
-  "learning_memory": {
-    "status": "ok",
-    "last_update_status": "updated",
-    "learning_path": "/opt/render/project/src/logs/market_learning_v1.json",
-    "rows_added_this_run": 0,
-    "summary": {
-      "picks": 0,
-      "settled": 0,
-      "wins": 0,
-      "losses": 0,
-      "unit_stake": 0.0,
-      "unit_return": 0.0,
-      "unit_profit": 0.0,
-      "odds_sum": 0.0,
-      "avg_odds": null,
-      "hit_rate": null,
-      "unit_roi": null
-    },
-    "markets": {}
+    "stake_total": 285.0,
+    "return_total": 132.4,
+    "profit": -152.6,
+    "roi": -0.5354
   },
   "cumulative": {
     "wallets": {
       "core": {
-        "stake_total": 0.0,
-        "return_total": 0.0,
-        "profit": 0.0,
-        "roi": null
+        "stake_total": 4450.0,
+        "return_total": 4234.0,
+        "profit": -216.0,
+        "roi": -0.0485
       },
       "fun": {
-        "stake_total": 0.0,
-        "return_total": 0.0,
-        "profit": 0.0,
-        "roi": null
+        "stake_total": 630.0,
+        "return_total": 994.97,
+        "profit": 364.97,
+        "roi": 0.5793
       },
       "superfun": {
-        "stake_total": 0.0,
-        "return_total": 0.0,
-        "profit": 0.0,
-        "roi": null
+        "stake_total": 720.0,
+        "return_total": 301.69,
+        "profit": -418.31,
+        "roi": -0.581
       }
     },
     "system": {
-      "stake_total": 0.0,
-      "return_total": 0.0,
-      "profit": 0.0,
-      "roi": null
+      "stake_total": 5800.0,
+      "return_total": 5530.66,
+      "profit": -269.34,
+      "roi": -0.0464
     }
   },
   "summary": {
     "missing_fixtures": [],
     "bankrolls_end": {
-      "corebet": 0.0,
-      "funbet": 0.0,
-      "superfunbet": 0.0
+      "corebet": 584.0,
+      "funbet": 764.97,
+      "superfunbet": -118.31
     },
     "history_update_enabled": true
   }
