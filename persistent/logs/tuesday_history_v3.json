@@ -1,45 +1,53 @@
 {
-  "week_count": 1,
-  "as_of": "2026-06-17",
-  "note": "Updated from Week 1 real results. End-of-week bankrolls: Core 0.0 / Fun 0.0 / SuperFun 0.0. Total 0.0. Next run should be Week 2.",
+  "week_count": 17,
+  "as_of": "2026-05-21",
+  "note": "Updated from Week 17 real results. End-of-week bankrolls: Core 651.6 / Fun 799.97 / SuperFun -68.31. Total 1383.26. Next run should be Week 18.",
   "bankroll_current": {
-    "core": 0.0,
-    "fun": 0.0,
-    "draw": 0.0,
-    "total": 0.0
+    "core": 651.6,
+    "fun": 799.97,
+    "draw": -68.31,
+    "total": 1383.26
   },
   "stats": {
     "wallets": {
       "core": {
-        "stake_total": 0.0,
-        "return_total": 0.0,
-        "profit": 0.0,
-        "roi": null
+        "stake_total": 4250.0,
+        "return_total": 4101.6,
+        "profit": -148.4,
+        "roi": -0.0349
       },
       "fun": {
-        "stake_total": 0.0,
-        "return_total": 0.0,
-        "profit": 0.0,
-        "roi": null
+        "stake_total": 595.0,
+        "return_total": 994.97,
+        "profit": 399.97,
+        "roi": 0.6722
       },
       "superfun": {
-        "stake_total": 0.0,
-        "return_total": 0.0,
-        "profit": 0.0,
-        "roi": null
+        "stake_total": 670.0,
+        "return_total": 301.69,
+        "profit": -368.31,
+        "roi": -0.5497
       }
     },
     "system": {
-      "stake_total": 0.0,
-      "return_total": 0.0,
-      "profit": 0.0,
-      "roi": null
+      "stake_total": 5515.0,
+      "return_total": 5398.26,
+      "profit": -116.74,
+      "roi": -0.0212
     }
   },
-  "last_window": {},
+  "last_window": {
+    "from": "2026-05-14",
+    "to": "2026-05-17",
+    "hours": 72
+  },
   "last_applied_friday": {
-    "title": "",
-    "generated_at": "",
-    "window": {}
+    "title": "Bombay Friday — Week 17",
+    "generated_at": "2026-05-14T20:44:20.674707+00:00",
+    "window": {
+      "from": "2026-05-14",
+      "to": "2026-05-17",
+      "hours": 72
+    }
   }
 }
