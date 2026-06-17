@@ -99,10 +99,10 @@ def _sb_env(name: str, default: bool) -> bool:
 
 def _fmt_tick(won: Optional[bool]) -> str:
     if won is True:
-        return "✅"
+        return "â"
     if won is False:
-        return "❌"
-    return "—"
+        return "â"
+    return "â"
 
 
 def _chrono_key(x: Dict[str, Any]) -> Tuple[str, str]:
@@ -118,6 +118,264 @@ def _roi(staked: float, returned: float) -> Optional[float]:
     if st <= 0:
         return None
     return round((float(returned) - st) / st, 4)
+
+
+# -------------------------
+# Learning memory v1
+# -------------------------
+
+LEARNING_MEMORY_PATH = LOGS / "market_learning_v1.json"
+
+
+def _learning_market_key(market: Any) -> str:
+    m = str(market or "").strip().lower()
+    aliases = {
+        "home": "HOME",
+        "home (1)": "HOME",
+        "1": "HOME",
+        "away": "AWAY",
+        "away (2)": "AWAY",
+        "2": "AWAY",
+        "draw": "DRAW",
+        "draw (x)": "DRAW",
+        "x": "DRAW",
+        "over": "OVER_2_5",
+        "over 2.5": "OVER_2_5",
+        "under": "UNDER_2_5",
+        "under 2.5": "UNDER_2_5",
+    }
+    return aliases.get(m, (str(market or "UNKNOWN").strip().upper().replace(" ", "_") or "UNKNOWN"))
+
+
+def _learning_odds_band(odds: Any) -> str:
+    o = _sf(odds, 0.0) or 0.0
+    if o <= 0:
+        return "UNKNOWN"
+    if o < 1.70:
+        return "1.00-1.69"
+    if o < 1.90:
+        return "1.70-1.89"
+    if o < 2.10:
+        return "1.90-2.09"
+    if o < 2.40:
+        return "2.10-2.39"
+    return "2.40+"
+
+
+def _learning_quality_band(quality: Any) -> str:
+    q = _sf(quality, None)
+    if q is None:
+        return "UNKNOWN"
+    if q < 0.60:
+        return "<0.60"
+    if q < 0.70:
+        return "0.60-0.69"
+    if q < 0.80:
+        return "0.70-0.79"
+    if q < 0.90:
+        return "0.80-0.89"
+    return "0.90+"
+
+
+def _learning_empty_bucket() -> Dict[str, Any]:
+    return {
+        "picks": 0,
+        "settled": 0,
+        "wins": 0,
+        "losses": 0,
+        "unit_stake": 0.0,
+        "unit_return": 0.0,
+        "unit_profit": 0.0,
+        "odds_sum": 0.0,
+        "avg_odds": None,
+        "hit_rate": None,
+        "unit_roi": None,
+    }
+
+
+def _learning_add_bucket(bucket: Dict[str, Any], row: Dict[str, Any]) -> None:
+    won = row.get("won")
+    odds = float(_sf(row.get("odds"), 0.0) or 0.0)
+
+    bucket["picks"] = int(bucket.get("picks") or 0) + 1
+    bucket["odds_sum"] = float(bucket.get("odds_sum") or 0.0) + odds
+
+    if won is True:
+        bucket["settled"] = int(bucket.get("settled") or 0) + 1
+        bucket["wins"] = int(bucket.get("wins") or 0) + 1
+        bucket["unit_stake"] = float(bucket.get("unit_stake") or 0.0) + 1.0
+        bucket["unit_return"] = float(bucket.get("unit_return") or 0.0) + max(odds, 0.0)
+    elif won is False:
+        bucket["settled"] = int(bucket.get("settled") or 0) + 1
+        bucket["losses"] = int(bucket.get("losses") or 0) + 1
+        bucket["unit_stake"] = float(bucket.get("unit_stake") or 0.0) + 1.0
+
+    bucket["unit_profit"] = float(bucket.get("unit_return") or 0.0) - float(bucket.get("unit_stake") or 0.0)
+
+
+def _learning_finalize_bucket(bucket: Dict[str, Any]) -> Dict[str, Any]:
+    out = dict(bucket)
+    picks = int(out.get("picks") or 0)
+    settled = int(out.get("settled") or 0)
+    wins = int(out.get("wins") or 0)
+    unit_stake = float(out.get("unit_stake") or 0.0)
+    unit_return = float(out.get("unit_return") or 0.0)
+    odds_sum = float(out.get("odds_sum") or 0.0)
+
+    out["unit_stake"] = round(unit_stake, 2)
+    out["unit_return"] = round(unit_return, 2)
+    out["unit_profit"] = round(unit_return - unit_stake, 2)
+    out["odds_sum"] = round(odds_sum, 2)
+    out["avg_odds"] = round(odds_sum / picks, 3) if picks > 0 else None
+    out["hit_rate"] = round((wins / settled) * 100.0, 2) if settled > 0 else None
+    out["unit_roi"] = round(((unit_return - unit_stake) / unit_stake) * 100.0, 2) if unit_stake > 0 else None
+    return out
+
+
+def _learning_add_group(groups: Dict[str, Dict[str, Any]], key: Any, row: Dict[str, Any]) -> None:
+    k = str(key or "UNKNOWN")
+    if k not in groups:
+        groups[k] = _learning_empty_bucket()
+    _learning_add_bucket(groups[k], row)
+
+
+def _learning_finalize_groups(groups: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    return {k: _learning_finalize_bucket(v) for k, v in sorted(groups.items(), key=lambda x: x[0])}
+
+
+def _learning_build_from_rows(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    markets: Dict[str, Dict[str, Any]] = {}
+    leagues: Dict[str, Dict[str, Any]] = {}
+    wallets: Dict[str, Dict[str, Any]] = {}
+    odds_bands: Dict[str, Dict[str, Any]] = {}
+    quality_bands: Dict[str, Dict[str, Any]] = {}
+    market_by_league: Dict[str, Dict[str, Any]] = {}
+    market_by_odds_band: Dict[str, Dict[str, Any]] = {}
+
+    total = _learning_empty_bucket()
+
+    for row in rows:
+        market = _learning_market_key(row.get("market"))
+        league = str(row.get("league") or "UNKNOWN")
+        wallet = str(row.get("wallet") or "UNKNOWN")
+        ob = _learning_odds_band(row.get("odds"))
+        qb = _learning_quality_band(row.get("quality"))
+
+        _learning_add_bucket(total, row)
+        _learning_add_group(markets, market, row)
+        _learning_add_group(leagues, league, row)
+        _learning_add_group(wallets, wallet, row)
+        _learning_add_group(odds_bands, ob, row)
+        _learning_add_group(quality_bands, qb, row)
+        _learning_add_group(market_by_league, f"{market} | {league}", row)
+        _learning_add_group(market_by_odds_band, f"{market} | {ob}", row)
+
+    return {
+        "summary": _learning_finalize_bucket(total),
+        "markets": _learning_finalize_groups(markets),
+        "leagues": _learning_finalize_groups(leagues),
+        "wallets": _learning_finalize_groups(wallets),
+        "odds_bands": _learning_finalize_groups(odds_bands),
+        "quality_bands": _learning_finalize_groups(quality_bands),
+        "market_by_league": _learning_finalize_groups(market_by_league),
+        "market_by_odds_band": _learning_finalize_groups(market_by_odds_band),
+    }
+
+
+def _learning_merge_bucket(dst: Dict[str, Any], src: Dict[str, Any]) -> Dict[str, Any]:
+    raw = dict(dst or _learning_empty_bucket())
+    raw["picks"] = int(raw.get("picks") or 0) + int(src.get("picks") or 0)
+    raw["settled"] = int(raw.get("settled") or 0) + int(src.get("settled") or 0)
+    raw["wins"] = int(raw.get("wins") or 0) + int(src.get("wins") or 0)
+    raw["losses"] = int(raw.get("losses") or 0) + int(src.get("losses") or 0)
+    raw["unit_stake"] = float(raw.get("unit_stake") or 0.0) + float(src.get("unit_stake") or 0.0)
+    raw["unit_return"] = float(raw.get("unit_return") or 0.0) + float(src.get("unit_return") or 0.0)
+    raw["odds_sum"] = float(raw.get("odds_sum") or 0.0) + float(src.get("odds_sum") or 0.0)
+    return _learning_finalize_bucket(raw)
+
+
+def _learning_merge_groups(dst: Dict[str, Any], src: Dict[str, Any]) -> Dict[str, Any]:
+    out = dict(dst or {})
+    for key, bucket in (src or {}).items():
+        out[key] = _learning_merge_bucket(out.get(key) or _learning_empty_bucket(), bucket)
+    return {k: out[k] for k in sorted(out.keys())}
+
+
+def _load_learning_memory() -> Dict[str, Any]:
+    if LEARNING_MEMORY_PATH.exists():
+        try:
+            data = _read_json(LEARNING_MEMORY_PATH)
+            if isinstance(data, dict):
+                return data
+        except Exception:
+            pass
+    return {}
+
+
+def _update_learning_memory(current_week: int, friday: Dict[str, Any], rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    previous = _load_learning_memory()
+    applied_weeks = previous.get("applied_weeks") or []
+    fp = _friday_fingerprint(friday)
+    week_key = f"week_{current_week}:{fp.get('generated_at') or ''}"
+
+    if week_key in applied_weeks:
+        previous["last_update_status"] = "skipped_duplicate"
+        previous["generated_at"] = _utc_now_iso()
+        _write_json(LEARNING_MEMORY_PATH, previous)
+        return previous
+
+    week_memory = _learning_build_from_rows(rows)
+
+    cumulative = {
+        "summary": _learning_merge_bucket(previous.get("summary") or _learning_empty_bucket(), week_memory.get("summary") or _learning_empty_bucket()),
+        "markets": _learning_merge_groups(previous.get("markets") or {}, week_memory.get("markets") or {}),
+        "leagues": _learning_merge_groups(previous.get("leagues") or {}, week_memory.get("leagues") or {}),
+        "wallets": _learning_merge_groups(previous.get("wallets") or {}, week_memory.get("wallets") or {}),
+        "odds_bands": _learning_merge_groups(previous.get("odds_bands") or {}, week_memory.get("odds_bands") or {}),
+        "quality_bands": _learning_merge_groups(previous.get("quality_bands") or {}, week_memory.get("quality_bands") or {}),
+        "market_by_league": _learning_merge_groups(previous.get("market_by_league") or {}, week_memory.get("market_by_league") or {}),
+        "market_by_odds_band": _learning_merge_groups(previous.get("market_by_odds_band") or {}, week_memory.get("market_by_odds_band") or {}),
+    }
+
+    applied_weeks = list(applied_weeks) + [week_key]
+
+    out = {
+        "title": "Bombay Market Learning Memory V1",
+        "version": "market_learning_v1",
+        "generated_at": _utc_now_iso(),
+        "status": "ok",
+        "note": "Unit ROI treats every settled pick as 1 unit. Core bankroll ROI remains in Tuesday recap.",
+        "source": {
+            "learning_path": str(LEARNING_MEMORY_PATH),
+            "current_week": current_week,
+            "friday_fingerprint": fp,
+            "rows_added_this_run": len(rows),
+        },
+        "applied_weeks": applied_weeks,
+        "last_week": week_memory,
+        **cumulative,
+        "last_update_status": "updated",
+    }
+
+    _write_json(LEARNING_MEMORY_PATH, out)
+    return out
+
+
+def _learning_row(wallet: str, source: Dict[str, Any], won: Optional[bool], fixture_id: Optional[int]) -> Dict[str, Any]:
+    return {
+        "wallet": wallet,
+        "date": str(source.get("date") or ""),
+        "time_gr": str(source.get("time_gr") or ""),
+        "league": str(source.get("league") or ""),
+        "match": str(source.get("match") or ""),
+        "market": str(source.get("market") or ""),
+        "odds": float(_sf(source.get("odds"), 0.0) or 0.0),
+        "won": won,
+        "tier": source.get("tier"),
+        "risk_tag": source.get("risk_tag"),
+        "quality": _sf(source.get("quality")),
+        "fixture_id": fixture_id,
+    }
 
 
 # -------------------------
@@ -256,10 +514,10 @@ def _api_fixtures_by_date(date_yyyy_mm_dd: str) -> List[Dict[str, Any]]:
 def _resolve_fixture_id_legacy(line: Dict[str, Any], date_cache: Dict[str, List[Dict[str, Any]]]) -> Optional[int]:
     date = str(line.get("date") or "").strip()
     match = str(line.get("match") or "")
-    if not date or "–" not in match:
+    if not date or "â" not in match:
         return None
 
-    parts = [p.strip() for p in match.split("–", 1)]
+    parts = [p.strip() for p in match.split("â", 1)]
     if len(parts) != 2:
         return None
 
@@ -409,6 +667,7 @@ def build_tuesday_recap() -> Dict[str, Any]:
     core_lines, fun_lines, superfun_lines = _extract_all_lines(friday)
 
     date_cache: Dict[str, List[Dict[str, Any]]] = {}
+    learning_rows: List[Dict[str, Any]] = []
 
     def get_fixture_id(line: Dict[str, Any]) -> Optional[int]:
         fxid = line.get("fixture_id") or line.get("id") or line.get("fixtureId")
@@ -469,6 +728,8 @@ def build_tuesday_recap() -> Dict[str, Any]:
         else:
             core_unsettled += 1
 
+        learning_rows.append(_learning_row("core", x, won, get_fixture_id(x)))
+
         core_out_lines.append({
             "tick": _fmt_tick(won),
             "date": str(x.get("date") or ""),
@@ -494,6 +755,7 @@ def build_tuesday_recap() -> Dict[str, Any]:
     fun_out_lines: List[Dict[str, Any]] = []
     for x in fun_lines:
         won = settle_line(x)
+        learning_rows.append(_learning_row("fun", x, won, get_fixture_id(x)))
         fun_out_lines.append({
             "tick": _fmt_tick(won),
             "date": str(x.get("date") or ""),
@@ -524,6 +786,7 @@ def build_tuesday_recap() -> Dict[str, Any]:
     superfun_out_lines: List[Dict[str, Any]] = []
     for x in superfun_lines:
         won = settle_line(x)
+        learning_rows.append(_learning_row("superfun", x, won, get_fixture_id(x)))
         superfun_out_lines.append({
             "tick": _fmt_tick(won),
             "date": str(x.get("date") or ""),
@@ -576,6 +839,15 @@ def build_tuesday_recap() -> Dict[str, Any]:
     week_roi_total = _roi(week_stake_total, week_return_total)
 
     # -------------------------
+    # Learning memory update
+    # -------------------------
+    learning_memory = _update_learning_memory(current_week, friday, learning_rows) if update_history else {
+        "status": "skipped",
+        "reason": "TUESDAY_UPDATE_HISTORY=false",
+        "learning_path": str(LEARNING_MEMORY_PATH),
+    }
+
+    # -------------------------
     # Cumulative from history
     # -------------------------
     prev_stats = hist.get("stats") or {}
@@ -607,7 +879,7 @@ def build_tuesday_recap() -> Dict[str, Any]:
     cum_system_return = round(prev_system_return + week_return_total, 2)
 
     out = {
-        "title": "Bombay Tuesday Recap — v4",
+        "title": "Bombay Tuesday Recap â v4",
         "generated_at": _utc_now_iso(),
         "window": friday.get("window") or {},
         "week": current_week,
@@ -668,6 +940,15 @@ def build_tuesday_recap() -> Dict[str, Any]:
             "return_total": week_return_total,
             "profit": week_profit_total,
             "roi": week_roi_total,
+        },
+
+        "learning_memory": {
+            "status": learning_memory.get("status"),
+            "last_update_status": learning_memory.get("last_update_status"),
+            "learning_path": str(LEARNING_MEMORY_PATH),
+            "rows_added_this_run": ((learning_memory.get("source") or {}).get("rows_added_this_run")),
+            "summary": learning_memory.get("summary"),
+            "markets": learning_memory.get("markets"),
         },
 
         "cumulative": {
@@ -772,6 +1053,7 @@ def main() -> int:
             "status": "ok",
             "saved": str(LOGS / "tuesday_recap_v3.json"),
             "history_saved": str(_history_path()) if _sb_env("TUESDAY_UPDATE_HISTORY", True) else None,
+            "learning_saved": str(LEARNING_MEMORY_PATH) if _sb_env("TUESDAY_UPDATE_HISTORY", True) else None,
             "generated_at": out["generated_at"],
             "week": out["week"],
             "system_roi_week": (out.get("system_week") or {}).get("roi"),
