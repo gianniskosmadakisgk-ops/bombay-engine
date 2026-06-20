@@ -1,18 +1,26 @@
 {
   "title": "Bombay Tuesday Recap â v4.1",
-  "generated_at": "2026-06-17T17:28:29.019969+00:00",
+  "generated_at": "2026-06-20T19:59:52.239609+00:00",
   "source_friday": {
-    "title": "",
-    "version": "",
-    "generated_at": "",
-    "window": {}
+    "title": "Bombay Friday V10.1 — Week 1",
+    "version": "friday_shortlist_v10_1",
+    "generated_at": "2026-06-20T19:59:49.354259+00:00",
+    "window": {
+      "from": "2026-06-20",
+      "to": "2026-06-23",
+      "hours": 72
+    }
   },
-  "window": {},
+  "window": {
+    "from": "2026-06-20",
+    "to": "2026-06-23",
+    "hours": 72
+  },
   "week": 1,
   "corebet": {
-    "bankroll_start": 0.0,
+    "bankroll_start": 1000.0,
     "open": 0.0,
-    "after_open": 0.0,
+    "after_open": 1000.0,
     "staked": 0.0,
     "returned": 0.0,
     "profit_week": 0.0,
@@ -20,13 +28,13 @@
     "won": 0,
     "lost": 0,
     "unsettled": 0,
-    "bankroll_end": 0.0,
+    "bankroll_end": 1000.0,
     "lines": []
   },
   "funbet": {
-    "bankroll_start": 0.0,
+    "bankroll_start": 500.0,
     "open": 0.0,
-    "after_open": 0.0,
+    "after_open": 500.0,
     "system": {
       "n": 0,
       "k": 0,
@@ -43,20 +51,20 @@
     },
     "profit_week": 0.0,
     "roi_week": null,
-    "bankroll_end": 0.0,
+    "bankroll_end": 500.0,
     "lines": []
   },
   "superfunbet": {
-    "bankroll_start": 0.0,
+    "bankroll_start": 500.0,
     "open": 0.0,
-    "after_open": 0.0,
+    "after_open": 500.0,
     "system": {
       "n": 0,
       "k": 0,
       "columns": 0,
       "stake_total": 0.0,
-      "target": null,
-      "mode": null
+      "target": "NO BET",
+      "mode": "superfun"
     },
     "payout": {
       "staked": 0.0,
@@ -68,7 +76,7 @@
     },
     "profit_week": 0.0,
     "roi_week": null,
-    "bankroll_end": 0.0,
+    "bankroll_end": 500.0,
     "lines": []
   },
   "system_week": {
@@ -128,13 +136,13 @@
   "summary": {
     "missing_fixtures": [],
     "bankrolls_end": {
-      "corebet": 0.0,
-      "funbet": 0.0,
-      "superfunbet": 0.0
+      "corebet": 1000.0,
+      "funbet": 500.0,
+      "superfunbet": 500.0
     },
     "history_update_enabled": true,
     "history_week_count_before": 0,
-    "friday_next_week": null,
-    "friday_file_version": null
+    "friday_next_week": 1,
+    "friday_file_version": "friday_shortlist_v10_1"
   }
 }
