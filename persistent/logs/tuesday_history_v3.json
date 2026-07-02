@@ -1,13 +1,13 @@
 {
   "week_count": 1,
-  "as_of": "2026-06-20",
-  "note": "Updated from Week 1 real results. End-of-week bankrolls: Core 1000.0 / Fun 500.0 / SuperFun 500.0. Total 2000.0. Next run should be Week 2.",
+  "as_of": "2026-07-02",
+  "note": "Updated from Week 1 real results. End-of-week bankrolls: Core 0.0 / Fun 0.0 / SuperFun 0.0. Total 0.0. Next run should be Week 2.",
   "bankroll_current": {
-    "core": 1000.0,
-    "fun": 500.0,
-    "superfun": 500.0,
-    "draw": 500.0,
-    "total": 2000.0
+    "core": 0.0,
+    "fun": 0.0,
+    "superfun": 0.0,
+    "draw": 0.0,
+    "total": 0.0
   },
   "stats": {
     "wallets": {
@@ -37,19 +37,11 @@
       "roi": null
     }
   },
-  "last_window": {
-    "from": "2026-06-20",
-    "to": "2026-06-23",
-    "hours": 72
-  },
+  "last_window": {},
   "last_applied_friday": {
-    "title": "Bombay Friday V10.1 — Week 1",
-    "version": "friday_shortlist_v10_1",
-    "generated_at": "2026-06-20T20:33:26.906664+00:00",
-    "window": {
-      "from": "2026-06-20",
-      "to": "2026-06-23",
-      "hours": 72
-    }
+    "title": "",
+    "version": "",
+    "generated_at": "",
+    "window": {}
   }
 }
