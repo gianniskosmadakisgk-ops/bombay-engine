@@ -1,13 +1,13 @@
 {
   "title": "Bombay Friday V10.1 — Week 1",
   "version": "friday_shortlist_v10_1",
-  "generated_at": "2026-06-20T20:33:26.906664+00:00",
+  "generated_at": "2026-07-02T14:22:25.609291+00:00",
   "window": {
-    "from": "2026-06-20",
-    "to": "2026-06-23",
+    "from": "2026-07-02",
+    "to": "2026-07-05",
     "hours": 72
   },
-  "source_thursday_generated_at": "2026-06-20T20:33:20.416014+00:00",
+  "source_thursday_generated_at": "2026-07-02T14:21:35.001899+00:00",
   "history": {
     "history_used": false,
     "history_path": "/opt/render/project/src/logs/tuesday_history_v3.json",
