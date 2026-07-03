@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-07-02T17:37:35.833436+00:00",
+  "generated_at": "2026-07-03T15:57:15.014404+00:00",
   "season_used": "2026",
   "engine_leagues": [
     "Premier League",
@@ -13,8 +13,8 @@
     "Belgium First Division A"
   ],
   "window": {
-    "from": "2026-07-02",
-    "to": "2026-07-05",
+    "from": "2026-07-03",
+    "to": "2026-07-06",
     "hours": 72
   },
   "fixtures_total": 0,
